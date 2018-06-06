@@ -1458,6 +1458,11 @@ rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv,
 
 		if (getenv("DPAA_FMC_MODE"))
 			fmc_q = 1;
+		else if (access("/tmp/fmc.bin", F_OK) != -1) {
+			RTE_LOG(ERR, PMD,
+				"* FMC configured. Please set DPAA_FMC_MODE\n");
+			return -1;
+		}
 
 		if (!(default_q || fmc_q)) {
 			if (dpaa_fm_init()) {
