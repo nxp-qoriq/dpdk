@@ -1198,6 +1198,9 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 		num_rx_fqs = DPAA_MAX_NUM_PCD_QUEUES;
 	}
 
+	/* disabling the default push mode for LS1043 */
+	if (dpaa_svr_family == SVR_LS1043A_FAMILY)
+		dpaa_push_mode_max_queue = 0;
 
 	/* if push mode queues to be enabled. Currenly we are allowing only
 	 * one queue per thread.
