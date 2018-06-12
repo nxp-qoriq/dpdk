@@ -100,7 +100,7 @@ static unsigned get_gcd(unsigned a, unsigned b)
 	return a;
 }
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 unsigned int dpaa_svr_family;
 void set_dpaa_svr_family(void)
 {
@@ -264,7 +264,7 @@ rte_mempool_xmem_size(uint32_t elt_num, size_t total_elt_sz, uint32_t pg_shift,
 		/* alignment need one additional object */
 		elt_num += 1;
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	if (dpaa_svr_family == SVR_LS1043A_FAMILY &&
 			flags & MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS)
 		elt_num += LS1043_MAX_MEMZONES;
@@ -305,7 +305,7 @@ rte_mempool_xmem_usage(__rte_unused void *vaddr, uint32_t elt_num,
 		/* alignment need one additional object */
 		elt_num += 1;
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	if (dpaa_svr_family == SVR_LS1043A_FAMILY &&
 			flags & MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS)
 		elt_num += LS1043_MAX_MEMZONES;
@@ -394,7 +394,7 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 	size_t off;
 	struct rte_mempool_memhdr *memhdr;
 	int ret;
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	int idx = 0, change = LS1043_OFFSET_CHANGE_IDX;
 #endif
 
@@ -456,7 +456,7 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 		off = RTE_PTR_ALIGN_CEIL(vaddr, RTE_CACHE_LINE_SIZE) - vaddr;
 
 	while (off + total_elt_sz <= len && mp->populated_size < mp->size) {
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	/* Due to A010022 hardware errata on LS1043, buf size is kept 4K
 	 * (including metadata). This size is completely divisible by our L1
 	 * cache size (32K) which leads to cache collisions of buffer metadata
@@ -697,7 +697,7 @@ rte_mempool_populate_default(struct rte_mempool *mp)
 			goto fail;
 		}
 	}
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	if (dpaa_svr_family == SVR_LS1043A_FAMILY &&
 			(mp->flags & MEMPOOL_F_MBUF))
 		mp->size -= LS1043_MAX_BUF_OFFSET;

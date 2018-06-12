@@ -203,7 +203,7 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 		return NULL;
 	}
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 /* NXP LS1043ARDB specific changes
  * LS1043_MAX_BUF_SIZE indicates max buffer size supported for LS1043 soc.
  * SVR_LS1043A indicates LS1043 board type.
@@ -232,7 +232,7 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 	if (mp == NULL)
 		return NULL;
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 	if (dpaa_svr_family == SVR_LS1043A_FAMILY)
 		mp->flags |= MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS |
 				MEMPOOL_F_MBUF;

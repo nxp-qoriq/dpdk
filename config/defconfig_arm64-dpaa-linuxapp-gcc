@@ -41,6 +41,14 @@ CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES=n
 # Disable IGB_UIO compilation
 CONFIG_RTE_EAL_IGB_UIO=n
 
+# DPAA device errata
+# Due to A010022 hardware errata on LS1043, buf size is kept 4K (including
+# metadata). This size is completely divisible by our L1 cache size (32K)
+# which leads to cache collisions of buffer metadata(mbuf) and performance drop.
+# To minimize these cache collisions, offset of buffer is changed after an
+# interval of 8 and value is reversed after 64 buffer.
+CONFIG_RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022=y
+
 #
 # Compile Environment Abstraction Layer
 #

@@ -293,7 +293,7 @@ struct rte_mempool {
  */
 #define MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS 0x0080
 
-#ifdef RTE_LIBRTE_DPAA_MEMPOOL
+#ifdef RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022
 #define MEMPOOL_F_MBUF          0x0100 /**< Mbuf Pool */
 #define SVR_LS1043A_FAMILY	0x87920000
 #define SVR_MASK		0xffff0000
