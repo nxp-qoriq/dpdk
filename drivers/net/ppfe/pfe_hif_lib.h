@@ -143,7 +143,7 @@ struct tx_queue_desc {
 #ifdef RTE_LIBRTE_PPFE_SW_PARSE
 #define PFE_PKT_HEADER_SZ	PFE_HIF_SIZE
 #else
-#define PFE_PKT_HEADER_SZ	PFE_HIF_SIZE + sizeof(struct ppfe_parse)
+#define PFE_PKT_HEADER_SZ	(PFE_HIF_SIZE + sizeof(struct ppfe_parse))
 #endif
 
 #define MAX_L2_HDR_SIZE		14	/* Not correct for VLAN/PPPoE */
