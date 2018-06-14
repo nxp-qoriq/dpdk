@@ -510,7 +510,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
 		ret = dpaa2_affine_qbman_ethrx_swp();
 		if (ret) {
-			DPAA2_PMD_ERR("Failure in affining portal");
+			DPAA2_PMD_ERR("Failure in affining portal\n");
 			return 0;
 		}
 	}
@@ -536,8 +536,8 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 		while (1) {
 			if (qbman_swp_pull(swp, &pulldesc)) {
-				DPAA2_PMD_DP_DEBUG("VDQ command is not issued."
-						  " QBMAN is busy (1)\n");
+				DPAA2_PMD_DP_DEBUG(
+					"VDQ command not issued.QBMAN busy\n");
 				/* Portal was busy, try again */
 				continue;
 			}
