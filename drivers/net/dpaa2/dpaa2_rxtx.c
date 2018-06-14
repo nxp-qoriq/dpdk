@@ -492,6 +492,12 @@ eth_copy_mbuf_to_fd(struct rte_mbuf *mbuf,
 	return 0;
 }
 
+/* This function assumes that you will be keeping the same value for nb_pkts
+ * across calls per queue, if that is not the case, better use non-prefetch
+ * version of rx call.
+ * It will return the packets as request in the previous call without honoring
+ * the current nb_pkts or bufs space.
+ */
 uint16_t
 dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 {
@@ -499,7 +505,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	struct dpaa2_queue *dpaa2_q = (struct dpaa2_queue *)queue;
 	struct qbman_result *dq_storage, *dq_storage1 = NULL;
 	uint32_t fqid = dpaa2_q->fqid;
-	int ret, num_rx = 0;
+	int ret, num_rx = 0, pull_size;
 	uint8_t pending, status;
 	struct qbman_swp *swp;
 	const struct qbman_fd *fd, *next_fd;
@@ -515,12 +521,12 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 	}
 	swp = DPAA2_PER_LCORE_ETHRX_PORTAL;
-
+	pull_size = (nb_pkts > DPAA2_DQRR_RING_SIZE) ?
+					       DPAA2_DQRR_RING_SIZE : nb_pkts;
 	if (unlikely(!q_storage->active_dqs)) {
 		q_storage->toggle = 0;
 		dq_storage = q_storage->dq_storage[q_storage->toggle];
-		q_storage->last_num_pkts = (nb_pkts > DPAA2_DQRR_RING_SIZE) ?
-					       DPAA2_DQRR_RING_SIZE : nb_pkts;
+		q_storage->last_num_pkts = pull_size;
 		qbman_pull_desc_clear(&pulldesc);
 		qbman_pull_desc_set_numframes(&pulldesc,
 					      q_storage->last_num_pkts);
@@ -559,7 +565,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	q_storage->toggle ^= 1;
 	dq_storage1 = q_storage->dq_storage[q_storage->toggle];
 	qbman_pull_desc_clear(&pulldesc);
-	qbman_pull_desc_set_numframes(&pulldesc, DPAA2_DQRR_RING_SIZE);
+	qbman_pull_desc_set_numframes(&pulldesc, pull_size);
 	qbman_pull_desc_set_fq(&pulldesc, fqid);
 	qbman_pull_desc_set_storage(&pulldesc, dq_storage1,
 		(size_t)(DPAA2_VADDR_TO_IOVA(dq_storage1)), 1);
