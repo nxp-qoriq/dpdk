@@ -26,6 +26,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#ifndef _QBMAN_SYS_DECL_H_
+#define _QBMAN_SYS_DECL_H_
+
 #include <compat.h>
 #include <fsl_qbman_base.h>
 
@@ -74,3 +77,4 @@ static inline void prefetch_for_store(void *p)
 	RTE_SET_USED(p);
 }
 #endif
+#endif /* _QBMAN_SYS_DECL_H_ */

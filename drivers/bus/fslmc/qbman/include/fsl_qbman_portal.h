@@ -378,6 +378,14 @@ void qbman_pull_desc_set_channel(struct qbman_pull_desc *d, uint32_t chid,
 				 enum qbman_pull_type_e dct);
 
 /**
+ * qbman_pull_desc_set_rad() - Decide whether reschedule the fq after dequeue
+ *
+ * @rad: 1 = Reschedule the FQ after dequeue.
+ *	 0 = Allow the FQ to remain active after dequeue.
+ */
+void qbman_pull_desc_set_rad(struct qbman_pull_desc *d, int rad);
+
+/**
  * qbman_swp_pull() - Issue the pull dequeue command
  * @s: the software portal object.
  * @d: the software portal descriptor which has been configured with
