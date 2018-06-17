@@ -2,7 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP
+ *   Copyright 2016-2018 NXP
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -521,8 +521,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 	}
 	swp = DPAA2_PER_LCORE_ETHRX_PORTAL;
-	pull_size = (nb_pkts > DPAA2_DQRR_RING_SIZE) ?
-					       DPAA2_DQRR_RING_SIZE : nb_pkts;
+	pull_size = (nb_pkts > dpaa2_dqrr_size) ? dpaa2_dqrr_size : nb_pkts;
 	if (unlikely(!q_storage->active_dqs)) {
 		q_storage->toggle = 0;
 		dq_storage = q_storage->dq_storage[q_storage->toggle];
@@ -726,8 +725,8 @@ dpaa2_dev_prefetch_rx2(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	if (unlikely(!q_storage->active_dqs)) {
 		q_storage->toggle = 0;
 		dq_storage = q_storage->dq_storage[q_storage->toggle];
-		q_storage->last_num_pkts = (nb_pkts > DPAA2_DQRR_RING_SIZE) ?
-					       DPAA2_DQRR_RING_SIZE : nb_pkts;
+		q_storage->last_num_pkts = (nb_pkts > dpaa2_dqrr_size) ?
+					       dpaa2_dqrr_size : nb_pkts;
 		qbman_pull_desc_clear(&pulldesc);
 		qbman_pull_desc_set_numframes(&pulldesc,
 					      q_storage->last_num_pkts);
@@ -781,11 +780,11 @@ repeat:
 		dq_storage1 = q_storage->dq_storage[q_storage->toggle];
 		qbman_pull_desc_clear(&pulldesc1);
 
-		if (next_pull > DPAA2_DQRR_RING_SIZE) {
+		if (next_pull > dpaa2_dqrr_size) {
 			qbman_pull_desc_set_numframes(&pulldesc1,
-					DPAA2_DQRR_RING_SIZE);
-			next_pull = next_pull - DPAA2_DQRR_RING_SIZE;
-			q_storage->last_num_pkts = DPAA2_DQRR_RING_SIZE;
+					dpaa2_dqrr_size);
+			next_pull = next_pull - dpaa2_dqrr_size;
+			q_storage->last_num_pkts = dpaa2_dqrr_size;
 		} else {
 			qbman_pull_desc_set_numframes(&pulldesc1, next_pull);
 			q_storage->last_num_pkts = next_pull;
@@ -880,8 +879,8 @@ repeat:
 
 	q_storage->toggle ^= 1;
 	dq_storage = q_storage->dq_storage[q_storage->toggle];
-	q_storage->last_num_pkts = (nb_pkts > DPAA2_DQRR_RING_SIZE) ?
-				       DPAA2_DQRR_RING_SIZE : nb_pkts;
+	q_storage->last_num_pkts = (nb_pkts > dpaa2_dqrr_size) ?
+				       dpaa2_dqrr_size : nb_pkts;
 	qbman_pull_desc_clear(&pulldesc);
 	qbman_pull_desc_set_numframes(&pulldesc, q_storage->last_num_pkts);
 	qbman_pull_desc_set_fq(&pulldesc, fqid);
@@ -936,10 +935,10 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		qbman_pull_desc_set_storage(&pulldesc, dq_storage,
 				(size_t)(DPAA2_VADDR_TO_IOVA(dq_storage)), 1);
 
-		if (next_pull > DPAA2_DQRR_RING_SIZE) {
+		if (next_pull > dpaa2_dqrr_size) {
 			qbman_pull_desc_set_numframes(&pulldesc,
-				DPAA2_DQRR_RING_SIZE);
-			next_pull -= DPAA2_DQRR_RING_SIZE;
+				dpaa2_dqrr_size);
+			next_pull -= dpaa2_dqrr_size;
 		} else {
 			qbman_pull_desc_set_numframes(&pulldesc, next_pull);
 			next_pull = 0;
@@ -1001,7 +1000,7 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			num_pulled++;
 		} while (pending);
 	/* Last VDQ provided all packets and more packets are requested */
-	} while (next_pull && num_pulled == DPAA2_DQRR_RING_SIZE);
+	} while (next_pull && num_pulled == dpaa2_dqrr_size);
 
 	dpaa2_q->rx_pkts += num_rx;
 
@@ -1058,7 +1057,8 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				goto skip_tx;
 		}
 
-		frames_to_send = (nb_pkts >> 3) ? MAX_TX_RING_SLOTS : nb_pkts;
+		frames_to_send = (nb_pkts > dpaa2_eqcr_size) ?
+			dpaa2_eqcr_size : nb_pkts;
 
 		for (loop = 0; loop < frames_to_send; loop++) {
 			if ((*bufs)->seqn) {

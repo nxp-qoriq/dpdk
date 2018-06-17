@@ -109,8 +109,8 @@ dpaa2_eventdev_enqueue_burst(void *port, const struct rte_event ev[],
 	swp = DPAA2_PER_LCORE_PORTAL;
 
 	while (nb_events) {
-		frames_to_send = (nb_events >> 3) ?
-			MAX_TX_RING_SLOTS : nb_events;
+		frames_to_send = (nb_events > dpaa2_eqcr_size) ?
+			dpaa2_eqcr_size : nb_events;
 
 		for (loop = 0; loop < frames_to_send; loop++) {
 			const struct rte_event *event = &ev[num_tx + loop];
