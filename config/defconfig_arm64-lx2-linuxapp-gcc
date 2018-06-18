@@ -1,8 +1,0 @@
-#   SPDX-License-Identifier: BSD-3-Clause
-#   Copyright 2018 NXP
-#
-
-#include "defconfig_arm64-dpaa2-linuxapp-gcc"
-
-# NXP LX2 EXCR workaround
-CONFIG_DPAA2_LX2_EQCR_WORKAROUND=y
