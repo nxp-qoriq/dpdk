@@ -32,7 +32,7 @@ struct qdma_io_meta;
  * Destination descriptor command write transaction type for RBP=0:
  * coherent copy of cacheable memory
  */
-#define DPAA2_SET_SDD_WR_COHERENT(sdd) ((sdd)->cmd = (0x6 << 28))
+#define DPAA2_SET_SDD_WR_COHERENT(sdd) ((sdd)->cmd = (0xb << 28))
 
 /** Maximum possible H/W Queues on each core */
 #define MAX_HW_QUEUE_PER_CORE		64
