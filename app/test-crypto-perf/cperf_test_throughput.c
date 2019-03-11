@@ -217,26 +217,30 @@ cperf_throughput_test_runner(void *test_ctx)
 			ops_unused = burst_size - ops_enqd;
 			ops_enqd_total += ops_enqd;
 
-
 			/* Dequeue processed burst of ops from crypto device */
-			ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
-					ops_processed, test_burst_size);
+			do {
+				ops_deqd = rte_cryptodev_dequeue_burst(
+						ctx->dev_id, ctx->qp_id,
+						ops_processed, test_burst_size);
 
-			if (likely(ops_deqd))  {
-				/* Free crypto ops so they can be reused. */
-				rte_mempool_put_bulk(ctx->pool,
-						(void **)ops_processed, ops_deqd);
+				if (likely(ops_deqd))  {
+					/* Free crypto ops for reuse */
+					rte_mempool_put_bulk(ctx->pool,
+							(void **)ops_processed,
+							ops_deqd);
 
-				ops_deqd_total += ops_deqd;
-			} else {
-				/**
-				 * Count dequeue polls which didn't return any
-				 * processed operations. This statistic is mainly
-				 * relevant to hw accelerators.
-				 */
-				ops_deqd_failed++;
-			}
-
+					ops_deqd_total += ops_deqd;
+				} else {
+					/**
+					 * Count dequeue polls which didn't
+					 * return any processed operations.
+					 * This statistic is mainly relevant
+					 * to hw accelerators.
+					 */
+					ops_deqd_failed++;
+				}
+			} while (ops_enqd_total - ops_deqd_total >
+					test_burst_size * 8);
 		}
 
 		/* Dequeue any operations still in the crypto device */
