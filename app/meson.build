@@ -9,7 +9,6 @@ apps = [
 	'pdump',
 	'proc-info',
 	'test-acl',
-	'test-bbdev',
 	'test-cmdline',
 	'test-compress-perf',
 	'test-crypto-perf',
@@ -17,6 +16,12 @@ apps = [
 	'test-pipeline',
 	'test-pmd',
 	'test-sad']
+
+cmd = run_command('sh', '-c', 'echo $COMMON_HEADERS_DIR')
+COMMON_HEADERS_DIR = cmd.stdout().strip()
+if COMMON_HEADERS_DIR != ''
+apps += ['test-bbdev']
+endif
 
 # for BSD only
 lib_execinfo = cc.find_library('execinfo', required: false)
