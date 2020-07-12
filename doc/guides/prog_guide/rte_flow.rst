@@ -1344,6 +1344,14 @@ Matches a L2TPv3 over IP header.
 - ``session_id``: L2TPv3 over IP session identifier.
 - Default ``mask`` matches session_id only.
 
+Item: ``ECPRI``
+^^^^^^^^^^^^^^^
+
+Matches a eCPRI header.
+
+- ``hdr``: eCPRI header definition (``rte_ecpri.h``).
+- Default ``mask`` matches nothing, for all eCPRI messages.
+
 Actions
 ~~~~~~~
 
