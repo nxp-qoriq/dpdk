@@ -146,6 +146,7 @@ l2fwd_event_port_setup_internal_port(struct l2fwd_resources *rsrc)
 		/* init spinlock */
 		rte_spinlock_init(&evt_rsrc->evp.lock);
 	}
+	evt_rsrc->deq_depth = event_p_conf.dequeue_depth;
 
 	evt_rsrc->def_p_conf = event_p_conf;
 }
