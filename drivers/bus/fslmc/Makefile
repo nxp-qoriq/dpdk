@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2016 NXP
+# Copyright 2016,2020 NXP
 #
 
 include $(RTE_SDK)/mk/rte.vars.mk
@@ -11,7 +11,7 @@ LIB = librte_bus_fslmc.a
 
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
-CFLAGS += $(WERROR_FLAGS)
+#CFLAGS += $(WERROR_FLAGS)
 
 CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc
 CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc/mc
@@ -28,7 +28,10 @@ EXPORT_MAP := rte_bus_fslmc_version.map
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
         qbman/qbman_portal.c \
-        qbman/qbman_debug.c
+        qbman/qbman_portal_ex.c
+
+#        qbman/qbman_debug.c \
+
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
 	mc/dpmng.c \

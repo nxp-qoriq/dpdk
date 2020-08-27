@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (C) 2014 Freescale Semiconductor, Inc.
- * Copyright 2015-2019 NXP
+ * Copyright 2015-2020 NXP
  *
  */
 #ifndef _FSL_QBMAN_PORTAL_H
@@ -244,6 +244,7 @@ struct qbman_result {
 			__le64 rsp_addr;
 			uint8_t fd[32];
 		} eq_resp;
+		uint32_t dont_manipulate_directly[16];
 	};
 };
 

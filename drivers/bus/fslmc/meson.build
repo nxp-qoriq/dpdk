@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2018 NXP
+# Copyright 2018,2020 NXP
 
 if not is_linux
 	build = false
@@ -20,7 +20,7 @@ sources = files('fslmc_bus.c',
 		'portal/dpaa2_hw_dpci.c',
 		'portal/dpaa2_hw_dpio.c',
 		'qbman/qbman_portal.c',
-		'qbman/qbman_debug.c')
+		'qbman/qbman_portal_ex.c')
 
 allow_experimental_apis = true
 
