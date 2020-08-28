@@ -126,6 +126,8 @@ int dpni_create(struct fsl_mc_io *mc_io,
 	cmd_params->qos_entries = cfg->qos_entries;
 	cmd_params->fs_entries = cpu_to_le16(cfg->fs_entries);
 	cmd_params->num_cgs = cfg->num_cgs;
+	cmd_params->num_opr = cfg->num_opr;
+	cmd_params->dist_key_size = cfg->dist_key_size;
 
 	/* send command to mc*/
 	err = mc_send_command(mc_io, &cmd);
@@ -201,7 +203,7 @@ int dpni_set_pools(struct fsl_mc_io *mc_io,
 	cmd_params = (struct dpni_cmd_set_pools *)cmd.params;
 	cmd_params->num_dpbp = cfg->num_dpbp;
 	cmd_params->pool_options = cfg->pool_options;
-	for (i = 0; i < cmd_params->num_dpbp; i++) {
+	for (i = 0; i < DPNI_MAX_DPBP; i++) {
 		cmd_params->pool[i].dpbp_id =
 			cpu_to_le16(cfg->pools[i].dpbp_id);
 		cmd_params->pool[i].priority_mask =
@@ -596,6 +598,8 @@ int dpni_get_attributes(struct fsl_mc_io *mc_io,
 	attr->fs_key_size = rsp_params->fs_key_size;
 	attr->wriop_version = le16_to_cpu(rsp_params->wriop_version);
 	attr->num_cgs = rsp_params->num_cgs;
+	attr->lni = le16_to_cpu(rsp_params->lni);
+	attr->ceetm_id = le16_to_cpu(rsp_params->ceetm_id);
 
 	return 0;
 }
@@ -840,6 +844,45 @@ int dpni_get_qdid(struct fsl_mc_io *mc_io,
 	/* retrieve response parameters */
 	rsp_params = (struct dpni_rsp_get_qdid *)cmd.params;
 	*qdid = le16_to_cpu(rsp_params->qdid);
+
+	return 0;
+}
+
+/**
+ * dpni_get_sp_info() - Get the AIOP storage profile IDs associated
+ *			with the DPNI
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPNI object
+ * @sp_info:	Returned AIOP storage-profile information
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ *
+ * @warning	Only relevant for DPNI that belongs to AIOP container.
+ */
+int dpni_get_sp_info(struct fsl_mc_io *mc_io,
+		     uint32_t cmd_flags,
+		     uint16_t token,
+		     struct dpni_sp_info *sp_info)
+{
+	struct dpni_rsp_get_sp_info *rsp_params;
+	struct mc_command cmd = { 0 };
+	int err, i;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_SP_INFO,
+					  cmd_flags,
+					  token);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	rsp_params = (struct dpni_rsp_get_sp_info *)cmd.params;
+	for (i = 0; i < DPNI_MAX_SP; i++)
+		sp_info->spids[i] = le16_to_cpu(rsp_params->spids[i]);
 
 	return 0;
 }
@@ -2512,7 +2555,7 @@ int dpni_reset_statistics(struct fsl_mc_io *mc_io,
 }
 
 /**
- * dpni_set_taildrop() - Set taildrop per queue or TC
+ * dpni_set_taildrop() - Set taildrop per congestion group
  *
  * Setting a per-TC taildrop (cg_point = DPNI_CP_GROUP) will reset any current
  * congestion notification or early drop (WRED) configuration previously applied
@@ -2521,13 +2564,14 @@ int dpni_reset_statistics(struct fsl_mc_io *mc_io,
  * @mc_io:	Pointer to MC portal's I/O object
  * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
  * @token:	Token of DPNI object
- * @cg_point:	Congestion point, DPNI_CP_QUEUE is only supported in
- *		combination with DPNI_QUEUE_RX.
+ * @cg_point:	Congestion group identifier
+ * 		 DPNI_CP_QUEUE is only supported in combination with DPNI_QUEUE_RX.
  * @q_type:	Queue type, can be DPNI_QUEUE_RX or DPNI_QUEUE_TX.
  * @tc:		Traffic class to apply this taildrop to
- * @q_index:	Index of the queue if the DPNI supports multiple queues for
+ * @index/cgid:	Index of the queue if the DPNI supports multiple queues for
  *		traffic distribution.
- *		Ignored if CONGESTION_POINT is not DPNI_CP_QUEUE.
+ *		If CONGESTION_POINT is DPNI_CP_CONGESTION_GROUP then it represent
+ *		the cgid of the congestion point
  * @taildrop:	Taildrop structure
  *
  * Return:	'0' on Success; Error code otherwise.
@@ -2647,7 +2691,8 @@ int dpni_set_opr(struct fsl_mc_io *mc_io,
 		 uint8_t tc,
 		 uint8_t index,
 		 uint8_t options,
-		 struct opr_cfg *cfg)
+		 struct opr_cfg *cfg,
+		 uint8_t opr_id)
 {
 	struct dpni_cmd_set_opr *cmd_params;
 	struct mc_command cmd = { 0 };
@@ -2661,6 +2706,7 @@ int dpni_set_opr(struct fsl_mc_io *mc_io,
 	cmd_params->tc_id = tc;
 	cmd_params->index = index;
 	cmd_params->options = options;
+	cmd_params->opr_id = opr_id;
 	cmd_params->oloe = cfg->oloe;
 	cmd_params->oeane = cfg->oeane;
 	cmd_params->olws = cfg->olws;
@@ -2691,7 +2737,9 @@ int dpni_get_opr(struct fsl_mc_io *mc_io,
 		 uint8_t tc,
 		 uint8_t index,
 		 struct opr_cfg *cfg,
-		 struct opr_qry *qry)
+		 struct opr_qry *qry,
+		 uint8_t flags,
+		 uint8_t opr_id)
 {
 	struct dpni_rsp_get_opr *rsp_params;
 	struct dpni_cmd_get_opr *cmd_params;
@@ -2705,6 +2753,8 @@ int dpni_get_opr(struct fsl_mc_io *mc_io,
 	cmd_params = (struct dpni_cmd_get_opr *)cmd.params;
 	cmd_params->index = index;
 	cmd_params->tc_id = tc;
+	cmd_params->flags = flags;
+	cmd_params->opr_id = opr_id;
 
 	/* send command to mc*/
 	err = mc_send_command(mc_io, &cmd);
@@ -3018,3 +3068,184 @@ int dpni_get_custom_tpid(struct fsl_mc_io *mc_io, uint32_t cmd_flags,
 	return err;
 }
 
+/**
+ * dpni_set_port_cfg() - performs configurations at physical port connected on this dpni. The
+ * 			command have effect only if dpni is connected to another dpni object
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPNI object
+ * @flags:	Valid fields from port_cfg structure
+ * @port_cfg: Configuration data; one or more of DPNI_PORT_CFG_
+ * The command can be called only when dpni is connected to a dpmac object. If the dpni is unconnected
+ * or the endpoint is not a dpni it will return error. If dpmac endpoint is disconnected the settings
+ * will be lost
+ */
+int dpni_set_port_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		uint32_t flags, struct dpni_port_cfg *port_cfg)
+{
+	struct dpni_cmd_set_port_cfg *cmd_params;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_SET_PORT_CFG,
+			cmd_flags, token);
+
+	cmd_params = (struct dpni_cmd_set_port_cfg *)cmd.params;
+	cmd_params->flags = cpu_to_le32(flags);
+	dpni_set_field(cmd_params->bit_params, PORT_LOOPBACK_EN, !!port_cfg->loopback_en);
+
+	/* send command to MC */
+	return mc_send_command(mc_io, &cmd);
+}
+
+/**
+ * dpni_get_single_step_cfg() - return current configuration for single step PTP
+ * @mc_io: Pointer to MC portal's I/O object
+ * @cmd_flags: Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token: Token of DPNI object
+ * @ptp_cfg: ptp single step configuration
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ *
+ */
+int dpni_get_single_step_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_single_step_cfg *ptp_cfg)
+{
+	struct dpni_rsp_single_step_cfg *rsp_params;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_SINGLE_STEP_CFG,
+						cmd_flags,
+						token);
+	/* send command to mc*/
+	err =  mc_send_command(mc_io, &cmd);
+	if( err )
+		return err;
+
+	/* read command response */
+	rsp_params = (struct dpni_rsp_single_step_cfg *)cmd.params;
+	ptp_cfg->offset = le16_to_cpu(rsp_params->offset);
+	ptp_cfg->en = dpni_get_field(rsp_params->flags, PTP_ENABLE);
+	ptp_cfg->ch_update = dpni_get_field(rsp_params->flags, PTP_CH_UPDATE);
+	ptp_cfg->peer_delay = le32_to_cpu(rsp_params->peer_delay);
+
+	return err;
+}
+
+/**
+ * dpni_get_port_cfg() - return configuration from physical port. The command has effect only if
+ * 			dpni is connected to a mac object
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPNI object
+ * @port_cfg: Configuration data
+ * The command can be called only when dpni is connected to a dpmac object. If the dpni is unconnected
+ * or the endpoint is not a dpni it will return error;
+ */
+int dpni_get_port_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_port_cfg *port_cfg)
+{
+	struct dpni_rsp_get_port_cfg *rsp_params;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_PORT_CFG, 
+			cmd_flags, token);
+
+	/* send command to MC */
+	err = mc_send_command(mc_io, &cmd);
+	if( err ) 
+		return err;
+
+	/* read command response */
+	rsp_params = (struct dpni_rsp_get_port_cfg *)cmd.params;
+	port_cfg->loopback_en = dpni_get_field(rsp_params->bit_params, PORT_LOOPBACK_EN);
+
+	return 0;
+}
+
+/**
+ * dpni_set_single_step_cfg() - enable/disable and configure single step PTP
+ * @mc_io: Pointer to MC portal's I/O object
+ * @cmd_flags: Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token: Token of DPNI object
+ * @ptp_cfg: ptp single step configuration
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ *
+ * The function has effect only when dpni object is connected to a dpmac object. If the
+ * dpni is not connected to a dpmac the configuration will be stored inside and applied
+ * when connection is made.
+ */
+int dpni_set_single_step_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_single_step_cfg *ptp_cfg)
+{
+	struct dpni_cmd_single_step_cfg *cmd_params;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_SET_SINGLE_STEP_CFG,
+						cmd_flags,
+						token);
+	cmd_params = (struct dpni_cmd_single_step_cfg *)cmd.params;
+	cmd_params->offset = cpu_to_le16(ptp_cfg->offset);
+	cmd_params->peer_delay = cpu_to_le32(ptp_cfg->peer_delay);
+	dpni_set_field(cmd_params->flags, PTP_ENABLE, !!ptp_cfg->en);
+	dpni_set_field(cmd_params->flags, PTP_CH_UPDATE, !!ptp_cfg->ch_update);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+/**
+ * dpni_dump_table() - Dump the content of table_type table into memory.
+ * @mc_io: Pointer to MC portal's I/O object
+ * @cmd_flags: Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token: Token of DPSW object
+ * @table_type: The type of the table to dump
+ * @table_index: The index of the table to dump in case of more than one table
+ * @iova_addr: The snapshot will be stored in this variable as an header of struct dump_table_header
+ *             followed by an array of struct dump_table_entry
+ * @iova_size: Memory size allocated for iova_addr
+ * @num_entries: Number of entries written in iova_addr
+ *
+ * Return: Completion status. '0' on Success; Error code otherwise.
+ *
+ * The memory allocated at iova_addr must be zeroed before command execution.
+ * If the table content exceeds the memory size provided the dump will be truncated.
+ */
+int dpni_dump_table(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint16_t table_type,
+			 uint16_t table_index,
+			 uint64_t iova_addr,
+			 uint32_t iova_size,
+			 uint16_t *num_entries)
+{
+	struct mc_command cmd = { 0 };
+	int err;
+	struct dpni_cmd_dump_table *cmd_params;
+	struct dpni_rsp_dump_table *rsp_params;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_DUMP_TABLE, cmd_flags, token);
+	cmd_params = (struct dpni_cmd_dump_table *)cmd.params;
+	cmd_params->table_type = cpu_to_le16(table_type);
+	cmd_params->table_index = cpu_to_le16(table_index);
+	cmd_params->iova_addr = cpu_to_le64(iova_addr);
+	cmd_params->iova_size = cpu_to_le32(iova_size);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	rsp_params = (struct dpni_rsp_dump_table *)cmd.params;
+	*num_entries = le16_to_cpu(rsp_params->num_entries);
+
+	return 0;
+}

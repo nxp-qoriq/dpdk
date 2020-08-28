@@ -19,6 +19,11 @@ struct fsl_mc_io;
 
 /** General DPNI macros */
 
+/*
+ * Maximum size of a key
+ */
+#define DPNI_MAX_KEY_SIZE		56
+
 /**
  * Maximum number of traffic classes
  */
@@ -95,8 +100,22 @@ struct fsl_mc_io;
  * Define a custom number of congestion groups
  */
 #define DPNI_OPT_CUSTOM_CG				0x000200
-
-
+/**
+ * Define a custom number of order point records
+ */
+#define DPNI_OPT_CUSTOM_OPR				0x000400
+/**
+ * Hash key is shared between all traffic classes
+ */
+#define DPNI_OPT_SHARED_HASH_KEY		0x000800
+/**
+ * Flow steering table is shared between all traffic classes
+ */
+#define DPNI_OPT_SHARED_FS				0x001000
+/**
+ * RX only variant of the DPNI (TX configuration is done by the user)
+ */
+#define DPNI_OPT_NO_TX					0x002000
 /**
  * Software sequence maximum layout size
  */
@@ -183,6 +202,8 @@ struct dpni_cfg {
 	uint8_t  num_rx_tcs;
 	uint8_t  qos_entries;
 	uint8_t  num_cgs;
+	uint16_t num_opr;
+	uint8_t  dist_key_size;
 };
 
 int dpni_create(struct fsl_mc_io *mc_io,
@@ -331,6 +352,8 @@ int dpni_clear_irq_status(struct fsl_mc_io *mc_io,
  *			variants.
  *			- 0xC00 - WRIOP version 3.0.0, used on LX2160 and
  *			variants.
+ * @lni: if connected to a DPMAC, the LNI associated with the port
+ * @ceetm_id: if connected to a DPMAC, the CEETM associated with the port
  */
 struct dpni_attr {
 	uint32_t options;
@@ -345,6 +368,8 @@ struct dpni_attr {
 	uint8_t  fs_key_size;
 	uint16_t wriop_version;
 	uint8_t  num_cgs;
+	uint16_t  lni;
+	uint16_t  ceetm_id;
 };
 
 int dpni_get_attributes(struct fsl_mc_io *mc_io,
@@ -455,6 +480,10 @@ int dpni_set_errors_behavior(struct fsl_mc_io *mc_io,
  * Select to modify the sw-opaque value setting
  */
 #define DPNI_BUF_LAYOUT_OPT_SW_OPAQUE		0x00000080
+/**
+ * Select to disable Scatter Gather and use single buffer
+ */
+#define DPNI_BUF_LAYOUT_OPT_NO_SG		0x00000100
 
 /**
  * struct dpni_buffer_layout - Structure representing DPNI buffer layout
@@ -541,6 +570,20 @@ int dpni_get_qdid(struct fsl_mc_io *mc_io,
 		  uint16_t token,
 		  enum dpni_queue_type qtype,
 		  uint16_t *qdid);
+
+/**
+ * struct dpni_sp_info - Structure representing DPNI storage-profile information
+ * (relevant only for DPNI owned by AIOP)
+ * @spids: array of storage-profiles
+ */
+struct dpni_sp_info {
+	uint16_t spids[DPNI_MAX_SP];
+};
+
+int dpni_get_sp_info(struct fsl_mc_io *mc_io,
+		     uint32_t cmd_flags,
+		     uint16_t token,
+		     struct dpni_sp_info *sp_info);
 
 int dpni_get_tx_data_offset(struct fsl_mc_io *mc_io,
 			    uint32_t cmd_flags,
@@ -802,6 +845,11 @@ int dpni_get_primary_mac_addr(struct fsl_mc_io *mc_io,
 			      uint32_t cmd_flags,
 			      uint16_t token,
 			      uint8_t mac_addr[6]);
+
+/**
+ * Set mac addr queue action
+ */
+#define DPNI_MAC_SET_QUEUE_ACTION 1
 
 int dpni_add_mac_addr(struct fsl_mc_io *mc_io,
 		      uint32_t cmd_flags,
@@ -1600,7 +1648,8 @@ int dpni_set_opr(struct fsl_mc_io *mc_io,
 		 uint8_t tc,
 		 uint8_t index,
 		 uint8_t options,
-		 struct opr_cfg *cfg);
+		 struct opr_cfg *cfg,
+		 uint8_t opr_id);
 
 int dpni_get_opr(struct fsl_mc_io *mc_io,
 		 uint32_t cmd_flags,
@@ -1608,7 +1657,9 @@ int dpni_get_opr(struct fsl_mc_io *mc_io,
 		 uint8_t tc,
 		 uint8_t index,
 		 struct opr_cfg *cfg,
-		 struct opr_qry *qry);
+		 struct opr_qry *qry,
+		 uint8_t flags,
+		 uint8_t opr_id);
 
 /**
  * enum dpni_soft_sequence_dest - Enumeration of WRIOP software sequence
@@ -1791,7 +1842,64 @@ struct dpni_custom_tpid_cfg {
 	uint16_t tpid2;
 };
 
-int dpni_get_custom_tpid(struct fsl_mc_io *mc_io, uint32_t cmd_flags,
-		uint16_t token, struct dpni_custom_tpid_cfg *tpid);
+int dpni_get_custom_tpid(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_custom_tpid_cfg *tpid);
+/*
+ * struct dpni_ptp_cfg - configure single step PTP (IEEE 1588)
+ * 	@en: enable single step PTP. When enabled the PTPv1 functionality will not work. If
+ * 			the field is zero, offset and ch_update parameters will be ignored
+ * 	@offset: start offset from the beginning of the frame where timestamp field is found.
+ * 			The offset must respect all MAC headers, VLAN tags and other protocol headers
+ * 	@ch_update: when set UDP checksum will be updated inside packet
+ * 	@peer_delay: For peer-to-peer transparent clocks add this value to the correction field
+ *			in addition to the transient time update. The value expresses nanoseconds.
+ */
+struct dpni_single_step_cfg {
+	uint8_t en;
+	uint8_t ch_update;
+	uint16_t offset;
+	uint32_t peer_delay;
+};
+
+int dpni_set_single_step_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_single_step_cfg *ptp_cfg);
+
+int dpni_get_single_step_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_single_step_cfg *ptp_cfg);
+
+/**
+ * loopback_en field is valid when calling function dpni_set_port_cfg
+ */
+#define DPNI_PORT_CFG_LOOPBACK		0x01
+
+/**
+ * struct dpni_port_cfg - custom configuration for dpni physical port
+ * 	@loopback_en: port loopback enabled
+ */
+struct dpni_port_cfg {
+	int loopback_en;
+};
+
+int dpni_set_port_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		uint32_t flags, struct dpni_port_cfg *port_cfg);
+
+int dpni_get_port_cfg(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+		struct dpni_port_cfg *port_cfg);
+
+enum dpni_table_type {
+	DPNI_FS_TABLE = 1,
+	DPNI_MAC_TABLE = 2,
+	DPNI_QOS_TABLE = 3,
+	DPNI_VLAN_TABLE	= 4,
+};
+
+int dpni_dump_table(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint16_t table_type,
+			 uint16_t table_index,
+			 uint64_t iova_addr,
+			 uint32_t iova_size,
+			 uint16_t *num_entries);
 
 #endif /* __FSL_DPNI_H */

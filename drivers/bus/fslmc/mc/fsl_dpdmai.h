@@ -71,6 +71,42 @@ int dpdmai_reset(struct fsl_mc_io *mc_io,
 		 uint32_t cmd_flags,
 		 uint16_t token);
 
+int dpdmai_set_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t en);
+
+int dpdmai_get_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t *en);
+
+int dpdmai_set_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t mask);
+
+int dpdmai_get_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t *mask);
+
+int dpdmai_get_irq_status(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint32_t *status);
+
+int dpdmai_clear_irq_status(struct fsl_mc_io *mc_io,
+			    uint32_t cmd_flags,
+			    uint16_t token,
+			    uint8_t irq_index,
+			    uint32_t status);
+
 /**
  * struct dpdmai_attr - Structure representing DPDMAI attributes
  * @id: DPDMAI object ID

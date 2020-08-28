@@ -21,7 +21,7 @@
 /**
  * Number of extractions per key profile
  */
-#define DPKG_MAX_NUM_OF_EXTRACTS	10
+#define DPKG_MAX_NUM_OF_EXTRACTS	20
 
 /**
  * enum dpkg_extract_from_hdr_type - Selecting extraction by header types
@@ -177,7 +177,7 @@ struct dpni_ext_set_rx_tc_dist {
 	uint8_t num_extracts;
 	uint8_t pad[7];
 	/* words 1..25 */
-	struct dpni_dist_extract extracts[10];
+	struct dpni_dist_extract extracts[DPKG_MAX_NUM_OF_EXTRACTS];
 };
 
 int dpkg_prepare_key_cfg(const struct dpkg_profile_cfg *cfg,

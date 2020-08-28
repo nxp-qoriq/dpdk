@@ -94,6 +94,74 @@ int dpci_reset(struct fsl_mc_io *mc_io,
 	       uint32_t cmd_flags,
 	       uint16_t token);
 
+/** DPCI IRQ Index and Events */
+
+/**
+ * IRQ index
+ */
+#define DPCI_IRQ_INDEX				0
+
+/**
+ * IRQ event - indicates a change in link state
+ */
+#define DPCI_IRQ_EVENT_LINK_CHANGED		0x00000001
+/**
+ * IRQ event - indicates a connection event
+ */
+#define DPCI_IRQ_EVENT_CONNECTED                0x00000002
+/**
+ * IRQ event - indicates a disconnection event
+ */
+#define DPCI_IRQ_EVENT_DISCONNECTED             0x00000004
+
+/**
+ * struct dpci_irq_cfg - IRQ configuration
+ * @addr:	Address that must be written to signal a message-based interrupt
+ * @val:	Value to write into irq_addr address
+ * @irq_num:	A user defined number associated with this IRQ
+ */
+struct dpci_irq_cfg {
+	     uint64_t addr;
+	     uint32_t val;
+	     int irq_num;
+};
+
+int dpci_set_irq_enable(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint8_t en);
+
+int dpci_get_irq_enable(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint8_t *en);
+
+int dpci_set_irq_mask(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      uint8_t irq_index,
+		      uint32_t mask);
+
+int dpci_get_irq_mask(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      uint8_t irq_index,
+		      uint32_t *mask);
+
+int dpci_get_irq_status(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t *status);
+
+int dpci_clear_irq_status(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t rq_index,
+			  uint32_t status);
+
 /**
  * struct dpci_attr - Structure representing DPCI attributes
  * @id:			DPCI object ID

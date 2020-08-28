@@ -22,7 +22,10 @@
  * Retire an existing Order Point Record option
  */
 #define OPR_OPT_RETIRE 0x2
-
+/**
+ * Assign an existing Order Point Record to a queue
+ */
+#define OPR_OPT_ASSIGN 0x4
 /**
  * struct opr_cfg - Structure representing OPR configuration
  * @oprrws: Order point record (OPR) restoration window size (0 to 5)

@@ -156,6 +156,42 @@ int dpdmux_get_resetable(struct fsl_mc_io *mc_io,
 				  uint16_t token,
 				  uint8_t *skip_reset_flags);
 
+int dpdmux_set_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t en);
+
+int dpdmux_get_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t *en);
+
+int dpdmux_set_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t mask);
+
+int dpdmux_get_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t *mask);
+
+int dpdmux_get_irq_status(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint32_t *status);
+
+int dpdmux_clear_irq_status(struct fsl_mc_io *mc_io,
+			    uint32_t cmd_flags,
+			    uint16_t token,
+			    uint8_t irq_index,
+			    uint32_t status);
+
 /**
  * struct dpdmux_attr - Structure representing DPDMUX attributes
  * @id: DPDMUX object ID
@@ -200,6 +236,7 @@ int dpdmux_set_max_frame_length(struct fsl_mc_io *mc_io,
  * @DPDMUX_CNT_EGR_FRAME: Counts egress frames
  * @DPDMUX_CNT_EGR_BYTE: Counts egress bytes
  * @DPDMUX_CNT_EGR_FRAME_DISCARD: Counts discarded egress frames
+ * @DPDMUX_CNT_ING_NO_BUFFER_DISCARD: Counts ingress no buffer discard frames
  */
 enum dpdmux_counter_type {
 	DPDMUX_CNT_ING_FRAME = 0x0,
@@ -212,7 +249,8 @@ enum dpdmux_counter_type {
 	DPDMUX_CNT_ING_BCAST_BYTES = 0x7,
 	DPDMUX_CNT_EGR_FRAME = 0x8,
 	DPDMUX_CNT_EGR_BYTE = 0x9,
-	DPDMUX_CNT_EGR_FRAME_DISCARD = 0xa
+	DPDMUX_CNT_EGR_FRAME_DISCARD = 0xa,
+	DPDMUX_CNT_ING_NO_BUFFER_DISCARD = 0xb,
 };
 
 /**
@@ -367,8 +405,8 @@ struct dpdmux_link_state {
 	uint64_t options;
 	int      up;
 	int      state_valid;
-	uint64_t supported;
-	uint64_t advertising;
+   	uint64_t supported;
+   	uint64_t advertising;
 };
 
 int dpdmux_if_get_link_state(struct fsl_mc_io *mc_io,
@@ -443,5 +481,30 @@ int dpdmux_get_api_version(struct fsl_mc_io *mc_io,
 			   uint32_t cmd_flags,
 			   uint16_t *major_ver,
 			   uint16_t *minor_ver);
+
+enum dpdmux_congestion_unit {
+	DPDMUX_TAIDLROP_DROP_UNIT_BYTE = 0,
+	DPDMUX_TAILDROP_DROP_UNIT_FRAMES,
+	DPDMUX_TAILDROP_DROP_UNIT_BUFFERS
+};
+
+/**
+ * struct dpdmux_taildrop_cfg - interface taildrop configuration
+ * @enable - enable (1 ) or disable (0) taildrop
+ * @units - taildrop units
+ * @threshold - taildtop threshold
+ */
+struct dpdmux_taildrop_cfg {
+	char enable;
+	enum dpdmux_congestion_unit units;
+	uint32_t threshold;
+};
+
+int dpdmux_if_set_taildrop(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+			      uint16_t if_id, struct dpdmux_taildrop_cfg *cfg);
+
+int dpdmux_if_get_taildrop(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
+			      uint16_t if_id, struct dpdmux_taildrop_cfg *cfg);
+
 
 #endif /* __FSL_DPDMUX_H */

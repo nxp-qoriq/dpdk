@@ -9,27 +9,33 @@
 
 /* DPNI Version */
 #define DPNI_VER_MAJOR				7
-#define DPNI_VER_MINOR				13
+#define DPNI_VER_MINOR				17
 
 #define DPNI_CMD_BASE_VERSION			1
 #define DPNI_CMD_VERSION_2			2
 #define DPNI_CMD_VERSION_3			3
+#define DPNI_CMD_VERSION_4			4
+#define DPNI_CMD_VERSION_5			5
+#define DPNI_CMD_VERSION_6			6
 #define DPNI_CMD_ID_OFFSET			4
 
 #define DPNI_CMD(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_BASE_VERSION)
 #define DPNI_CMD_V2(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_VERSION_2)
 #define DPNI_CMD_V3(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_VERSION_3)
+#define DPNI_CMD_V4(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_VERSION_4)
+#define DPNI_CMD_V5(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_VERSION_5)
+#define DPNI_CMD_V6(id)	(((id) << DPNI_CMD_ID_OFFSET) | DPNI_CMD_VERSION_6)
 
 /* Command IDs */
 #define DPNI_CMDID_OPEN				DPNI_CMD(0x801)
 #define DPNI_CMDID_CLOSE			DPNI_CMD(0x800)
-#define DPNI_CMDID_CREATE			DPNI_CMD_V3(0x901)
+#define DPNI_CMDID_CREATE			DPNI_CMD_V6(0x901)
 #define DPNI_CMDID_DESTROY			DPNI_CMD(0x981)
 #define DPNI_CMDID_GET_API_VERSION		DPNI_CMD(0xa01)
 
 #define DPNI_CMDID_ENABLE			DPNI_CMD(0x002)
 #define DPNI_CMDID_DISABLE			DPNI_CMD(0x003)
-#define DPNI_CMDID_GET_ATTR			DPNI_CMD_V3(0x004)
+#define DPNI_CMDID_GET_ATTR			DPNI_CMD_V4(0x004)
 #define DPNI_CMDID_RESET			DPNI_CMD(0x005)
 #define DPNI_CMDID_IS_ENABLED			DPNI_CMD(0x006)
 
@@ -67,7 +73,7 @@
 #define DPNI_CMDID_REMOVE_VLAN_ID		DPNI_CMD(0x232)
 #define DPNI_CMDID_CLR_VLAN_FILTERS		DPNI_CMD(0x233)
 
-#define DPNI_CMDID_SET_RX_TC_DIST		DPNI_CMD_V3(0x235)
+#define DPNI_CMDID_SET_RX_TC_DIST		DPNI_CMD_V4(0x235)
 
 #define DPNI_CMDID_SET_RX_TC_POLICING		DPNI_CMD(0x23E)
 
@@ -103,16 +109,21 @@
 #define DPNI_CMDID_SET_TX_CONFIRMATION_MODE	DPNI_CMD(0x266)
 #define DPNI_CMDID_GET_TX_CONFIRMATION_MODE	DPNI_CMD(0x26D)
 #define DPNI_CMDID_SET_OPR			DPNI_CMD(0x26e)
-#define DPNI_CMDID_GET_OPR			DPNI_CMD(0x26f)
-#define DPNI_CMDID_LOAD_SW_SEQUENCE		DPNI_CMD(0x270)
+#define DPNI_CMDID_GET_OPR			DPNI_CMD_V2(0x26f)
+#define DPNI_CMDID_LOAD_SW_SEQUENCE			DPNI_CMD(0x270)
 #define DPNI_CMDID_ENABLE_SW_SEQUENCE		DPNI_CMD(0x271)
-#define DPNI_CMDID_GET_SW_SEQUENCE_LAYOUT	DPNI_CMD(0x272)
-#define DPNI_CMDID_SET_RX_FS_DIST		DPNI_CMD(0x273)
-#define DPNI_CMDID_SET_RX_HASH_DIST		DPNI_CMD(0x274)
+#define DPNI_CMDID_GET_SW_SEQUENCE_LAYOUT		DPNI_CMD(0x272)
+#define DPNI_CMDID_SET_RX_FS_DIST		DPNI_CMD_V2(0x273)
+#define DPNI_CMDID_SET_RX_HASH_DIST		DPNI_CMD_V2(0x274)
 #define DPNI_CMDID_ADD_CUSTOM_TPID		DPNI_CMD(0x275)
 #define DPNI_CMDID_REMOVE_CUSTOM_TPID		DPNI_CMD(0x276)
 #define DPNI_CMDID_GET_CUSTOM_TPID		DPNI_CMD(0x277)
 #define DPNI_CMDID_GET_LINK_CFG			DPNI_CMD(0x278)
+#define DPNI_CMDID_SET_SINGLE_STEP_CFG			DPNI_CMD(0x279)
+#define DPNI_CMDID_GET_SINGLE_STEP_CFG			DPNI_CMD(0x27a)
+#define DPNI_CMDID_SET_PORT_CFG			DPNI_CMD(0x27B)
+#define DPNI_CMDID_GET_PORT_CFG			DPNI_CMD(0x27C)
+#define DPNI_CMDID_DUMP_TABLE           DPNI_CMD(0x27D)
 
 /* Macros for accessing command fields smaller than 1byte */
 #define DPNI_MASK(field)	\
@@ -141,7 +152,9 @@ struct dpni_cmd_create {
 	uint16_t fs_entries;
 	uint8_t num_rx_tcs;
 	uint8_t pad4;
-	uint8_t num_cgs;
+	uint8_t  num_cgs;
+	uint16_t num_opr;
+	uint8_t dist_key_size;
 };
 
 struct dpni_cmd_destroy {
@@ -235,6 +248,10 @@ struct dpni_rsp_get_attr {
 	uint8_t fs_key_size;
 	uint16_t wriop_version;
 	uint8_t num_cgs;
+	uint8_t pad4;
+	uint16_t lni;
+	/* response word 3 */
+	uint16_t ceetm_id;
 };
 
 #define DPNI_ERROR_ACTION_SHIFT		0
@@ -356,8 +373,9 @@ struct dpni_rsp_get_link_state {
 	uint32_t rate;
 	uint32_t pad2;
 	uint64_t options;
-	uint64_t supported;
-	uint64_t advertising;
+    uint64_t supported;
+    uint64_t advertising;
+
 };
 
 #define DPNI_COUPLED_SHIFT	0
@@ -778,7 +796,7 @@ struct dpni_rsp_get_congestion_notification {
 };
 
 struct dpni_cmd_set_opr {
-	uint8_t pad0;
+	uint8_t opr_id;
 	uint8_t tc_id;
 	uint8_t index;
 	uint8_t options;
@@ -791,9 +809,10 @@ struct dpni_cmd_set_opr {
 };
 
 struct dpni_cmd_get_opr {
-	uint8_t pad;
+	uint8_t flags;
 	uint8_t tc_id;
 	uint8_t index;
+	uint8_t opr_id;
 };
 
 #define DPNI_RIP_SHIFT	0
@@ -908,6 +927,64 @@ struct dpni_cmd_remove_custom_tpid {
 struct dpni_rsp_get_custom_tpid {
 	uint16_t	tpid1;
 	uint16_t	tpid2;
+};
+
+#define DPNI_PTP_ENABLE_SHIFT			0
+#define DPNI_PTP_ENABLE_SIZE			1
+#define DPNI_PTP_CH_UPDATE_SHIFT		1
+#define DPNI_PTP_CH_UPDATE_SIZE			1
+struct dpni_cmd_single_step_cfg {
+	uint16_t	flags;
+	uint16_t	offset;
+	uint32_t	peer_delay;
+};
+
+struct dpni_rsp_single_step_cfg {
+	uint16_t	flags;
+	uint16_t	offset;
+	uint32_t	peer_delay;
+};
+
+#define DPNI_PORT_LOOPBACK_EN_SHIFT	0
+#define DPNI_PORT_LOOPBACK_EN_SIZE	1
+
+struct dpni_cmd_set_port_cfg {
+	uint32_t	flags;
+	uint32_t	bit_params;
+};
+
+struct dpni_rsp_get_port_cfg {
+	uint32_t	flags;
+	uint32_t	bit_params;
+};
+
+struct dpni_cmd_dump_table {
+	uint16_t table_type;
+	uint16_t table_index;
+	uint32_t pad0;
+	uint64_t iova_addr;
+	uint32_t iova_size;
+};
+
+struct dpni_rsp_dump_table {
+	uint16_t num_entries;
+};
+
+struct dump_table_header {
+	uint16_t table_type;
+	uint16_t table_num_entries;
+	uint16_t table_max_entries;
+	uint8_t default_action;
+	uint8_t match_type;
+	uint8_t reserved[24];
+};
+
+struct dump_table_entry {
+	uint8_t key[DPNI_MAX_KEY_SIZE];
+	uint8_t mask[DPNI_MAX_KEY_SIZE];
+	uint8_t key_action;
+	uint16_t result[3];
+	uint8_t reserved[21];
 };
 
 #pragma pack(pop)

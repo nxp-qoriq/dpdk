@@ -2186,9 +2186,10 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 			eth_priv->en_loose_ordered = 0;
 		}
 
+		/* FIXME: add dummy value 0 for ORP_ID */
 		ret = dpni_set_opr(dpni, CMD_PRI_LOW, eth_priv->token,
 				   dpaa2_ethq->tc_index, flow_id,
-				   OPR_OPT_CREATE, &ocfg);
+				   OPR_OPT_CREATE, &ocfg, 0);
 		if (ret) {
 			DPAA2_PMD_ERR("Error setting opr: ret: %d\n", ret);
 			return ret;

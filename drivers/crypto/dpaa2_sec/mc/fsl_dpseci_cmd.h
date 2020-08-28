@@ -37,6 +37,13 @@
 #define DPSECI_CMDID_RESET		DPSECI_CMD_V1(0x005)
 #define DPSECI_CMDID_IS_ENABLED		DPSECI_CMD_V1(0x006)
 
+#define DPSECI_CMDID_SET_IRQ_ENABLE	DPSECI_CMD_V1(0x012)
+#define DPSECI_CMDID_GET_IRQ_ENABLE	DPSECI_CMD_V1(0x013)
+#define DPSECI_CMDID_SET_IRQ_MASK	DPSECI_CMD_V1(0x014)
+#define DPSECI_CMDID_GET_IRQ_MASK	DPSECI_CMD_V1(0x015)
+#define DPSECI_CMDID_GET_IRQ_STATUS	DPSECI_CMD_V1(0x016)
+#define DPSECI_CMDID_CLEAR_IRQ_STATUS	DPSECI_CMD_V1(0x017)
+
 #define DPSECI_CMDID_SET_RX_QUEUE	DPSECI_CMD_V1(0x194)
 #define DPSECI_CMDID_GET_RX_QUEUE	DPSECI_CMD_V1(0x196)
 #define DPSECI_CMDID_GET_TX_QUEUE	DPSECI_CMD_V1(0x197)
@@ -81,6 +88,39 @@ struct dpseci_cmd_destroy {
 struct dpseci_rsp_is_enabled {
 	/* only the first LSB */
 	uint8_t en;
+};
+
+struct dpseci_cmd_get_irq {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpseci_cmd_set_irq_enable {
+	uint8_t enable_state;
+	uint8_t pad[3];
+	uint8_t irq_index;
+};
+
+struct dpseci_rsp_get_irq_enable {
+	uint8_t enable_state;
+};
+
+struct dpseci_cmd_set_irq_mask {
+	uint32_t mask;
+	uint8_t irq_index;
+};
+
+struct dpseci_rsp_get_irq_mask {
+	uint32_t mask;
+};
+
+struct dpseci_cmd_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
+};
+
+struct dpseci_rsp_get_irq_status {
+	uint32_t status;
 };
 
 struct dpseci_rsp_get_attr {

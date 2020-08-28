@@ -65,6 +65,42 @@ int dpcon_reset(struct fsl_mc_io *mc_io,
 		uint32_t cmd_flags,
 		uint16_t token);
 
+int dpcon_set_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t en);
+
+int dpcon_get_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t *en);
+
+int dpcon_set_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t mask);
+
+int dpcon_get_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t *mask);
+
+int dpcon_get_irq_status(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint32_t *status);
+
+int dpcon_clear_irq_status(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   uint8_t irq_index,
+			   uint32_t status);
+
 /**
  * struct dpcon_attr - Structure representing DPCON attributes
  * @id:			DPCON object ID

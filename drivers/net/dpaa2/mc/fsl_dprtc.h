@@ -11,6 +11,38 @@
 
 struct fsl_mc_io;
 
+/**
+ * Number of irq's
+ */
+#define DPRTC_MAX_IRQ_NUM			1
+#define DPRTC_IRQ_INDEX				0
+
+/**
+ * Interrupt event masks:
+ */
+
+/**
+ * Interrupt event mask indicating alarm event had occurred
+ */
+#define DPRTC_EVENT_ALARM			0x40000000
+/**
+ * Interrupt event mask indicating periodic pulse 1 event had occurred
+ */
+#define DPRTC_EVENT_PPS				0x08000000
+/**
+ * Interrupt event mask indicating periodic pulse 2 event had occurred
+ */
+#define DPRTC_EVENT_PPS2            0x04000000
+/**
+ * Interrupt event mask indicating External trigger 1 new timestamp sample event had occurred
+ */
+#define DPRTC_EVENT_ETS1			0x00800000
+/**
+ * Interrupt event mask indicating External trigger 2 new timestamp sample event had occurred
+ */
+#define DPRTC_EVENT_ETS2			0x00400000
+
+
 int dprtc_open(struct fsl_mc_io *mc_io,
 	       uint32_t cmd_flags,
 	       int dprtc_id,
@@ -85,6 +117,59 @@ int dprtc_set_alarm(struct fsl_mc_io *mc_io,
 		    uint32_t cmd_flags,
 		    uint16_t token,
 		    uint64_t time);
+
+int dprtc_set_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t en);
+
+int dprtc_get_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t *en);
+
+int dprtc_set_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t mask);
+
+int dprtc_get_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t *mask);
+
+int dprtc_get_irq_status(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint32_t *status);
+
+int dprtc_clear_irq_status(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   uint8_t irq_index,
+			   uint32_t status);
+
+struct dprtc_ext_trigger_status {
+			uint64_t timestamp;
+			uint8_t unread_valid_timestamp;
+};
+
+int dprtc_get_ext_trigger_timestamp(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t id,
+			struct dprtc_ext_trigger_status *status);
+
+int dprtc_set_fiper_loopback(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t id,
+			uint8_t fiper_as_input);
 
 /**
  * struct dprtc_attr - Structure representing DPRTC attributes

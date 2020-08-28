@@ -101,6 +101,42 @@ int dpseci_reset(struct fsl_mc_io *mc_io,
 		 uint32_t cmd_flags,
 		 uint16_t token);
 
+int dpseci_set_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t en);
+
+int dpseci_get_irq_enable(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint8_t *en);
+
+int dpseci_set_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t mask);
+
+int dpseci_get_irq_mask(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint8_t irq_index,
+			uint32_t *mask);
+
+int dpseci_get_irq_status(struct fsl_mc_io *mc_io,
+			  uint32_t cmd_flags,
+			  uint16_t token,
+			  uint8_t irq_index,
+			  uint32_t *status);
+
+int dpseci_clear_irq_status(struct fsl_mc_io *mc_io,
+			    uint32_t cmd_flags,
+			    uint16_t token,
+			    uint8_t irq_index,
+			    uint32_t status);
+
 /**
  * struct dpseci_attr - Structure representing DPSECI attributes
  * @id: DPSECI object ID

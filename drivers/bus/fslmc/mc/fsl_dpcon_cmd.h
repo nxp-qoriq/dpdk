@@ -31,6 +31,13 @@
 #define DPCON_CMDID_RESET		DPCON_CMD(0x005)
 #define DPCON_CMDID_IS_ENABLED		DPCON_CMD(0x006)
 
+#define DPCON_CMDID_SET_IRQ_ENABLE	DPCON_CMD(0x012)
+#define DPCON_CMDID_GET_IRQ_ENABLE	DPCON_CMD(0x013)
+#define DPCON_CMDID_SET_IRQ_MASK	DPCON_CMD(0x014)
+#define DPCON_CMDID_GET_IRQ_MASK	DPCON_CMD(0x015)
+#define DPCON_CMDID_GET_IRQ_STATUS	DPCON_CMD(0x016)
+#define DPCON_CMDID_CLEAR_IRQ_STATUS	DPCON_CMD(0x017)
+
 #define DPCON_CMDID_SET_NOTIFICATION	DPCON_CMD(0x100)
 
 #pragma pack(push, 1)
@@ -50,6 +57,49 @@ struct dpcon_cmd_destroy {
 
 struct dpcon_rsp_is_enabled {
 	uint8_t enabled;
+};
+
+struct dpcon_cmd_set_irq_enable {
+	uint8_t enable;
+	uint8_t pad[3];
+	uint8_t irq_index;
+};
+
+struct dpcon_cmd_get_irq_enable {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpcon_rsp_get_irq_enable {
+	uint8_t enabled;
+};
+
+struct dpcon_cmd_set_irq_mask {
+	uint32_t mask;
+	uint8_t irq_index;
+};
+
+struct dpcon_cmd_get_irq_mask {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpcon_rsp_get_irq_mask {
+	uint32_t mask;
+};
+
+struct dpcon_cmd_get_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
+};
+
+struct dpcon_rsp_get_irq_status {
+	uint32_t status;
+};
+
+struct dpcon_cmd_clear_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
 };
 
 struct dpcon_rsp_get_attr {

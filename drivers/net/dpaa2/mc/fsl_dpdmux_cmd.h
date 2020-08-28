@@ -32,6 +32,14 @@
 #define DPDMUX_CMDID_GET_ATTR			DPDMUX_CMD_V2(0x004)
 #define DPDMUX_CMDID_RESET			DPDMUX_CMD(0x005)
 #define DPDMUX_CMDID_IS_ENABLED			DPDMUX_CMD(0x006)
+
+#define DPDMUX_CMDID_SET_IRQ_ENABLE		DPDMUX_CMD(0x012)
+#define DPDMUX_CMDID_GET_IRQ_ENABLE		DPDMUX_CMD(0x013)
+#define DPDMUX_CMDID_SET_IRQ_MASK		DPDMUX_CMD(0x014)
+#define DPDMUX_CMDID_GET_IRQ_MASK		DPDMUX_CMD(0x015)
+#define DPDMUX_CMDID_GET_IRQ_STATUS		DPDMUX_CMD(0x016)
+#define DPDMUX_CMDID_CLEAR_IRQ_STATUS		DPDMUX_CMD(0x017)
+
 #define DPDMUX_CMDID_SET_MAX_FRAME_LENGTH	DPDMUX_CMD(0x0a1)
 
 #define DPDMUX_CMDID_UL_RESET_COUNTERS		DPDMUX_CMD(0x0a3)
@@ -56,6 +64,9 @@
 
 #define DPDMUX_CMDID_SET_RESETABLE		DPDMUX_CMD(0x0ba)
 #define DPDMUX_CMDID_GET_RESETABLE		DPDMUX_CMD(0x0bb)
+
+#define DPDMUX_CMDID_IF_SET_TAILDROP		DPDMUX_CMD(0x0bc)
+#define DPDMUX_CMDID_IF_GET_TAILDROP		DPDMUX_CMD(0x0bd)
 
 #define DPDMUX_MASK(field)        \
 	GENMASK(DPDMUX_##field##_SHIFT + DPDMUX_##field##_SIZE - 1, \
@@ -96,6 +107,49 @@ struct dpdmux_cmd_destroy {
 
 struct dpdmux_rsp_is_enabled {
 	uint8_t en;
+};
+
+struct dpdmux_cmd_set_irq_enable {
+	uint8_t enable;
+	uint8_t pad[3];
+	uint8_t irq_index;
+};
+
+struct dpdmux_cmd_get_irq_enable {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpdmux_rsp_get_irq_enable {
+	uint8_t enable;
+};
+
+struct dpdmux_cmd_set_irq_mask {
+	uint32_t mask;
+	uint8_t irq_index;
+};
+
+struct dpdmux_cmd_get_irq_mask {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpdmux_rsp_get_irq_mask {
+	uint32_t mask;
+};
+
+struct dpdmux_cmd_get_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
+};
+
+struct dpdmux_rsp_get_irq_status {
+	uint32_t status;
+};
+
+struct dpdmux_cmd_clear_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
 };
 
 struct dpdmux_rsp_get_attr {
@@ -230,6 +284,32 @@ struct dpdmux_cmd_set_skip_reset_flags {
 
 struct dpdmux_rsp_get_skip_reset_flags {
 	uint8_t skip_reset_flags;
+};
+
+struct dpdmux_cmd_set_taildrop {
+	uint32_t	pad1;
+	uint16_t	if_id;
+	uint16_t	pad2;
+	uint16_t	oal_en;
+	uint8_t		units;
+	uint8_t		pad3;
+	uint32_t	threshold;
+};
+
+struct dpdmux_cmd_get_taildrop {
+	uint32_t	pad1;
+	uint16_t	if_id;
+};
+
+struct dpdmux_rsp_get_taildrop {
+	uint16_t	pad1;
+	uint16_t	pad2;
+	uint16_t	if_id;
+	uint16_t	pad3;
+	uint16_t	oal_en;
+	uint8_t		units;
+	uint8_t		pad4;
+	uint32_t	threshold;
 };
 #pragma pack(pop)
 #endif /* _FSL_DPDMUX_CMD_H */

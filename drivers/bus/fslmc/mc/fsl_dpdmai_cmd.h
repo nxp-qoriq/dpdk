@@ -30,6 +30,13 @@
 #define DPDMAI_CMDID_RESET		DPDMAI_CMD(0x005)
 #define DPDMAI_CMDID_IS_ENABLED		DPDMAI_CMD(0x006)
 
+#define DPDMAI_CMDID_SET_IRQ_ENABLE	DPDMAI_CMD(0x012)
+#define DPDMAI_CMDID_GET_IRQ_ENABLE	DPDMAI_CMD(0x013)
+#define DPDMAI_CMDID_SET_IRQ_MASK	DPDMAI_CMD(0x014)
+#define DPDMAI_CMDID_GET_IRQ_MASK	DPDMAI_CMD(0x015)
+#define DPDMAI_CMDID_GET_IRQ_STATUS	DPDMAI_CMD(0x016)
+#define DPDMAI_CMDID_CLEAR_IRQ_STATUS	DPDMAI_CMD(0x017)
+
 #define DPDMAI_CMDID_SET_RX_QUEUE	DPDMAI_CMD_V2(0x1A0)
 #define DPDMAI_CMDID_GET_RX_QUEUE	DPDMAI_CMD_V2(0x1A1)
 #define DPDMAI_CMDID_GET_TX_QUEUE	DPDMAI_CMD_V2(0x1A2)
@@ -63,6 +70,49 @@ struct dpdmai_cmd_destroy {
 struct dpdmai_rsp_is_enabled {
 	/* only the LSB bit */
 	uint8_t en;
+};
+
+struct dpdmai_cmd_set_irq_enable {
+	uint8_t enable_state;
+	uint8_t pad[3];
+	uint8_t irq_index;
+};
+
+struct dpdmai_cmd_get_irq_enable {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpdmai_rsp_get_irq_enable {
+	uint8_t enable_state;
+};
+
+struct dpdmai_cmd_set_irq_mask {
+	uint32_t mask;
+	uint8_t irq_index;
+};
+
+struct dpdmai_cmd_get_irq_mask {
+	uint32_t pad;
+	uint8_t irq_index;
+};
+
+struct dpdmai_rsp_get_irq_mask {
+	uint32_t mask;
+};
+
+struct dpdmai_cmd_get_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
+};
+
+struct dpdmai_rsp_get_irq_status {
+	uint32_t status;
+};
+
+struct dpdmai_cmd_clear_irq_status {
+	uint32_t status;
+	uint8_t irq_index;
 };
 
 struct dpdmai_rsp_get_attr {

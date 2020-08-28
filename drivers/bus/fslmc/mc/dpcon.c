@@ -260,6 +260,238 @@ int dpcon_reset(struct fsl_mc_io *mc_io,
 }
 
 /**
+ * dpcon_set_irq_enable() - Set overall interrupt state.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @en:		Interrupt state - enable = 1, disable = 0
+ *
+ * Allows GPP software to control when interrupts are generated.
+ * Each interrupt can have up to 32 causes.  The enable/disable control's the
+ * overall interrupt state. if the interrupt is disabled no causes will cause
+ * an interrupt.
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_set_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t en)
+{
+	struct dpcon_cmd_set_irq_enable *dpcon_cmd;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_SET_IRQ_ENABLE,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_set_irq_enable *)cmd.params;
+	dpcon_cmd->enable = en & DPCON_ENABLE;
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+/**
+ * dpcon_get_irq_enable() - Get overall interrupt state.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @en:		Returned interrupt state - enable = 1, disable = 0
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_get_irq_enable(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint8_t *en)
+{
+	struct dpcon_cmd_get_irq_enable *dpcon_cmd;
+	struct dpcon_rsp_get_irq_enable *dpcon_rsp;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_GET_IRQ_ENABLE,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_get_irq_enable *)cmd.params;
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	dpcon_rsp = (struct dpcon_rsp_get_irq_enable *)cmd.params;
+	*en = dpcon_rsp->enabled & DPCON_ENABLE;
+
+	return 0;
+}
+
+/**
+ * dpcon_set_irq_mask() - Set interrupt mask.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @mask:	Event mask to trigger interrupt;
+ *		each bit:
+ *			0 = ignore event
+ *			1 = consider event for asserting IRQ
+ *
+ * Every interrupt can have up to 32 causes and the interrupt model supports
+ * masking/unmasking each cause independently
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_set_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t mask)
+{
+	struct dpcon_cmd_set_irq_mask *dpcon_cmd;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_SET_IRQ_MASK,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_set_irq_mask *)cmd.params;
+	dpcon_cmd->mask = cpu_to_le32(mask);
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+/**
+ * dpcon_get_irq_mask() - Get interrupt mask.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @mask:	Returned event mask to trigger interrupt
+ *
+ * Every interrupt can have up to 32 causes and the interrupt model supports
+ * masking/unmasking each cause independently
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_get_irq_mask(struct fsl_mc_io *mc_io,
+		       uint32_t cmd_flags,
+		       uint16_t token,
+		       uint8_t irq_index,
+		       uint32_t *mask)
+{
+	struct dpcon_cmd_get_irq_mask *dpcon_cmd;
+	struct dpcon_rsp_get_irq_mask *dpcon_rsp;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_GET_IRQ_MASK,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_get_irq_mask *)cmd.params;
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	dpcon_rsp = (struct dpcon_rsp_get_irq_mask *)cmd.params;
+	*mask = le32_to_cpu(dpcon_rsp->mask);
+
+	return 0;
+}
+
+/**
+ * dpcon_get_irq_status() - Get the current status of any pending interrupts.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @status:	interrupts status - one bit per cause:
+ *			0 = no interrupt pending
+ *			1 = interrupt pending
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_get_irq_status(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint8_t irq_index,
+			 uint32_t *status)
+{
+	struct dpcon_cmd_get_irq_status *dpcon_cmd;
+	struct dpcon_rsp_get_irq_status *dpcon_rsp;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_GET_IRQ_STATUS,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_get_irq_status *)cmd.params;
+	dpcon_cmd->status = cpu_to_le32(*status);
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	dpcon_rsp = (struct dpcon_rsp_get_irq_status *)cmd.params;
+	*status = le32_to_cpu(dpcon_rsp->status);
+
+	return 0;
+}
+
+/**
+ * dpcon_clear_irq_status() - Clear a pending interrupt's status
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCON object
+ * @irq_index:	The interrupt index to configure
+ * @status:	bits to clear (W1C) - one bit per cause:
+ *			0 = don't change
+ *			1 = clear status bit
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpcon_clear_irq_status(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   uint8_t irq_index,
+			   uint32_t status)
+{
+	struct dpcon_cmd_clear_irq_status *dpcon_cmd;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCON_CMDID_CLEAR_IRQ_STATUS,
+					  cmd_flags,
+					  token);
+	dpcon_cmd = (struct dpcon_cmd_clear_irq_status *)cmd.params;
+	dpcon_cmd->status = cpu_to_le32(status);
+	dpcon_cmd->irq_index = irq_index;
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+/**
  * dpcon_get_attributes() - Retrieve DPCON attributes.
  * @mc_io:	Pointer to MC portal's I/O object
  * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
