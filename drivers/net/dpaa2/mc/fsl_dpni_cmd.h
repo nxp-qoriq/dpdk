@@ -88,7 +88,7 @@
 
 #define DPNI_CMDID_GET_STATISTICS		DPNI_CMD_V3(0x25D)
 #define DPNI_CMDID_RESET_STATISTICS		DPNI_CMD(0x25E)
-#define DPNI_CMDID_GET_QUEUE			DPNI_CMD_V2(0x25F)
+#define DPNI_CMDID_GET_QUEUE			DPNI_CMD_V3(0x25F)
 #define DPNI_CMDID_SET_QUEUE			DPNI_CMD_V2(0x260)
 #define DPNI_CMDID_GET_TAILDROP			DPNI_CMD_V2(0x261)
 #define DPNI_CMDID_SET_TAILDROP			DPNI_CMD_V2(0x262)
@@ -542,6 +542,9 @@ struct dpni_rsp_get_queue {
 	uint16_t pad2;
 	/* response word 5*/
 	uint8_t cgid;
+	uint8_t pad3[3];
+	uint16_t real_fqid_dctidx;
+	uint16_t real_cqid;
 };
 
 struct dpni_cmd_set_queue {

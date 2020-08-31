@@ -2482,6 +2482,9 @@ int dpni_get_queue(struct fsl_mc_io *mc_io,
 	else
 		queue->cgid = -1;
 
+	qid->dctidx = le16_to_cpu(rsp_params->real_fqid_dctidx);
+	qid->real_cqid = le16_to_cpu(rsp_params->real_cqid);
+
 	return 0;
 }
 

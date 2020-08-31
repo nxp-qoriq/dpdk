@@ -1387,10 +1387,18 @@ struct dpni_queue {
  *			specific FQ
  * @qdbin:	Queueing bin, used to enqueue using QDID, DQBIN, QPRI.
  *			Only relevant for Tx queues.
+ * @real_fqid: real frame queue id for RX and CONFIRM queues
+ * @dct_idx: dct index for Tx queues
+ * @real_cqid: class queue id for Tx queues
  */
 struct dpni_queue_id {
 	uint32_t fqid;
 	uint16_t qdbin;
+	union {
+		uint16_t real_fqid;
+		uint16_t dctidx;
+	};
+	uint16_t real_cqid;
 };
 
 /**
