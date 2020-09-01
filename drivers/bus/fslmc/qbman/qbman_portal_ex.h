@@ -229,7 +229,7 @@ static inline int32_t qb_attr_code_makesigned(const struct qb_attr_code *code,
 {
 	BUG_ON(val >= (1 << code->width));
 	/* If the high bit was set, it was encoding a negative */
-	if (val >= (1 << (code->width - 1)))
+	if (val >= (uint32_t)(1 << (code->width - 1)))
 		return (int32_t)0 - (int32_t)(((uint32_t)1 << code->width) -
 			val);
 	/* Otherwise, it was encoding a positive */

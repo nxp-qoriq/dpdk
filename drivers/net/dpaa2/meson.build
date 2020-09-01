@@ -13,6 +13,7 @@ sources = files('base/dpaa2_hw_dpni.c',
 		'dpaa2_flow.c',
 		'dpaa2_rxtx.c',
 		'dpaa2_sparser.c',
+		'dpaa2_qos.c',
 		'mc/dpkg.c',
 		'mc/dpdmux.c',
 		'mc/dpni.c')
@@ -28,3 +29,4 @@ includes += include_directories('base', 'mc')
 allow_experimental_apis = true
 
 install_headers('rte_pmd_dpaa2.h')
+install_headers('rte_pmd_dpaa2_qos.h')

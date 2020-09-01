@@ -162,6 +162,8 @@ struct dpaa2_dev_priv {
 	uint8_t en_loose_ordered;
 	uint8_t max_cgs;
 	uint8_t cgid_in_use[MAX_RX_QUEUES];
+	uint16_t ceetm_id; /** CEETM index */
+	uint16_t lni;	/**< CEETM LNI index */
 
 	struct extract_s extract;
 

@@ -1,6 +1,7 @@
 DPDK_20.0 {
 	global:
 
+	dpaa2_get_priv_qbman_swp;
 	dpaa2_affine_qbman_ethrx_swp;
 	dpaa2_affine_qbman_swp;
 	dpaa2_alloc_dpbp_dev;
@@ -93,6 +94,24 @@ DPDK_20.0 {
 	qbman_swp_pull;
 	qbman_swp_push_set;
 	qbman_swp_release;
+	qbman_shaper_attr_clear;
+	qbman_shaper_set_lni_mps;
+	qbman_shaper_set_commit_rate;
+	qbman_shaper_set_crtbl;
+	qbman_shaper_set_excess_rate;
+	qbman_shaper_set_ertbl;
+	qbman_shaper_set_coupling;
+	qbman_shaper_set_lni_oal;
+	bman_lni_shaper_configure;
+	bman_cchannel_configure;
+	bman_cchannel_shaper_configure;
+	qbman_ccgr_attr_clear;
+	qbman_cgr_attr_set_td_thres;
+	qbman_cgr_attr_set_td_ctrl;
+	qbman_cgr_attr_set_mode;
+	qbman_ccgr_attr_set_oal;
+	bman_ccgr_configure;
+	bman_cq_configure;
 	rte_dpaa2_alloc_dpci_dev;
 	rte_dpaa2_dev_type;
 	rte_dpaa2_free_dpci_dev;

@@ -49,6 +49,9 @@ struct swp_active_dqs rte_global_active_dqs_list[NUM_MAX_SWP];
 TAILQ_HEAD(dpio_dev_list, dpaa2_dpio_dev);
 static struct dpio_dev_list dpio_dev_list
 	= TAILQ_HEAD_INITIALIZER(dpio_dev_list); /*!< DPIO device list */
+TAILQ_HEAD(priv_dpio_dev_list, dpaa2_dpio_dev);
+static struct dpio_dev_list priv_dpio_dev_list
+	= TAILQ_HEAD_INITIALIZER(priv_dpio_dev_list); /*!< DPIO device list */
 static uint32_t io_space_count;
 
 /* Variable to store DPAA2 platform type */
@@ -93,6 +96,12 @@ static struct dpaa2_dpio_dev *get_dpio_dev_from_id(int32_t dpio_id)
 
 	/* Get DPIO dev handle from list using index */
 	TAILQ_FOREACH(dpio_dev, &dpio_dev_list, next) {
+		if (dpio_dev->hw_id == dpio_id)
+			break;
+	}
+
+	/* may be looking for Privileged DPIO */
+	TAILQ_FOREACH(dpio_dev, &priv_dpio_dev_list, next) {
 		if (dpio_dev->hw_id == dpio_id)
 			break;
 	}
@@ -305,6 +314,50 @@ static void dpaa2_put_qbman_swp(struct dpaa2_dpio_dev *dpio_dev)
 	}
 }
 
+struct qbman_swp *dpaa2_get_priv_qbman_swp(void)
+{
+	struct dpaa2_dpio_dev *dpio_dev = NULL;
+	int cpu_id;
+	int ret;
+
+	/* Get DPIO dev handle from list using index */
+	TAILQ_FOREACH(dpio_dev, &priv_dpio_dev_list, next) {
+		if (dpio_dev && rte_atomic16_test_and_set(&dpio_dev->ref_count))
+			break;
+	}
+	if (!dpio_dev) {
+		DPAA2_BUS_ERR("No software portal resource left");
+		return NULL;
+	}
+
+	DPAA2_BUS_DEBUG("New Privileged Portal %p (%d) affined thread - %lu",
+			dpio_dev, dpio_dev->index, syscall(SYS_gettid));
+
+	/* Set the Stashing Destination */
+	cpu_id = dpaa2_get_core_id();
+	if (cpu_id < 0) {
+		DPAA2_BUS_WARN("Thread not affined to a single core");
+		if (dpaa2_svr_family != SVR_LX2160A)
+			qbman_swp_update(dpio_dev->sw_portal, 1);
+	} else {
+		ret = dpaa2_configure_stashing(dpio_dev, cpu_id);
+		if (ret) {
+			DPAA2_BUS_ERR("dpaa2_configure_stashing failed");
+			rte_atomic16_clear(&dpio_dev->ref_count);
+			return NULL;
+		}
+	}
+
+	ret = pthread_setspecific(dpaa2_portal_key, (void *)dpio_dev);
+	if (ret) {
+		DPAA2_BUS_ERR("pthread_setspecific failed with ret: %d", ret);
+		dpaa2_put_qbman_swp(dpio_dev);
+		return NULL;
+	}
+
+	return dpio_dev->sw_portal;
+}
+
 static struct dpaa2_dpio_dev *dpaa2_get_qbman_swp(void)
 {
 	struct dpaa2_dpio_dev *dpio_dev = NULL;
@@ -418,7 +471,10 @@ dpaa2_close_dpio_device(int object_id)
 				   dpio_dev->token);
 			rte_free(dpio_dev->dpio);
 		}
-		TAILQ_REMOVE(&dpio_dev_list, dpio_dev, next);
+		if (dpio_dev->privileged == 1)
+			TAILQ_REMOVE(&priv_dpio_dev_list, dpio_dev, next);
+		else
+			TAILQ_REMOVE(&dpio_dev_list, dpio_dev, next);
 		rte_free(dpio_dev);
 	}
 }
@@ -572,7 +628,11 @@ dpaa2_create_dpio_device(int vdev_fd,
 				MAX_EQ_RESP_ENTRIES);
 
 
-	TAILQ_INSERT_TAIL(&dpio_dev_list, dpio_dev, next);
+	if (DPIO_OPT_PRIVILEGED == attr.options) {
+		dpio_dev->privileged = 1;
+		TAILQ_INSERT_TAIL(&priv_dpio_dev_list, dpio_dev, next);
+	} else
+		TAILQ_INSERT_TAIL(&dpio_dev_list, dpio_dev, next);
 
 	if (!dpaa2_portal_key) {
 		/* create the key, supplying a function that'll be invoked
@@ -616,8 +676,20 @@ err:
 		rte_free(dpio_dev);
 	}
 
+	TAILQ_FOREACH(dpio_dev, &priv_dpio_dev_list, next) {
+		if (dpio_dev->dpio) {
+			dpio_disable(dpio_dev->dpio, CMD_PRI_LOW,
+				dpio_dev->token);
+			dpio_close(dpio_dev->dpio, CMD_PRI_LOW,
+				dpio_dev->token);
+			rte_free(dpio_dev->dpio);
+		}
+		rte_free(dpio_dev);
+	}
+
 	/* Preventing re-use of the list with old entries */
 	TAILQ_INIT(&dpio_dev_list);
+	TAILQ_INIT(&priv_dpio_dev_list);
 
 	return -1;
 }

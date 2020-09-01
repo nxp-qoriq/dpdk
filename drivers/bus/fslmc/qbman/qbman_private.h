@@ -212,8 +212,8 @@ extern uint32_t qman_version;
 #define TP_CONFIG_PORTAL_HALT_DISABLED 0x00000010
 #define TP_CONFIG_PORTAL_HALT_ENABLED 0x00000020
 
-
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 static uint8_t parse_tp_config(uint32_t tp_config_flag)
 {
 	uint8_t tp_config = 0;
@@ -235,5 +235,5 @@ static uint8_t parse_tp_config(uint32_t tp_config_flag)
 		tp_config |= e32_uint8_t(2, 1, 1);
 	return tp_config;
 }
-
 #include "qbman_sys.h"
+#pragma GCC diagnostic pop

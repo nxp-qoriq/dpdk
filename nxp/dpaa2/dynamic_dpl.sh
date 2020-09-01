@@ -858,9 +858,13 @@ then
 	done;
 
 	#/* DPIO objects creation*/
+	## Create 1 privilaged portal for CEETM (QoS) support
+	DPIO=$(restool -s dpio create --options=DPIO_OPT_PRIVILEGED --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)
+	echo "PRIVILEGED " $DPIO "Created" >> dynamic_dpl_logs
+	obj_assign $DPIO
 	for i in $(seq 1 ${DPIO_COUNT}); do
 		## Create all as privilaged portal for CEETM (QoS) support
-		DPIO=$(restool -s dpio create --options=DPIO_OPT_PRIVILEGED --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)
+		DPIO=$(restool -s dpio create --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)
 		echo $DPIO "Created" >> dynamic_dpl_logs
 		obj_assign $DPIO
 	done;
