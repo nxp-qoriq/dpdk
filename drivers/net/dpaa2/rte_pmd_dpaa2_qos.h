@@ -38,9 +38,9 @@ struct dpaa2_sch_params {
  * Shaper (rate limiter) parameters
  */
 struct dpaa2_shaper_params {
-	uint32_t c_rate;	/* Commited Rate in Mbps */
+	float	 c_rate;	/* Commited Rate in Mbps */
 	uint32_t c_bs;		/* Token Bucket size for Commited Rate in Kbps */
-	uint32_t e_rate;	/* Excess Rate in Mbps */
+	float	 e_rate;	/* Excess Rate in Mbps */
 	uint32_t e_bs;		/* Token Bucket size for Excess Rate in Kbps */
 	uint32_t mps;		/* Minimum packet size; 0: Disable */
 	uint32_t oal;		/* Overhead accounting length, requires for shaper adjusment */

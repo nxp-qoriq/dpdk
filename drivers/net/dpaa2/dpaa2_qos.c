@@ -174,7 +174,7 @@ void mc_test(void)
 	l2_schidx = dpaa2_add_L2_sch(portid);
 
 	memset(&sh_param, 0, sizeof(struct dpaa2_shaper_params));
-	sh_param.c_rate = 20;
+	sh_param.c_rate = 25.8;
 	sh_param.c_bs = 0;
 	sh_param.oal = 24;
 	dpaa2_cfg_L2_shaper(portid, &sh_param);
@@ -256,17 +256,17 @@ int32_t dpaa2_cfg_L2_shaper(uint16_t portid,
 		return -EINVAL;
 
 	qbman_shaper_attr_clear(&attr);
-	bps = (uint64_t)sh_param->c_rate * 1000000;
+	bps = (uint64_t)(sh_param->c_rate * 1000000.0);
 	qbman_shaper_set_commit_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->c_bs * 1000, bps);
 	qbman_shaper_set_crtbl(&attr, burst_size);
 	printf("%s: PortId %d - cr %ld cbs %d\n", __func__,
 					portid, bps, burst_size);
-	bps = (uint64_t)sh_param->e_rate * 1000000;
+	bps = (uint64_t)(sh_param->e_rate * 1000000.0);
 	qbman_shaper_set_excess_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->e_bs * 1000, bps);
 	qbman_shaper_set_ertbl(&attr, burst_size);
-	DPAA2_PMD_INFO("%s: er %dMbps ebs %dKbps\n", __func__,
+	DPAA2_PMD_INFO("%s: er %fMbps ebs %dKbps\n", __func__,
 					sh_param->e_rate, sh_param->e_bs);
 	qbman_shaper_set_coupling(&attr, sh_param->cpl);
 	qbman_shaper_set_lni_mps(&attr, sh_param->mps);
@@ -384,13 +384,13 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
 		return -EINVAL;
 
 	qbman_shaper_attr_clear(&attr);
-	bps = (uint64_t)sh_param->c_rate * 1000000;
+	bps = (uint64_t)(sh_param->c_rate * 1000000.0);
 	qbman_shaper_set_commit_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->c_bs * 1000, bps);
 	qbman_shaper_set_crtbl(&attr, burst_size);
 	printf("%s: PortId %d - cr %ld cbs %d\n", __func__,
 					portid, bps, burst_size);
-	bps = (uint64_t)sh_param->e_rate * 1000000;
+	bps = (uint64_t)(sh_param->e_rate * 1000000.0);
 	qbman_shaper_set_excess_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->e_bs * 1000, bps);
 	qbman_shaper_set_ertbl(&attr, burst_size);
