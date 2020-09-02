@@ -41,6 +41,9 @@
 #define MAX_CH_PER_CEETM	2	/*  For PHASE-1 */
 #define MAX_LFQ_PER_CH		1	/* Will be 16 later on */
 
+
+#define DRV_UT		0
+
 struct class_sch {
 	uint32_t cs_lfqid_base;
 	uint32_t cq_count;
@@ -95,8 +98,9 @@ struct dpaa2_dev_priv *dpaa2_get_dev_priv(uint16_t port_id)
 	data = eth_dev->data;
 	return data->dev_private;
 }
-
-//void mc_test(void);
+#if DRV_UT
+void mc_test(void);
+#endif
 int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid);
 
 int32_t dpaa2_qos_init(void)
@@ -111,7 +115,9 @@ int32_t dpaa2_qos_init(void)
 	DPAA2_PMD_INFO("%s: Privileged Portal is avialble\n", __func__);
 
 	/* Test with MC resources */
-//	mc_test();
+#if DRV_UT
+	mc_test();
+#endif
 	return 0;
 }
 
@@ -149,7 +155,7 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 	return 0;
 }
 
-#if 0
+#if DRV_UT
 void mc_test(void)
 {
 	/* Applying on port-2/ DPNI.3 */
@@ -158,12 +164,12 @@ void mc_test(void)
 	handle_t cq_handle[1], l1_sch_handle;
 	struct dpaa2_shaper_params sh_param;
 	struct dpaa2_sch_params sch_param;
-	struct dpaa2_dev_priv *priv;
+//	struct dpaa2_dev_priv *priv;
 
-	priv = dpaa2_get_dev_priv(portid);
+//	priv = dpaa2_get_dev_priv(portid);
 	/* TODO Set temporary till MC FLIB is not functional */
-	priv->ceetm_id = 16;
-	priv->lni = 4;
+	//priv->ceetm_id = 16;
+	//priv->lni = 4;
 
 	l2_schidx = dpaa2_add_L2_sch(portid);
 
@@ -283,7 +289,6 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	uint8_t instid;
 	struct class_sch *cs;
 	uint32_t cur_idx, i;
-	struct dpaa2_queue *dpaa2_q;
 	int err;
 
 	/* Get the device data to fetch CEETM, LNI index etc. from the given port
@@ -311,6 +316,10 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	}
 	cur_idx = ceetm[instid].cs_inuse;
 	cs = &(ceetm[instid].cs[cur_idx]);
+	if (cs->cq_inuse + sch_param->num_L1_queues > 8) {
+		printf("%s: Not enough CQs left\n", __func__);
+		return -EINVAL;
+	}
 
 	printf("%s: ceetm %d lin %d chid %d shaped %d \n", __func__,
 		priv->ceetm_id, priv->lni, cs->chid, sch_param->shaped);
@@ -348,13 +357,13 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	}
 
 	for (i = 0; i < sch_param->num_L1_queues; i++) {
-		/* Update existing Tx queue fqid */
-		dpaa2_q = (struct dpaa2_queue *)priv->tx_vq[i];
-		dpaa2_q->fqid = cs->cq[i].vrid;
-		/* TODO optional for now, may not need it */
+		/* Update  Tx queue handles */
 		sch_param->q_handle[i] = cs->cq[i].vrid;
-		printf("%s: Updated Tc[%d] fqid = %d\n", __func__, i, dpaa2_q->fqid);
+		printf("%s: Updated Tc[%d] fqid = %d\n", __func__, i, sch_param->q_handle[i]);
 	}
+	cs->cq_inuse += sch_param->num_L1_queues;
+	ceetm[instid].cs_inuse++;
+
 	return cs->chid;
 }
 
@@ -411,12 +420,194 @@ int8_t dpaa2_cfg_taildrop_profile(uint8_t  td_mode,
 
 }
 
+#define DPAA2_MBUF_TO_CONTIG_FD(_mbuf, _fd, _bpid)  do { \
+	DPAA2_SET_FD_ADDR(_fd, DPAA2_MBUF_VADDR_TO_IOVA(_mbuf)); \
+	DPAA2_SET_FD_LEN(_fd, _mbuf->data_len); \
+	DPAA2_SET_ONLY_FD_BPID(_fd, _bpid); \
+	DPAA2_SET_FD_OFFSET(_fd, _mbuf->data_off); \
+	DPAA2_SET_FD_FRC(_fd, 0);		\
+	DPAA2_RESET_FD_CTRL(_fd);		\
+	DPAA2_RESET_FD_FLC(_fd);		\
+} while (0)
+
+extern void
+eth_mbuf_to_fd(struct rte_mbuf *mbuf,
+	       struct qbman_fd *fd, uint16_t bpid) __attribute__((unused));
+
 uint16_t dpaa2_dev_qos_tx(uint16_t portid,
 			uint16_t q_handle,
 			struct rte_mbuf **bufs,
 			uint16_t nb_pkts)
 {
-	return 0;
+	/* Function to transmit the frames to given device and VQ*/
+	uint32_t loop, retry_count;
+	int32_t ret;
+	struct qbman_fd fd_arr[MAX_TX_RING_SLOTS];
+	struct rte_mbuf *mi;
+	uint32_t frames_to_send;
+	struct rte_mempool *mp;
+	struct qbman_eq_desc eqdesc;
+	struct qbman_swp *swp;
+	uint16_t num_tx = 0;
+	uint16_t bpid;
+	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
+	struct rte_eth_dev_data *eth_data = eth_dev->data;
+	struct dpaa2_dev_priv *priv = eth_data->dev_private;
+	uint32_t flags[MAX_TX_RING_SLOTS] = {0};
+
+	DPAA2_PMD_DP_DEBUG("%s: sending traffic on dev %s port %d hw_id %d \n",
+			__func__, eth_data->name , eth_data->port_id, priv->hw_id);
+	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
+		ret = dpaa2_affine_qbman_swp();
+		if (ret) {
+			DPAA2_PMD_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
+			return 0;
+		}
+	}
+	swp = DPAA2_PER_LCORE_PORTAL;
+
+	DPAA2_PMD_DP_DEBUG("===> eth_data =%p, fqid =%d\n",
+			eth_data, q_handle);
+
+	/*Prepare enqueue descriptor*/
+	qbman_eq_desc_clear(&eqdesc);
+	qbman_eq_desc_set_no_orp(&eqdesc, DPAA2_EQ_RESP_ERR_FQ);
+	qbman_eq_desc_set_fq(&eqdesc, q_handle);
+
+	/*Clear the unused FD fields before sending*/
+	while (nb_pkts) {
+		/*Check if the queue is congested*/
+		retry_count = 0;
+#if 0
+		while (qbman_result_SCN_state(dpaa2_q->cscn)) {
+			retry_count++;
+			/* Retry for some time before giving up */
+			if (retry_count > CONG_RETRY_COUNT)
+				goto skip_tx;
+		}
+#endif
+		frames_to_send = (nb_pkts > dpaa2_eqcr_size) ?
+			dpaa2_eqcr_size : nb_pkts;
+
+		for (loop = 0; loop < frames_to_send; loop++) {
+			if ((*bufs)->seqn) {
+				uint8_t dqrr_index = (*bufs)->seqn - 1;
+
+				flags[loop] = QBMAN_ENQUEUE_FLAG_DCA |
+						dqrr_index;
+				DPAA2_PER_LCORE_DQRR_SIZE--;
+				DPAA2_PER_LCORE_DQRR_HELD &= ~(1 << dqrr_index);
+				(*bufs)->seqn = DPAA2_INVALID_MBUF_SEQN;
+			}
+
+			if (likely(RTE_MBUF_DIRECT(*bufs))) {
+				mp = (*bufs)->pool;
+				/* Check the basic scenario and set
+				 * the FD appropriately here itself.
+				 */
+				if (likely(mp && mp->ops_index ==
+				    priv->bp_list->dpaa2_ops_index &&
+				    (*bufs)->nb_segs == 1 &&
+				    rte_mbuf_refcnt_read((*bufs)) == 1)) {
+					if (unlikely(((*bufs)->ol_flags
+						& PKT_TX_VLAN_PKT) ||
+						(eth_data->dev_conf.txmode.offloads
+						& DEV_TX_OFFLOAD_VLAN_INSERT))) {
+						ret = rte_vlan_insert(bufs);
+						if (ret)
+							goto send_n_return;
+					}
+					DPAA2_MBUF_TO_CONTIG_FD((*bufs),
+					&fd_arr[loop], mempool_to_bpid(mp));
+					bufs++;
+					continue;
+				}
+			} else {
+				mi = rte_mbuf_from_indirect(*bufs);
+				mp = mi->pool;
+			}
+			/* Not a hw_pkt pool allocated frame */
+			if (unlikely(!mp || !priv->bp_list)) {
+				DPAA2_PMD_ERR("Err: No buffer pool attached");
+				goto send_n_return;
+			}
+
+			if (unlikely(((*bufs)->ol_flags & PKT_TX_VLAN_PKT) ||
+				(eth_data->dev_conf.txmode.offloads
+				& DEV_TX_OFFLOAD_VLAN_INSERT))) {
+				int ret = rte_vlan_insert(bufs);
+				if (ret)
+					goto send_n_return;
+			}
+			if (mp->ops_index != priv->bp_list->dpaa2_ops_index) {
+				DPAA2_PMD_WARN("Non DPAA2 buffer pool not supported");
+				goto send_n_return;
+			} else {
+				bpid = mempool_to_bpid(mp);
+				if (unlikely((*bufs)->nb_segs > 1)) {
+					DPAA2_PMD_WARN("S/G not supported");
+					goto send_n_return;
+				} else {
+					eth_mbuf_to_fd(*bufs,
+						       &fd_arr[loop], bpid);
+				}
+			}
+#ifdef RTE_LIBRTE_IEEE1588
+			enable_tx_tstamp(&fd_arr[loop]);
+#endif
+			bufs++;
+		}
+
+		loop = 0;
+		retry_count = 0;
+		while (loop < frames_to_send) {
+			ret = qbman_swp_enqueue_multiple(swp, &eqdesc,
+					&fd_arr[loop], &flags[loop],
+					frames_to_send - loop);
+			if (unlikely(ret < 0)) {
+				retry_count++;
+				if (retry_count > DPAA2_MAX_TX_RETRY_COUNT) {
+					num_tx += loop;
+					nb_pkts -= loop;
+					goto send_n_return;
+				}
+			} else {
+				loop += ret;
+				retry_count = 0;
+			}
+		}
+
+		num_tx += loop;
+		nb_pkts -= loop;
+	}
+	return num_tx;
+
+send_n_return:
+	/* send any already prepared fd */
+	if (loop) {
+		unsigned int i = 0;
+
+		retry_count = 0;
+		while (i < loop) {
+			ret = qbman_swp_enqueue_multiple(swp, &eqdesc,
+							 &fd_arr[i],
+							 &flags[i],
+							 loop - i);
+			if (unlikely(ret < 0)) {
+				retry_count++;
+				if (retry_count > DPAA2_MAX_TX_RETRY_COUNT)
+					break;
+			} else {
+				i += ret;
+				retry_count = 0;
+			}
+		}
+		num_tx += i;
+	}
+//skip_tx:
+	return num_tx;
 }
 #pragma GCC diagnostic pop
 

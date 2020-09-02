@@ -458,11 +458,11 @@ eth_mbuf_to_sg_fd(struct rte_mbuf *mbuf,
 	return 0;
 }
 
-static void
+void
 eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd, uint16_t bpid) __attribute__((unused));
 
-static void __attribute__ ((noinline)) __attribute__((hot))
+void __attribute__ ((noinline)) __attribute__((hot))
 eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd, uint16_t bpid)
 {
