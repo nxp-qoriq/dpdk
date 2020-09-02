@@ -67,6 +67,16 @@ struct ceetm_res {
 /* Global Privileged portal */
 struct qbman_swp *p_swp;
 
+static inline uint8_t get_ceetm_instid(uint32_t ceetm_id)
+{
+	uint8_t dcpid, instanceid;
+
+	qbman_ceetmid_decompose(ceetm_id, &dcpid, &instanceid);
+
+	printf("%s: CEETM id %d instanceid %d\n", __func__, ceetm_id, instanceid);
+	return instanceid;
+}
+
 static inline
 struct dpaa2_dev_priv *dpaa2_get_dev_priv(uint16_t port_id)
 {
@@ -111,7 +121,9 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 	uint32_t cs_count =  ceetm[ceetmid].cs_count;
 	uint32_t cq_idx;
 
-	/* Initialize with resources created by MC */
+	ceetmid = get_ceetm_instid((uint32_t)ceetmid);
+
+	/* TODO Initialize with resources created by MC */
 	ceetm[ceetmid].lfqid_base = 15745088;
 	ceetm[ceetmid].lfq_vrid_base = 414;
 	ceetm[ceetmid].cqid_base = 16;
@@ -263,16 +275,6 @@ int32_t dpaa2_cfg_L2_shaper(uint16_t portid,
 	return 0;
 }
 
-static inline uint8_t get_ceetm_intid(uint32_t ceetm_id)
-{
-	uint8_t dcpid, instanceid;
-
-	qbman_ceetmid_decompose(ceetm_id, &dcpid, &instanceid);
-
-	printf("%s: CEETM id %d instanceid %d\n", __func__, ceetm_id, instanceid);
-	return instanceid;
-}
-
 int32_t dpaa2_add_L1_sch(uint16_t portid,
 			struct dpaa2_sch_params *sch_param)
 {
@@ -302,7 +304,7 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	}
 
 	/* Get Next available cs/channel */
-	instid = get_ceetm_intid((uint32_t)priv->ceetm_id);
+	instid = get_ceetm_instid((uint32_t)priv->ceetm_id);
 	if (ceetm[instid].cs_inuse == ceetm[instid].cs_count) {
 		printf("%s: No more resources left\n", __func__);
 		return -EINVAL;

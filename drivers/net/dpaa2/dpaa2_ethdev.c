@@ -887,7 +887,7 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	dpaa2_q->fqid = qid.fqid;
 	/* printf("%s:  dpni[%d]  cqid %d fqid %d dctidx %d\n", __func__, priv->hw_id,
 						qid.real_cqid, qid.fqid, qid.dctidx); */
-	init_ceetm_res((priv->ceetm_id >> 4), qid.real_cqid, qid.fqid);
+	init_ceetm_res(priv->ceetm_id, qid.real_cqid, qid.fqid);
 
 	if (!(priv->flags & DPAA2_TX_CGR_OFF)) {
 		struct dpni_congestion_notification_cfg cong_notif_cfg = {0};
