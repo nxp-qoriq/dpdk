@@ -11,13 +11,21 @@
 
 #define INVALD_VAL		0xFF
 #define L1_MAX_QUEUES		8
+
 typedef int32_t handle_t;
+typedef int64_t qhandle_t;
 
 
 enum scheduler_mode {
 	SCHED_STRICT_PRIORITY = 0,
 	SCHED_WRR
 };
+
+enum td_unit {
+	CONGESTION_UNIT_BYTES = 0,
+	CONGESTION_UNIT_FRAMES
+};
+
 /**
  * Schduler parameters
  */
@@ -25,13 +33,14 @@ struct dpaa2_sch_params {
 	uint8_t sch_mode;	/* PRIO or WRR */
 	uint8_t shaped;		/*  Whether Shaper is required */
 	uint8_t num_L1_queues;	/*  Number of required input queues */
-//	uint8_t sch_idx;	/* Scheduler index */
 	int32_t l2_sch_idx;	/* Index of target Level-2 scheduler
 				   instance to which this will associate. */
-	int32_t td_inst_id;	/* preconfigured Tail-Drop instance */
+	uint32_t td_thresh[L1_MAX_QUEUES]; /* Tail-Drop threshold for each
+					     queue. 0 means disable */
+	enum td_unit td_mode[L1_MAX_QUEUES];	/* Byte or packet */
 	/* Pointer to array of queue handles for 'num_L1_queues' queues.
 	   This queue handles to be used while transmitting packets */
-	handle_t *q_handle;
+	qhandle_t *q_handle;
 };
 
 /**
@@ -147,31 +156,6 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
  * @warning
  * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
  *
- * Creates a instance of Tail-Drop congestion management.
- *
- * @param portid
- *    ID of the port in context.
- *
- * @param td_mode
- *    Byte or Packet mode.
- *
- * @param td_thres
- *    Threshold value for tail drop.
- *
- * @param oal
- *    Overhead accounting length for shaping.
- *
- * @return
- *    A valid instance index in case of success, Negative in case of failure.
- */
-int8_t dpaa2_cfg_taildrop_profile(uint8_t  td_mode,
-				uint32_t td_thres,
-				uint32_t oal);
-
-/**
- * @warning
- * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
- *
  * Packet trasmit function through DPAA2 QoS datapath.
  *
  * @param portid
@@ -190,7 +174,7 @@ int8_t dpaa2_cfg_taildrop_profile(uint8_t  td_mode,
  *   Number of packets transmitted successfully.
  */
 uint16_t dpaa2_dev_qos_tx(uint16_t portid,
-			uint16_t q_handle,
+			qhandle_t q_handle,
 			struct rte_mbuf **bufs,
 			uint16_t nb_pkts);
 

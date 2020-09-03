@@ -39,19 +39,21 @@
 
 #define MAX_LFQID_PER_CEETM	2
 #define MAX_CH_PER_CEETM	2	/*  For PHASE-1 */
-#define MAX_LFQ_PER_CH		1	/* Will be 16 later on */
 
 
 #define DRV_UT		0
 
+struct class_q {
+	uint32_t cqid;
+	uint32_t lfqid;
+	uint32_t vrid;
+	uint32_t ccgrid;
+};
+
 struct class_sch {
 	uint32_t cs_lfqid_base;
 	uint32_t cq_count;
-	struct {
-		uint32_t cqid;
-		uint32_t lfqid;
-		uint32_t vrid;
-	} cq[MAX_LFQ_PER_CH];
+	struct class_q  cq[L1_MAX_QUEUES];
 	uint32_t cq_inuse;
 	enum scheduler_mode mode;
 	uint8_t chid;
@@ -141,7 +143,9 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 	cq_idx = ceetm[ceetmid].cs[cs_count].cq_count;
 	ceetm[ceetmid].cs[cs_count].cq[cq_idx].lfqid = 0;
 	ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid = fqid;
-	ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cqid;
+	ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cqid & 0xF;
+	/* TODO MC configure CCGRID same as TC index */
+	ceetm[ceetmid].cs[cs_count].cq[cq_idx].ccgrid = cq_idx;
 
 	ceetm[ceetmid].cs[cs_count].cq_count++;
 	ceetm[ceetmid].cs_count++;
@@ -174,7 +178,7 @@ void mc_test(void)
 	l2_schidx = dpaa2_add_L2_sch(portid);
 
 	memset(&sh_param, 0, sizeof(struct dpaa2_shaper_params));
-	sh_param.c_rate = 25.8;
+	sh_param.c_rate = 6;
 	sh_param.c_bs = 0;
 	sh_param.oal = 24;
 	dpaa2_cfg_L2_shaper(portid, &sh_param);
@@ -183,38 +187,14 @@ void mc_test(void)
 	sch_param.l2_sch_idx = l2_schidx;
 	sch_param.shaped = 1;
 	sch_param.num_L1_queues = 1;
-	sch_param.q_handle = (handle_t *)&cq_handle;
+	sch_param.td_thresh[0] = 4;
+	sch_param.td_mode[0] = CONGESTION_UNIT_FRAMES;
+	sch_param.q_handle = (qhandle_t *)&cq_handle;
 	l1_sch_handle = dpaa2_add_L1_sch(portid, &sch_param);
 
 	sh_param.c_rate = 40; /* 20 Mbps */
 	dpaa2_cfg_L1_shaper(portid, l1_sch_handle, &sh_param);
 
-#if 0
-	/* CCGR */
-	int rej_cnt_mode, td_en;
-	uint32_t mode, td_thresh;
-	qbman_ccgr_query(p_swp, ceetmid, chid, ccgid, &attr);
-	qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
-	qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
-	qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-	printf("%s:ccgid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
-			__func__, ccgid, rej_cnt_mode, mode, td_en, td_thresh);
-	qbman_cgr_attr_set_mode(&attr, 1, 0);
-	qbman_cgr_attr_set_td_ctrl(&attr, 1);
-	qbman_cgr_attr_set_td_thres(&attr, 512);
-	err = qbman_ccgr_configure(p_swp, ceetmid, chid, ccgid, &attr);
-	if (err) {
-		printf("%s: qbman_cchannel_configure failed err %d\n",
-							__func__, err);
-		return;
-	}
-	qbman_ccgr_query(p_swp, ceetmid, chid, ccgid, &attr);
-	qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
-	qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
-	qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-	printf("%s:NEW : ccgid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
-			__func__, ccgid, rej_cnt_mode, mode, td_en, td_thresh);
-#endif
 }
 #endif
 
@@ -357,9 +337,48 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	}
 
 	for (i = 0; i < sch_param->num_L1_queues; i++) {
+		int rej_cnt_mode, td_en;
+		uint32_t mode, td_thresh;
+
 		/* Update  Tx queue handles */
-		sch_param->q_handle[i] = cs->cq[i].vrid;
-		printf("%s: Updated Tc[%d] fqid = %d\n", __func__, i, sch_param->q_handle[i]);
+		//sch_param->q_handle[i] = cs->cq[i].vrid;
+		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
+		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
+					i, sch_param->q_handle[i], cs->cq[i].vrid);
+		/* CCGR */
+		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
+						cs->cq[i].ccgrid, &attr);
+		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
+		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
+		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
+		printf("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+				__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
+		if (sch_param->td_thresh[i]) {
+			mode = sch_param->td_mode[i];
+			td_thresh = sch_param->td_thresh[i];
+			td_en = 1;
+			rej_cnt_mode = 1;
+		} else {
+			td_thresh = 0;
+			td_en = 0;
+		}
+		qbman_cgr_attr_set_mode(&attr, mode, rej_cnt_mode);
+		qbman_cgr_attr_set_td_ctrl(&attr, td_en);
+		qbman_cgr_attr_set_td_thres(&attr, td_thresh);
+		err = qbman_ccgr_configure(p_swp, priv->ceetm_id, cs->chid,
+							cs->cq[i].ccgrid, &attr);
+		if (err) {
+			printf("%s: qbman_cchannel_configure failed err %d\n",
+							__func__, err);
+			return -EINVAL;
+		}
+		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
+						cs->cq[i].ccgrid, &attr);
+		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
+		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
+		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
+		printf("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+			__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
 	}
 	cs->cq_inuse += sch_param->num_L1_queues;
 	ceetm[instid].cs_inuse++;
@@ -403,23 +422,6 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
 	return 0;
 }
 
-int8_t dpaa2_cfg_taildrop_profile(uint8_t  td_mode,
-				uint32_t td_thres,
-				uint32_t oal)
-{
-	/* Get the CEETM, LNI index etc. from the given port and validate */
-	/* Will need to call following QBMan APIs */
-//	qbman_ccgr_attr_clear()
-//	qbman_cgr_attr_set_td_thres()
-//	qbman_cgr_attr_set_td_ctrl()
-//	qbman_cgr_attr_set_td_ctrl()
-//	qbman_cgr_attr_set_mode()
-//	qbman_ccgr_attr_set_oal()
-//	qbman_ccgr_configure()
-	return 0;
-
-}
-
 #define DPAA2_MBUF_TO_CONTIG_FD(_mbuf, _fd, _bpid)  do { \
 	DPAA2_SET_FD_ADDR(_fd, DPAA2_MBUF_VADDR_TO_IOVA(_mbuf)); \
 	DPAA2_SET_FD_LEN(_fd, _mbuf->data_len); \
@@ -435,7 +437,7 @@ eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd, uint16_t bpid) __attribute__((unused));
 
 uint16_t dpaa2_dev_qos_tx(uint16_t portid,
-			uint16_t q_handle,
+			qhandle_t q_handle,
 			struct rte_mbuf **bufs,
 			uint16_t nb_pkts)
 {
@@ -454,6 +456,7 @@ uint16_t dpaa2_dev_qos_tx(uint16_t portid,
 	struct rte_eth_dev_data *eth_data = eth_dev->data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	uint32_t flags[MAX_TX_RING_SLOTS] = {0};
+	struct class_q *cq = (struct class_q *)q_handle;
 
 	DPAA2_PMD_DP_DEBUG("%s: sending traffic on dev %s port %d hw_id %d \n",
 			__func__, eth_data->name , eth_data->port_id, priv->hw_id);
@@ -469,12 +472,14 @@ uint16_t dpaa2_dev_qos_tx(uint16_t portid,
 	swp = DPAA2_PER_LCORE_PORTAL;
 
 	DPAA2_PMD_DP_DEBUG("===> eth_data =%p, fqid =%d\n",
-			eth_data, q_handle);
+			eth_data, cq->vrid);
 
+	if (priv->flags & DPAA2_TX_CONF_ENABLE)
+		dpaa2_dev_tx_conf(priv->tx_conf_vq[cq->cqid]);
 	/*Prepare enqueue descriptor*/
 	qbman_eq_desc_clear(&eqdesc);
 	qbman_eq_desc_set_no_orp(&eqdesc, DPAA2_EQ_RESP_ERR_FQ);
-	qbman_eq_desc_set_fq(&eqdesc, q_handle);
+	qbman_eq_desc_set_fq(&eqdesc, cq->vrid);
 
 	/*Clear the unused FD fields before sending*/
 	while (nb_pkts) {
@@ -554,9 +559,6 @@ uint16_t dpaa2_dev_qos_tx(uint16_t portid,
 						       &fd_arr[loop], bpid);
 				}
 			}
-#ifdef RTE_LIBRTE_IEEE1588
-			enable_tx_tstamp(&fd_arr[loop]);
-#endif
 			bufs++;
 		}
 
