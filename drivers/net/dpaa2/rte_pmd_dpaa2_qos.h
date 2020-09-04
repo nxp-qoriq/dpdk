@@ -158,9 +158,6 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
  *
  * Packet trasmit function through DPAA2 QoS datapath.
  *
- * @param portid
- *    ID of the port in context.
- *
  * @param q_handle
  *    The respective queue handle that belongs to a queue with index [0-7].
  *
@@ -173,9 +170,24 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
  * @return
  *   Number of packets transmitted successfully.
  */
-uint16_t dpaa2_dev_qos_tx(uint16_t portid,
-			qhandle_t q_handle,
+uint16_t dpaa2_dev_qos_tx(qhandle_t q_handle,
 			struct rte_mbuf **bufs,
 			uint16_t nb_pkts);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
+ *
+ * Move a Level-1 Scheduler instance to new port/L2-instance.
+ *
+ * @param sch_idx
+ *    Level-1 scheduler index.
+ *
+ * @param dst_portid
+ *    ID of the port in context.
+ *
+ * @return
+ *    0 in case of success, Negative in case of failure.
+ */
+int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
 #endif /* _DPAA2_QOS_H */

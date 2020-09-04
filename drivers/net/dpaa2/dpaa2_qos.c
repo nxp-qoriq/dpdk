@@ -48,6 +48,7 @@ struct class_q {
 	uint32_t lfqid;
 	uint32_t vrid;
 	uint32_t ccgrid;
+	uint16_t portid; /* Tx Port */
 };
 
 struct class_sch {
@@ -340,8 +341,8 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		int rej_cnt_mode, td_en;
 		uint32_t mode, td_thresh;
 
-		/* Update  Tx queue handles */
-		//sch_param->q_handle[i] = cs->cq[i].vrid;
+		/* Update  Tx port in Queue handle */
+		cs->cq[i].portid = portid;
 		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
 		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
 					i, sch_param->q_handle[i], cs->cq[i].vrid);
@@ -422,6 +423,30 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
 	return 0;
 }
 
+int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid)
+{
+	struct dpaa2_dev_priv *priv;
+	int err;
+
+	/* Get the device data to fetch CEETM, LNI index etc. from the given port
+	   and validate */
+	priv = dpaa2_get_dev_priv(dst_portid);
+	if (NULL == priv)
+		return -EINVAL;
+
+
+	err = qbman_cchannel_configure(p_swp, priv->ceetm_id,
+			l1_sch_handle, priv->lni, 1);
+	if (err) {
+		printf("%s: qbman_cchannel_configure failed err %d\n",
+							__func__, err);
+		return -EINVAL;
+	}
+	printf("%s: ceetm %d lni %d chid %d shaped %d \n", __func__,
+		priv->ceetm_id, priv->lni, l1_sch_handle, 1);
+	return 0;
+}
+
 #define DPAA2_MBUF_TO_CONTIG_FD(_mbuf, _fd, _bpid)  do { \
 	DPAA2_SET_FD_ADDR(_fd, DPAA2_MBUF_VADDR_TO_IOVA(_mbuf)); \
 	DPAA2_SET_FD_LEN(_fd, _mbuf->data_len); \
@@ -436,12 +461,13 @@ extern void
 eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd, uint16_t bpid) __attribute__((unused));
 
-uint16_t dpaa2_dev_qos_tx(uint16_t portid,
-			qhandle_t q_handle,
+uint16_t dpaa2_dev_qos_tx( qhandle_t q_handle,
 			struct rte_mbuf **bufs,
 			uint16_t nb_pkts)
 {
 	/* Function to transmit the frames to given device and VQ*/
+	struct class_q *cq = (struct class_q *)q_handle;
+	uint16_t portid = cq->portid;
 	uint32_t loop, retry_count;
 	int32_t ret;
 	struct qbman_fd fd_arr[MAX_TX_RING_SLOTS];
@@ -456,7 +482,6 @@ uint16_t dpaa2_dev_qos_tx(uint16_t portid,
 	struct rte_eth_dev_data *eth_data = eth_dev->data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	uint32_t flags[MAX_TX_RING_SLOTS] = {0};
-	struct class_q *cq = (struct class_q *)q_handle;
 
 	DPAA2_PMD_DP_DEBUG("%s: sending traffic on dev %s port %d hw_id %d \n",
 			__func__, eth_data->name , eth_data->port_id, priv->hw_id);
