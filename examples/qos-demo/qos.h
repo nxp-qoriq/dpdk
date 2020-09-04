@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2020 NXP
+ */
+
 #include <rte_pmd_dpaa2_qos.h>
 
 #define MAX_L1  32

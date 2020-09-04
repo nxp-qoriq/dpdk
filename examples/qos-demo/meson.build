@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2020 NXP
+# Copyright 2020 NXP
 
 # meson file, for building this example as part of a main DPDK build.
 #
