@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2020 NXP
+
+QOS DEMO Application
+
+Qos-demo is a DPDK sample application, using it user can test the 2-level scheduling and shaping feature of CEETM. It forwards traffic from one port to another port or on the same port in case only one port is given. Traffic distribution on TX side is based on the values of VLAN header present in the packet. Application chooses Level1 Scheduler based on VLAN ID and Class Queue based on priority field of VLAN header.
+
+
+PHASE 1 SUPPORT:
+
+* Only one Level2 and two Level1 schedulers can be configured
+* Only one Class queue per Level1 scheduler is supported, so it also means no scheduling (STRICT/ WRR) is supported within level1 schedulers.
+* User can configure only Shaper (CIR /EIR) on Level1 and Level2.
+
+
+DPDK Compilation:
+
+Please refer LSDK document for DPDK compilation.
+
+
+APPLICATION COMPILATION CMD:
+
+make -C examples/qos-demo/
+
+
+EXECUTION COMMANDS:
+
+. ./dynamic_dpl.sh dpmac.3 dpmac.4
+./qos-demo -c 0x3 -- -p 0x3 –f “./input.data” -T 0
+
+-c is coremask
+-p is port mask
+-f is input file name of QoS data
+
+QoS data file Description:
+
+Level 1 scheduler and Level 2 scheduler data will be identified by application using keywords "L1" and "L2" respectively. All the data (in keyword = value pairs) after any of these keywords will belong to the same Scheduler till next "L1", "L2" keyword or end of file. 
+To specify L1 scheduler data, first keyword must be "L1", similarly for L2 scheduler, first keyword must be "L2".
+Data should be given in “keyword=value” form, where value must be in the next line.
+
+######################### L1 Scheduler keywords description: ########################################################
+ID: Unique ID within Level 1 schedulers, starting from 0.
+CIR: Committed information rate, in Mbps.
+CIR_SIZE: CIR burst size in Kbps.
+EIR: Excess information rate, in Mbps.
+EIR_SIZE: EIR burst size in Kbps.
+COUPLED: Use Commit and Excess rate shaper in coupled manner. 1 mean coupled and 0 mean non-coupled.
+L2_ID: ID of L2 scheduler to which it will be attached.
+
+
+############################ L2 Scheduler keywords description: #######################################################
+ID: Unique ID within Level 2 schedulers, starting from 0
+CIR: Committed information rate, in Mbps.
+CIR_SIZE: CIR burst size in Kbps.
+EIR: Excess information rate, in Mbps.
+EIR_SIZE: EIR burst size in Kbps.
+COUPLED: Use Commit and Excess rate shaper in coupled manner (1 or 0)
+PORT_IDX: port index (refer -p option of command line)
+
+########################### Congestion management #################################################################
+TAILDROP_TH: Tail-drop threshold value in number of packets. Tail-Drop will be applicable on each CQ configured in the system. 
+
