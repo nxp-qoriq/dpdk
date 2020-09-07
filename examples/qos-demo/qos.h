@@ -19,9 +19,8 @@ struct sched_shaper_data {
 	qhandle_t channel_id; /* Internal and applicable for l1 */
 	unsigned int q_count; /* for l1 */
 	qhandle_t cq[L1_MAX_QUEUES];
-	union {
-		unsigned int l2_id, port_idx;
-	};
+	unsigned int l2_id;
+	unsigned int port_idx;
 };
 
 struct qos_data {
