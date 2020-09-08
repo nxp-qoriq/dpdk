@@ -128,7 +128,10 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 {
 
 	uint32_t cs_count =  ceetm[ceetmid].cs_count;
-	uint32_t cq_idx;
+	uint32_t cq_idx = 0, q_id = fqid, cq_id = cqid;
+
+	if (cqid != 0 && cqid != 16)
+		return 0;
 
 	ceetmid = get_ceetm_instid((uint32_t)ceetmid);
 
@@ -139,22 +142,27 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 	ceetm[ceetmid].chid_base = 1;
 	ceetm[ceetmid].cs[cs_count].mode = SCHED_STRICT_PRIORITY;
 	ceetm[ceetmid].cs[cs_count].cs_lfqid_base = 0; /* TODO */
-	ceetm[ceetmid].cs[cs_count].chid = cqid >> 4;
+	ceetm[ceetmid].cs[cs_count].chid = cq_id >> 4;
 
 	cq_idx = ceetm[ceetmid].cs[cs_count].cq_count;
-	ceetm[ceetmid].cs[cs_count].cq[cq_idx].lfqid = 0;
-	ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid = fqid;
-	ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cqid & 0xF;
-	/* TODO MC configure CCGRID same as TC index */
-	ceetm[ceetmid].cs[cs_count].cq[cq_idx].ccgrid = cq_idx;
-
-	ceetm[ceetmid].cs[cs_count].cq_count++;
-	ceetm[ceetmid].cs_count++;
-
-	printf("%s:ceetm_inst[%d]  fqid %d cqid %d chid %u\n", __func__,
+	for (int i = 0; i < L1_MAX_QUEUES; i++) {
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].lfqid = 0;
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid = q_id;
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cq_id & 0xF;
+		/* TODO MC configure CCGRID same as TC index */
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].ccgrid = cq_idx;
+		printf("%s:ceetm_inst[%d]  fqid %d cqid %d chid %u\n", __func__,
 			ceetmid, ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid,
 			ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid,
 			ceetm[ceetmid].cs[cs_count].chid);
+
+		q_id++;
+		cq_id++;
+		cq_idx++;
+	}
+	ceetm[ceetmid].cs_count++;
+	ceetm[ceetmid].cs[cs_count].cq_count = cq_idx;
+
 	printf("%s:cs_count = %d  cq_count = %d\n", __func__,
 		ceetm[ceetmid].cs_count, ceetm[ceetmid].cs[cs_count].cq_count);
 	return 0;
@@ -278,11 +286,6 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	if (NULL == priv)
 		return -EINVAL;
 
-	/* WRR TODO */
-	if (sch_param->sch_mode != SCHED_STRICT_PRIORITY) {
-		DPAA2_PMD_ERR("%s: Only PRIO mode is supported\n", __func__);
-		return -EINVAL;
-	}
 	if (priv->lni != sch_param->l2_sch_idx) {
 		DPAA2_PMD_ERR("%s: l2_sch_idx %d is not associated with port %d\n",
 				__func__, sch_param->l2_sch_idx, portid);
@@ -323,7 +326,17 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		qbman_cscheduler_set_crem_cq(&attr, i, sch_param->shaped ? 1 : 0);
 		qbman_cscheduler_set_erem_cq(&attr, i, sch_param->shaped ? 1 : 0);
 	}
-	/* WRR TODO */
+
+#if 0
+	if (sch_param->sch_mode == SCHED_WRR) {
+		/* enable all queues for WRR */
+		qbman_cscheduler_set_csms(&attr, 1);
+
+		for (i = 0; i < sch_param->num_L1_queues; i++) {
+			qbman_cscheduler_set_cq_weight(&attr, i, sch_param->weight[i], 1);
+		}
+	}
+#endif
 	/* 1 means the groups A and B are combined */
 	qbman_cscheduler_set_group_b(&attr, 1);
 	/* Set the priority of group A 0-7*/

@@ -83,10 +83,6 @@ struct lcore_queue_conf {
 } __rte_cache_aligned;
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
-#if OLD_CODE
-static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
-#endif
-
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
@@ -242,6 +238,7 @@ l2fwd_simple_forward(struct rte_mbuf *m,
 	if (mac_updating)
 		l2fwd_mac_updating(m, dst_port);
 
+	//printf("vlan = %d, priority =%d, CQ id = %ld\n", vlan_id, priority, c_data->cq[priority]);
 	ret = dpaa2_dev_qos_tx(c_data->cq[priority], &m, 1);
 	if (ret == 0) {
 		printf("packet drop\n");
@@ -599,7 +596,13 @@ main(int argc, char **argv)
 
 	printf("\n######### Level 1 Scheduler data #########\n");
 	for (int k = 0; k < q_data.l1_count; k++) {
-		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, q_data.l1[k].l2_id);
+		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, mode = %s, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, (q_data.l1[k].mode == SCHED_WRR) ? "WRR" : "STRICT", q_data.l1[k].l2_id);
+		if (q_data.l1[k].mode == SCHED_WRR) {
+			for (unsigned int j = 0; j < q_data.l1[k].q_count; j++)
+				printf("CQ%d has weight = %d\n", j, q_data.l1[k].weight[j]);
+
+			printf("\n");
+		}
 	}
 
 	printf("\n\n");
@@ -716,7 +719,7 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
-		ret = rte_eth_dev_configure(portid, 1, 1, &local_port_conf);
+		ret = rte_eth_dev_configure(portid, 1, L1_MAX_QUEUES, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, portid);
@@ -752,30 +755,14 @@ main(int argc, char **argv)
 #if OLD_CODE
 		txq_conf = dev_info.default_txconf;
 		txq_conf.offloads = local_port_conf.txmode.offloads;
-		ret = rte_eth_tx_queue_setup(portid, 0, nb_txd,
-				rte_eth_dev_socket_id(portid),
-				&txq_conf);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
-				ret, portid);
-
-		/* Initialize TX buffers */
-		tx_buffer[portid] = rte_zmalloc_socket("tx_buffer",
-				RTE_ETH_TX_BUFFER_SIZE(MAX_PKT_BURST), 0,
-				rte_eth_dev_socket_id(portid));
-		if (tx_buffer[portid] == NULL)
-			rte_exit(EXIT_FAILURE, "Cannot allocate buffer for tx on port %u\n",
-					portid);
-
-		rte_eth_tx_buffer_init(tx_buffer[portid], MAX_PKT_BURST);
-
-		ret = rte_eth_tx_buffer_set_err_callback(tx_buffer[portid],
-				rte_eth_tx_buffer_count_callback,
-				&port_statistics[portid].dropped);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-			"Cannot set error callback for tx buffer on port %u\n",
-				 portid);
+		for (int i = 0; i < L1_MAX_QUEUES; i++) {
+			ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
+					rte_eth_dev_socket_id(portid),
+					&txq_conf);
+			if (ret < 0)
+				rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
+					ret, portid);
+		}
 
 #endif
 		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
@@ -867,8 +854,7 @@ main(int argc, char **argv)
 		if (l2_q_data == NULL)
 			rte_exit(EXIT_FAILURE, "L2_ID not exists, please check L1 configuration\n");
 
-		sch_param.sch_mode = 0;
-		//sch_param.sch_idx = q_data.l1[k].id;
+		sch_param.sch_mode = q_data.l1[k].mode;
 		sch_param.l2_sch_idx = l2_q_data->lni_id;
 		sch_param.shaped = 1;
 		sch_param.num_L1_queues = q_data.l1[k].q_count;
@@ -876,6 +862,8 @@ main(int argc, char **argv)
 		for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
 			sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
 			sch_param.td_thresh[ii] = q_data.taildrop_th;
+			if (q_data.l1[k].mode == SCHED_WRR)
+				sch_param.weight[ii] = q_data.l1[k].weight[ii];
 		}
 
 		q_data.l1[k].channel_id = dpaa2_add_L1_sch(l2_q_data->port_idx, &sch_param);
@@ -894,7 +882,7 @@ main(int argc, char **argv)
 	}
 
 
-	/* launch per-lcore init on every lcore */
+	/* launch per-lcore init on every lcore, except master */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, SKIP_MASTER);
 
 	rte_delay_us(100000);

@@ -80,6 +80,37 @@ parse_entry(struct qos_data *q, char *entry, struct sched_shaper_data *vector)
 	} else if (!strcmp(key_token, "PORT_IDX")) {
                 vector->port_idx = strtoul(token, &err, 0);
                 ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+	} else if (!strcmp(key_token, "CQ_COUNT")) {
+                vector->q_count = strtoul(token, &err, 0);
+		if (vector->q_count > L1_MAX_QUEUES) {
+			printf("WARN: Max queue supported per Level1 instance is %d\n", L1_MAX_QUEUES);
+			vector->q_count = L1_MAX_QUEUES;
+		}
+                ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+	} else if (!strcmp(key_token, "MODE")) {
+		if (!strcmp(token, "STRICT")) {
+			vector->mode = SCHED_STRICT_PRIORITY;
+		} else if (!strcmp(token, "WRR")) {
+			vector->mode = SCHED_WRR;
+		} else {
+			printf("Not able to parse mode, Assuming STRICT mode\n");
+			vector->mode = SCHED_STRICT_PRIORITY;
+		}
+	} else if (!strcmp(key_token, "WEIGHT")) {
+		char *w_token;
+		unsigned int ii = 0;
+
+		w_token = strtok(token, ",");
+		vector->weight[ii] = strtoul(w_token, &err, 0);
+		ii++;
+		for (;ii < vector->q_count; ii++) {
+			w_token = strtok(NULL, ",");
+			vector->weight[ii] = strtoul(w_token, &err, 0);
+			ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+			if (ret) {
+				printf("Error in reading weight\n");
+			}
+		}
 	} else if (!strcmp(key_token, "TAILDROP_TH")) {
                 q->taildrop_th = strtoul(token, &err, 0);
                 ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
@@ -147,8 +178,6 @@ qos_data_read(const char *filename,
 			goto exit;
 		}
 
-		/* FIXME: hardcodinng q_count */
-		data->q_count = 1;
                 if (entry[strlen(entry) - 1] == '=') {
                         if (getline(&line, &len, fp) != -1) {
                                 trim_space(line);

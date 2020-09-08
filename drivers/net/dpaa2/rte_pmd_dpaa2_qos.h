@@ -38,6 +38,7 @@ struct dpaa2_sch_params {
 	uint32_t td_thresh[L1_MAX_QUEUES]; /* Tail-Drop threshold for each
 					     queue. 0 means disable */
 	enum td_unit td_mode[L1_MAX_QUEUES];	/* Byte or packet */
+	uint32_t weight[L1_MAX_QUEUES]; /* Weight valid only if sch_mode is WRR */
 	/* Pointer to array of queue handles for 'num_L1_queues' queues.
 	   This queue handles to be used while transmitting packets */
 	qhandle_t *q_handle;
