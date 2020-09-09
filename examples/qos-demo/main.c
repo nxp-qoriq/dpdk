@@ -904,8 +904,12 @@ main(int argc, char **argv)
 
 		memset(cmd, 0, sizeof(cmd));
 		printf("==>");
-		fgets(cmd, sizeof(cmd), stdin);
-		printf("%s\n", cmd);
+		if (fgets(cmd, sizeof(cmd), stdin) != NULL) {
+			printf("%s\n", cmd);
+		} else {
+			printf("Unable to read command\n");
+			continue;
+		}
 		if (!strcmp(cmd, "q\n")) {
 			force_quit = true;
 		} else {
