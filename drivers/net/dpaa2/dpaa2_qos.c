@@ -68,7 +68,7 @@ struct ceetm_res {
 	uint32_t cs_count;
 	struct class_sch cs[MAX_CH_PER_CEETM];
 	uint32_t cs_inuse;
-} ceetm[2];
+} ceetm[2] = {0};
 
 /* Global Privileged portal */
 struct qbman_swp *p_swp;
