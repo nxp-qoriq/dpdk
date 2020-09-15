@@ -28,7 +28,7 @@
  */
 #define FOO() pr_info("FOO: %s:%d\n", __FILE__, __LINE__)
 
-#define word_copy memcpy
+#define word_copy(a,b,c) memcpy(a,b, (c)*4)
 
 #define BUG_ON(_cond)
 
