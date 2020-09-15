@@ -49,6 +49,7 @@ struct class_q {
 	uint32_t vrid;
 	uint32_t ccgrid;
 	uint16_t portid; /* Tx Port */
+	uint16_t conf_q_id;
 };
 
 struct class_sch {
@@ -104,7 +105,7 @@ struct dpaa2_dev_priv *dpaa2_get_dev_priv(uint16_t port_id)
 #if DRV_UT
 void mc_test(void);
 #endif
-int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid);
+int init_ceetm_res(uint16_t portid, uint16_t q_id);
 
 int32_t dpaa2_qos_init(void)
 {
@@ -124,13 +125,22 @@ int32_t dpaa2_qos_init(void)
 	return 0;
 }
 
-int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
+int init_ceetm_res(uint16_t portid, uint16_t conf_q_id)
 {
 
-	uint32_t cs_count =  ceetm[ceetmid].cs_count;
-	uint32_t cq_idx = 0, q_id = fqid, cq_id = cqid;
+	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
+        struct rte_eth_dev_data *eth_data = eth_dev->data;
+        struct dpaa2_dev_priv *priv = eth_data->dev_private;
+	struct dpaa2_queue *dpaa2_q = (struct dpaa2_queue *)
+                priv->tx_vq[conf_q_id];
+	uint32_t ceetmid, cs_count, cq_idx = 0, q_id, cq_id;
 
-	if ((cqid % 16) != 0)
+	ceetmid = priv->ceetm_id;
+	cq_id = dpaa2_q->real_cqid;
+	q_id = dpaa2_q->fqid;
+	cs_count =  ceetm[ceetmid].cs_count;
+
+	if ((cq_id % 16) != 0)
 		return 0;
 
 	ceetmid = get_ceetm_instid((uint32_t)ceetmid);
@@ -146,8 +156,10 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 
 	cq_idx = ceetm[ceetmid].cs[cs_count].cq_count;
 	for (int i = 0; i < L1_MAX_QUEUES; i++) {
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].conf_q_id = conf_q_id;
 		ceetm[ceetmid].cs[cs_count].cq[cq_idx].lfqid = 0;
 		ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid = q_id;
+		ceetm[ceetmid].cs[cs_count].cq[cq_idx].portid = portid;
 		ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cq_id & 0xF;
 		/* TODO MC configure CCGRID same as TC index */
 		ceetm[ceetmid].cs[cs_count].cq[cq_idx].ccgrid = cq_idx;
@@ -157,6 +169,7 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 			ceetm[ceetmid].cs[cs_count].chid);
 
 		q_id++;
+		conf_q_id++;
 		cq_id++;
 		cq_idx++;
 	}
@@ -360,8 +373,6 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		int rej_cnt_mode, td_en;
 		uint32_t mode, td_thresh;
 
-		/* Update  Tx port in Queue handle */
-		cs->cq[i].portid = portid;
 		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
 		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
 					i, sch_param->q_handle[i], cs->cq[i].vrid);
@@ -496,8 +507,10 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		int rej_cnt_mode, td_en;
 		uint32_t mode, td_thresh;
 
-		/* Update  Tx port in Queue handle */
-		cs->cq[i].portid = portid;
+		/* Update  Tx port in Queue handle 
+		 * FIXME: below changes are required for offloads,
+		 * and in case different mempool for each DPNI */
+		//cs->cq[i].portid = portid;
 		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
 		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
 					i, sch_param->q_handle[i], cs->cq[i].vrid);
@@ -637,6 +650,11 @@ uint16_t dpaa2_dev_qos_tx( qhandle_t q_handle,
 	struct rte_eth_dev_data *eth_data = eth_dev->data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	uint32_t flags[MAX_TX_RING_SLOTS] = {0};
+
+
+	struct dpaa2_queue *dpaa2_q = eth_data->tx_queues[cq->conf_q_id];
+	priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
+	dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
 
 	DPAA2_PMD_DP_DEBUG("%s: sending traffic on dev %s port %d hw_id %d \n",
 			__func__, eth_data->name , eth_data->port_id, priv->hw_id);

@@ -243,6 +243,7 @@ l2fwd_simple_forward(struct rte_mbuf *m,
 		l2fwd_mac_updating(m, dst_port);
 
 	//printf("vlan = %d, priority =%d, CQ id = %ld\n", vlan_id, priority, c_data->cq[priority]);
+
 	ret = dpaa2_dev_qos_tx(c_data->cq[priority], &m, 1);
 	if (ret == 0) {
 		printf("packet drop\n");
@@ -766,6 +767,8 @@ main(int argc, char **argv)
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
 					ret, portid);
+
+			init_ceetm_res(portid, i);
 		}
 
 #endif

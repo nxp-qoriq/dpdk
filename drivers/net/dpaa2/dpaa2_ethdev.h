@@ -175,11 +175,11 @@ struct dpaa2_dev_priv {
 	uint64_t rx_timestamp;
 	/*stores timestamp of last received tx confirmation packet on dev*/
 	uint64_t tx_timestamp;
+#endif
 	/* stores pointer to next tx_conf queue that should be processed,
 	 * it corresponds to last packet transmitted
 	 */
 	struct dpaa2_queue *next_tx_conf_queue;
-#endif
 
 	struct rte_eth_dev *eth_dev; /**< Pointer back to holding ethdev */
 
