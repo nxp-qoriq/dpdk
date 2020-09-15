@@ -191,4 +191,8 @@ uint16_t dpaa2_dev_qos_tx(qhandle_t q_handle,
  *    0 in case of success, Negative in case of failure.
  */
 int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
+
+
+int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
+                        struct dpaa2_sch_params *sch_param);
 #endif /* _DPAA2_QOS_H */

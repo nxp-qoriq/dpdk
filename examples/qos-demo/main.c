@@ -117,7 +117,11 @@ cmd_help(void)
 {
 	printf("************** CMDline help **************\n\n");
 	printf("q			: Quit the application\n");
-	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n\n");
+	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n");
+	printf("sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and\n"
+						    "\t\t\t\tWRR to SP on Level1 dynamically.\n"
+						    "\t\t\t\te.g sched 0 STRICT\n"
+						    "\t\t\t\tsched 0 WRR 100,200,300\n\n");
 }
 
 static void
@@ -887,6 +891,7 @@ main(int argc, char **argv)
 
 	rte_delay_us(100000);
 	/* Command prompt */
+	printf("******* CMDline prompt: *******\n");
 	while (!force_quit) {
 		char cmd[100];
 
@@ -909,59 +914,162 @@ main(int argc, char **argv)
 			 /* get key */
 			token = strtok(cmd, " ");
 			key_token = token;
-			if (strcmp(key_token, "move")) {
+			if (!strcmp(key_token, "move")) {
+				/* get values for key */
+				token = strtok(NULL, " ");
+				l1_id = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, "\n");
+				l2_id = strtoul(token, &err, 0);
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				for (int k = 0; k < q_data.l1_count; k++) {
+					if (q_data.l1[k].id == l1_id) {
+						l1_data =  &q_data.l1[k];
+						break;
+					}
+				}
+				if (l1_data == NULL) {
+					printf("%d L1 id is not present\n", l1_id);
+					cmd_help();
+					continue;
+				}
+				for (int k = 0; k < q_data.l2_count; k++) {
+					if (q_data.l2[k].id == l2_id) {
+						l2_data =  &q_data.l2[k];
+						break;
+					}
+				}
+				if (l2_data == NULL) {
+					printf("%d L2 id is not present\n", l2_id);
+					cmd_help();
+					continue;
+				}
+
+				ret = dpaa2_move_L1_sch(l1_data->channel_id,
+							l2_data->port_idx);
+				if (ret)
+					printf("failed to switch l1 instance\n");
+
+				l1_data->port_idx = l2_data->port_idx;
+				l1_data->l2_id = l2_id;
+				print_routes();
+			} else if (!strcmp(key_token, "sched")) {
+				int prio;
+				struct dpaa2_sch_params sch_param;
+
+				token = strtok(NULL, " ");
+				l1_id = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, " \n");
+				if (!strcmp(token, "STRICT")) {
+					prio = SCHED_STRICT_PRIORITY;
+				} else if (!strcmp(token, "WRR")) {
+					prio = SCHED_WRR;
+				} else {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				for (int k = 0; k < q_data.l1_count; k++) {
+					if (q_data.l1[k].id == l1_id) {
+						l1_data =  &q_data.l1[k];
+						break;
+					}
+				}
+				if (l1_data == NULL) {
+					printf("%d L1 id is not present\n", l1_id);
+					cmd_help();
+					continue;
+				}
+
+				printf("Current mode = %d, new mode = %d and queues = %d\n", l1_data->mode, prio, l1_data->q_count);
+				if (prio == SCHED_WRR) {
+					char *w_token;
+					unsigned int ii = 0;
+
+					token = strtok(NULL, "\n");
+					if (token == NULL) {
+						printf("Weight is not given %s\n", token);
+						cmd_help();
+						continue;
+					}
+					w_token = strtok(token, ",");
+					l1_data->weight[ii] = strtoul(w_token, &err, 0);
+					ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+					if (ret) {
+						printf("Not a valid argument %s\n", token);
+						cmd_help();
+						continue;
+					}
+					printf("weight = %d, for queue =%d\n", l1_data->weight[ii], ii); 
+					ii++;
+					for (;ii < l1_data->q_count; ii++) {
+						w_token = strtok(NULL, ",");
+						if (w_token == NULL) {
+							printf("Weight is not given for all queues, Queues: %d\n", l1_data->q_count);
+							cmd_help();
+							continue;
+						}
+
+						l1_data->weight[ii] = strtoul(w_token, &err, 0);
+					printf("weight = %d, for queue =%d\n", l1_data->weight[ii], ii); 
+						ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+						if (ret) {
+							printf("Error in reading weight\n");
+							continue;
+						}
+					}
+				}
+
+				for (int k = 0; k < q_data.l2_count; k++) {
+                                        if (q_data.l2[k].id == l1_data->l2_id) {
+                                                l2_data =  &q_data.l2[k];
+                                                break;
+                                        }
+                                }
+                                if (l2_data == NULL) {
+                                        printf("Unable to locate L2 data\n");
+                                        cmd_help();
+                                        continue;
+                                }
+
+				sch_param.sch_mode = prio;
+				sch_param.l2_sch_idx = l2_data->lni_id;
+				sch_param.shaped = 1;
+				sch_param.num_L1_queues = l1_data->q_count;
+				sch_param.q_handle = l1_data->cq;
+				for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
+					sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
+					sch_param.td_thresh[ii] = q_data.taildrop_th;
+					if (prio == SCHED_WRR)
+						sch_param.weight[ii] = l1_data->weight[ii];
+				}
+				l1_data->channel_id = dpaa2_reconf_L1_sch(l2_data->port_idx, l1_data->channel_id, &sch_param);
+				l1_data->mode = prio;
+				printf("done\n");
+			} else {
 				printf("not a valid command\n");
 				cmd_help();
 				continue;
 			}
-			/* get values for key */
-			token = strtok(NULL, " ");
-			l1_id = strtoul(token, &err, 0);
-			ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
-			if (ret) {
-				printf("Not a valid argument %s\n", token);
-				cmd_help();
-				continue;
-			}
-
-			token = strtok(NULL, "\n");
-			l2_id = strtoul(token, &err, 0);
-			if (ret) {
-				printf("Not a valid argument %s\n", token);
-				cmd_help();
-				continue;
-			}
-
-			for (int k = 0; k < q_data.l1_count; k++) {
-				if (q_data.l1[k].id == l1_id) {
-					l1_data =  &q_data.l1[k];
-					break;
-				}
-			}
-			if (l1_data == NULL) {
-				printf("%d L1 id is not present\n", l1_id);
-				cmd_help();
-				continue;
-			}
-			for (int k = 0; k < q_data.l2_count; k++) {
-				if (q_data.l2[k].id == l2_id) {
-					l2_data =  &q_data.l2[k];
-					break;
-				}
-			}
-			if (l2_data == NULL) {
-				printf("%d L2 id is not present\n", l2_id);
-				cmd_help();
-				continue;
-			}
-
-			ret = dpaa2_move_L1_sch(l1_data->channel_id,
-						l2_data->port_idx);
-			if (ret)
-				printf("failed to switch l1 instance\n");
-			l1_data->port_idx = l2_data->port_idx;
-			l1_data->l2_id = l2_id;
-			print_routes();
 		}
 	}
 

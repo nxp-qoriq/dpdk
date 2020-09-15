@@ -105,6 +105,11 @@ parse_entry(struct qos_data *q, char *entry, struct sched_shaper_data *vector)
 		ii++;
 		for (;ii < vector->q_count; ii++) {
 			w_token = strtok(NULL, ",");
+			if (w_token == NULL) {
+				printf("WARN: Weight is not given for queue: %d\n", ii);
+				vector->weight[ii] = 100;
+				continue;
+			}
 			vector->weight[ii] = strtoul(w_token, &err, 0);
 			ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
 			if (ret) {

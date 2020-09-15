@@ -38,7 +38,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #define MAX_LFQID_PER_CEETM	2
-#define MAX_CH_PER_CEETM	2	/*  For PHASE-1 */
+#define MAX_CH_PER_CEETM	32	/*  For PHASE-1 */
 
 
 #define DRV_UT		0
@@ -130,7 +130,7 @@ int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid)
 	uint32_t cs_count =  ceetm[ceetmid].cs_count;
 	uint32_t cq_idx = 0, q_id = fqid, cq_id = cqid;
 
-	if (cqid != 0 && cqid != 16)
+	if ((cqid % 16) != 0)
 		return 0;
 
 	ceetmid = get_ceetm_instid((uint32_t)ceetmid);
@@ -270,6 +270,143 @@ int32_t dpaa2_cfg_L2_shaper(uint16_t portid,
 	return 0;
 }
 
+int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
+			struct dpaa2_sch_params *sch_param)
+{
+	struct qbman_attr attr;
+	struct dpaa2_dev_priv *priv;
+	uint8_t instid;
+	struct class_sch *cs = NULL;
+	uint32_t  i;
+	int err, csms;
+
+	/* Get the device data to fetch CEETM, LNI index etc. from the given port
+	   and validate */
+	priv = dpaa2_get_dev_priv(portid);
+	if (NULL == priv)
+		return -EINVAL;
+
+	if (priv->lni != sch_param->l2_sch_idx) {
+		DPAA2_PMD_ERR("%s: l2_sch_idx %d is not associated with port %d\n",
+				__func__, sch_param->l2_sch_idx, portid);
+		return -EINVAL;
+	}
+
+	/* Get Next available cs/channel */
+	instid = get_ceetm_instid((uint32_t)priv->ceetm_id);
+	
+	for (unsigned int k = 0; k < ceetm[instid].cs_inuse; k++) {
+		if (channel_id == ceetm[instid].cs[k].chid)
+			cs = &(ceetm[instid].cs[k]);
+	}
+
+	if (cs == NULL) {
+		printf("%d channel id not exist\n", channel_id);
+		return -EINVAL;
+	}
+
+#if 0
+	printf("%s: ceetm %d lin %d chid %d shaped %d \n", __func__,
+		priv->ceetm_id, priv->lni, cs->chid, sch_param->shaped);
+	err = qbman_cchannel_configure(p_swp, priv->ceetm_id,
+			cs->chid, priv->lni, sch_param->shaped);
+	if (err) {
+		printf("%s: qbman_cchannel_configure failed err %d\n",
+							__func__, err);
+		return -EINVAL;
+	}
+#endif
+
+	/* Clear schedulaer attributes */
+	qbman_cscheduler_attr_clear(&attr);
+	/* fetch current scheduler configuration */
+	qbman_cscheduler_query(p_swp, priv->ceetm_id,
+			cs->chid, 1, &attr);
+	/* Configure scheduler */
+	for (i = 0; i < sch_param->num_L1_queues; i++) {
+		qbman_cscheduler_set_crem_cq(&attr, i, sch_param->shaped ? 1 : 0);
+		qbman_cscheduler_set_erem_cq(&attr, i, sch_param->shaped ? 1 : 0);
+	}
+
+	if (sch_param->sch_mode == SCHED_WRR) {
+		/* enable all queues for WRR */
+		qbman_cscheduler_set_csms(&attr, 1);
+		qbman_cscheduler_get_csms(&attr, &csms);
+		for (i = 0; i < sch_param->num_L1_queues; i++)
+			qbman_cscheduler_set_cq_weight(&attr, i, sch_param->weight[i], csms);
+
+		/* 1 means the groups A and B are combined */
+		qbman_cscheduler_set_group_b(&attr, 1);
+		/* Set the priority of group A 0-7*/
+		qbman_cscheduler_set_prio_a(&attr, 7);
+
+		qbman_cscheduler_set_crem_group_a(&attr, 1);
+		qbman_cscheduler_set_crem_group_b(&attr, 1);
+		qbman_cscheduler_set_erem_group_a(&attr, 1);
+		qbman_cscheduler_set_erem_group_b(&attr, 1);
+	} else {
+		qbman_cscheduler_set_csms(&attr, 0);
+	}
+
+	err = qbman_cscheduler_configure(p_swp, priv->ceetm_id,
+			cs->chid, &attr);
+	if (err) {
+		printf("%s: qbman_cscheduler_configure failed err %d\n",
+							__func__, err);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < sch_param->num_L1_queues; i++) {
+		int rej_cnt_mode, td_en;
+		uint32_t mode, td_thresh;
+
+		/* Update  Tx port in Queue handle */
+		cs->cq[i].portid = portid;
+		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
+		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
+					i, sch_param->q_handle[i], cs->cq[i].vrid);
+		/* CCGR */
+		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
+						cs->cq[i].ccgrid, &attr);
+		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
+		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
+		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
+		printf("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+				__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
+		if (sch_param->td_thresh[i]) {
+			mode = sch_param->td_mode[i];
+			td_thresh = sch_param->td_thresh[i];
+			td_en = 1;
+			rej_cnt_mode = 1;
+		} else {
+			td_thresh = 0;
+			td_en = 0;
+		}
+		qbman_cgr_attr_set_mode(&attr, mode, rej_cnt_mode);
+		qbman_cgr_attr_set_td_ctrl(&attr, td_en);
+		qbman_cgr_attr_set_td_thres(&attr, td_thresh);
+		err = qbman_ccgr_configure(p_swp, priv->ceetm_id, cs->chid,
+							cs->cq[i].ccgrid, &attr);
+		if (err) {
+			printf("%s: qbman_cchannel_configure failed err %d\n",
+							__func__, err);
+			return -EINVAL;
+		}
+		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
+						cs->cq[i].ccgrid, &attr);
+		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
+		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
+		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
+		printf("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+			__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
+	}
+
+	return cs->chid;
+}
+
+
+
+
 int32_t dpaa2_add_L1_sch(uint16_t portid,
 			struct dpaa2_sch_params *sch_param)
 {
@@ -278,7 +415,7 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	uint8_t instid;
 	struct class_sch *cs;
 	uint32_t cur_idx, i;
-	int err;
+	int err, csms;
 
 	/* Get the device data to fetch CEETM, LNI index etc. from the given port
 	   and validate */
@@ -321,26 +458,31 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	qbman_cscheduler_query(p_swp, priv->ceetm_id,
 			cs->chid, 1, &attr);
 	/* Configure scheduler */
-	//for (i = 0; i < sch_param->num_L1_queues; i++) {
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < sch_param->num_L1_queues; i++) {
 		qbman_cscheduler_set_crem_cq(&attr, i, sch_param->shaped ? 1 : 0);
 		qbman_cscheduler_set_erem_cq(&attr, i, sch_param->shaped ? 1 : 0);
 	}
 
-#if 0
 	if (sch_param->sch_mode == SCHED_WRR) {
 		/* enable all queues for WRR */
 		qbman_cscheduler_set_csms(&attr, 1);
+		qbman_cscheduler_get_csms(&attr, &csms);
 
-		for (i = 0; i < sch_param->num_L1_queues; i++) {
-			qbman_cscheduler_set_cq_weight(&attr, i, sch_param->weight[i], 1);
-		}
+		for (i = 0; i < sch_param->num_L1_queues; i++)
+			qbman_cscheduler_set_cq_weight(&attr, i, sch_param->weight[i], csms);
+
+		/* 1 means the groups A and B are combined */
+		qbman_cscheduler_set_group_b(&attr, 1);
+		/* Set the priority of group A 0-7*/
+		qbman_cscheduler_set_prio_a(&attr, 7);
+
+		qbman_cscheduler_set_crem_group_a(&attr, 1);
+		qbman_cscheduler_set_crem_group_b(&attr, 1);
+		qbman_cscheduler_set_erem_group_a(&attr, 1);
+		qbman_cscheduler_set_erem_group_b(&attr, 1);
+	} else {
+		qbman_cscheduler_set_csms(&attr, 0);
 	}
-#endif
-	/* 1 means the groups A and B are combined */
-	qbman_cscheduler_set_group_b(&attr, 1);
-	/* Set the priority of group A 0-7*/
-	qbman_cscheduler_set_prio_a(&attr, 7);
 
 	err = qbman_cscheduler_configure(p_swp, priv->ceetm_id,
 			cs->chid, &attr);
