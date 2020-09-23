@@ -354,6 +354,8 @@ int dpni_clear_irq_status(struct fsl_mc_io *mc_io,
  *			variants.
  * @lni: if connected to a DPMAC, the LNI associated with the port
  * @ceetm_id: if connected to a DPMAC, the CEETM associated with the port
+ * @ifpid: DPNI object's Interface Profile ID.
+ * @icid: Isolation Context ID, shared by all objects from the same root container.
  */
 struct dpni_attr {
 	uint32_t options;
@@ -370,6 +372,8 @@ struct dpni_attr {
 	uint8_t  num_cgs;
 	uint16_t  lni;
 	uint16_t  ceetm_id;
+	uint16_t  ifpid;
+	uint16_t  icid;
 };
 
 int dpni_get_attributes(struct fsl_mc_io *mc_io,

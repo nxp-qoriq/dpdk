@@ -9,7 +9,7 @@
 
 /* DPNI Version */
 #define DPNI_VER_MAJOR				7
-#define DPNI_VER_MINOR				17
+#define DPNI_VER_MINOR				18
 
 #define DPNI_CMD_BASE_VERSION			1
 #define DPNI_CMD_VERSION_2			2
@@ -33,7 +33,7 @@
 
 #define DPNI_CMDID_ENABLE			DPNI_CMD(0x002)
 #define DPNI_CMDID_DISABLE			DPNI_CMD(0x003)
-#define DPNI_CMDID_GET_ATTR			DPNI_CMD_V4(0x004)
+#define DPNI_CMDID_GET_ATTR			DPNI_CMD_V5(0x004)
 #define DPNI_CMDID_RESET			DPNI_CMD(0x005)
 #define DPNI_CMDID_IS_ENABLED			DPNI_CMD(0x006)
 
@@ -250,6 +250,8 @@ struct dpni_rsp_get_attr {
 	uint16_t lni;
 	/* response word 3 */
 	uint16_t ceetm_id;
+	uint16_t ifpid;
+	uint16_t icid;
 };
 
 #define DPNI_ERROR_ACTION_SHIFT		0

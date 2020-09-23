@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
- * Copyright 2019 NXP
+ * Copyright 2019-2020 NXP
  */
 #ifndef __FSL_DPRTC_H
 #define __FSL_DPRTC_H
@@ -92,6 +92,11 @@ int dprtc_set_clock_offset(struct fsl_mc_io *mc_io,
 			   uint32_t cmd_flags,
 			   uint16_t token,
 			   int64_t offset);
+
+int dprtc_get_clock_offset(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   int64_t *offset);
 
 int dprtc_set_freq_compensation(struct fsl_mc_io *mc_io,
 		  uint32_t cmd_flags,
