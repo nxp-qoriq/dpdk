@@ -117,6 +117,7 @@ cmd_help(void)
 {
 	printf("************** CMDline help **************\n\n");
 	printf("q			: Quit the application\n");
+	printf("qos			: Print all QoS data\n");
 	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n");
 	printf("sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and\n"
 						    "\t\t\t\tWRR to SP on Level1 dynamically.\n"
@@ -139,6 +140,28 @@ print_routes(void)
 	}
 	printf("\n");
 
+}
+
+static void
+print_qos(void)
+{
+	printf("\n######### Level 2 Scheduler data #########\n");
+	for (int k = 0; k < q_data.l2_count; k++) {
+		printf("L2 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, Port Idx = %d\n", q_data.l2[k].id, q_data.l2[k].cir_rate, q_data.l2[k].cir_burst_size, q_data.l2[k].eir_rate, q_data.l2[k].eir_burst_size, q_data.l2[k].coupled, q_data.l2[k].port_idx);
+	}
+
+	printf("\n######### Level 1 Scheduler data #########\n");
+	for (int k = 0; k < q_data.l1_count; k++) {
+		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, mode = %s, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, (q_data.l1[k].mode == SCHED_WRR) ? "WRR" : "STRICT", q_data.l1[k].l2_id);
+		if (q_data.l1[k].mode == SCHED_WRR) {
+			for (unsigned int j = 0; j < q_data.l1[k].q_count; j++)
+				printf("CQ%d has weight = %d\n", j, q_data.l1[k].weight[j]);
+
+			printf("\n");
+		}
+	}
+
+	printf("\n\n");
 }
 
 static void
@@ -594,23 +617,7 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Not able to read QoS data\n");
 
 	/* Dumping Qos data */
-	printf("\n######### Level 2 Scheduler data #########\n");
-	for (int k = 0; k < q_data.l2_count; k++) {
-		printf("L2 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, Port Idx = %d\n", q_data.l2[k].id, q_data.l2[k].cir_rate, q_data.l2[k].cir_burst_size, q_data.l2[k].eir_rate, q_data.l2[k].eir_burst_size, q_data.l2[k].coupled, q_data.l2[k].port_idx);
-	}
-
-	printf("\n######### Level 1 Scheduler data #########\n");
-	for (int k = 0; k < q_data.l1_count; k++) {
-		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, mode = %s, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, (q_data.l1[k].mode == SCHED_WRR) ? "WRR" : "STRICT", q_data.l1[k].l2_id);
-		if (q_data.l1[k].mode == SCHED_WRR) {
-			for (unsigned int j = 0; j < q_data.l1[k].q_count; j++)
-				printf("CQ%d has weight = %d\n", j, q_data.l1[k].weight[j]);
-
-			printf("\n");
-		}
-	}
-
-	printf("\n\n");
+	print_qos();
 	printf("\n######### Cogestion Mngt. #########\n");
 	printf("Taildrop th. = %d\n\n", q_data.taildrop_th);
 	/* convert to number of cycles */
@@ -1006,7 +1013,7 @@ main(int argc, char **argv)
 				printf("Current mode = %d, new mode = %d and queues = %d\n", l1_data->mode, prio, l1_data->q_count);
 				if (prio == SCHED_WRR) {
 					char *w_token;
-					unsigned int ii = 0;
+					unsigned int ii = 0, error = 0;
 
 					token = strtok(NULL, "\n");
 					if (token == NULL) {
@@ -1029,7 +1036,8 @@ main(int argc, char **argv)
 						if (w_token == NULL) {
 							printf("Weight is not given for all queues, Queues: %d\n", l1_data->q_count);
 							cmd_help();
-							continue;
+							error = 1;
+							break;
 						}
 
 						l1_data->weight[ii] = strtoul(w_token, &err, 0);
@@ -1037,9 +1045,11 @@ main(int argc, char **argv)
 						ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
 						if (ret) {
 							printf("Error in reading weight\n");
-							continue;
+							error = 1;
 						}
 					}
+					if (error == 1)
+						continue;
 				}
 
 				for (int k = 0; k < q_data.l2_count; k++) {
@@ -1068,6 +1078,9 @@ main(int argc, char **argv)
 				l1_data->channel_id = dpaa2_reconf_L1_sch(l2_data->port_idx, l1_data->channel_id, &sch_param);
 				l1_data->mode = prio;
 				printf("done\n");
+			} else if (!strcmp(key_token, "qos\n")) {
+				print_qos();
+				print_routes();
 			} else {
 				printf("not a valid command\n");
 				cmd_help();
