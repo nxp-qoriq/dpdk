@@ -1017,7 +1017,7 @@ main(int argc, char **argv)
 
 					token = strtok(NULL, "\n");
 					if (token == NULL) {
-						printf("Weight is not given %s\n", token);
+						printf("Weight is not given\n");
 						cmd_help();
 						continue;
 					}
