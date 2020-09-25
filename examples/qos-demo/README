@@ -15,10 +15,11 @@ VLAN header.
 SUPPORTED FEATURES:
 
 * Two Level2 and two Level1 schedulers can be configured
-* Only one Class queue per Level1 scheduler is supported,
-  so it also means no scheduling (STRICT/ WRR) is supported within level1 schedulers.
-* User can configure only Shaper (CIR /EIR) on Level1 and Level2.
+* 8 Class queue per Level1 scheduler are supported.
+* User can configure STRICT/WRR scheduling on Level1 and
+  Shaper (CIR /EIR) on Level1 and Level2.
 * Dynamic switching of one Level1 instance from one Level2 instance to another Level2 instance.
+* Dynamic switching of SP to WRR and vice versa
 
 
 /*********************************************************/
@@ -37,6 +38,7 @@ make -C examples/qos-demo/
 EXECUTION COMMANDS:
 
 . ./dynamic_dpl.sh dpmac.3 dpmac.4
+export DPAA2_TX_CONF=1
 ./qos-demo -c 0x7 -- -p 0x3 –f “./input.data”
 
 -c is coremask, Please note that one extra core is required for command prompt.
@@ -56,6 +58,10 @@ move <l1_id> <l2_id>    : Move one L1 instance from one L2 to another L2 instanc
 			  where l1_id and l2_id both must exist in the application,
 			  e.g: move 0 1 : It will attach L1 instance whose ID is 0 to
 			  to L2 instance whose ID is 1.
+sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and WRR to SP
+				    on Level1 dynamically.
+				    e.g sched 0 STRICT
+					sched 0 WRR 100,200,300
 
 
 /*********************************************************/
@@ -76,6 +82,9 @@ CIR_SIZE: CIR burst size in Kbps.
 EIR: Excess information rate, in Mbps.
 EIR_SIZE: EIR burst size in Kbps.
 COUPLED: Use Commit and Excess rate shaper in coupled manner. 1 mean coupled and 0 mean non-coupled.
+CQ_COUNT: Number of class queues.
+MODE: STRICT or WRR. 
+WEIGHT: Valid in case mode is "WRR". values must be in comma separated and equal to CQ_COUNT.
 L2_ID: ID of L2 scheduler to which it will be attached.
 
 

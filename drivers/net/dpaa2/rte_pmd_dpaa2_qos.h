@@ -38,6 +38,7 @@ struct dpaa2_sch_params {
 	uint32_t td_thresh[L1_MAX_QUEUES]; /* Tail-Drop threshold for each
 					     queue. 0 means disable */
 	enum td_unit td_mode[L1_MAX_QUEUES];	/* Byte or packet */
+	uint32_t weight[L1_MAX_QUEUES]; /* Weight valid only if sch_mode is WRR */
 	/* Pointer to array of queue handles for 'num_L1_queues' queues.
 	   This queue handles to be used while transmitting packets */
 	qhandle_t *q_handle;
@@ -190,4 +191,16 @@ uint16_t dpaa2_dev_qos_tx(qhandle_t q_handle,
  *    0 in case of success, Negative in case of failure.
  */
 int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
+
+
+int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
+                        struct dpaa2_sch_params *sch_param);
+
+/**
+ * TODO
+ * This is a temporary API for resouce intialization.
+ * It will be removed, once we done the proper resource
+ * intialization.
+ */
+int init_ceetm_res(uint16_t portid, uint16_t q_id);
 #endif /* _DPAA2_QOS_H */

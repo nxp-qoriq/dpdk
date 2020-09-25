@@ -600,6 +600,8 @@ int dpni_get_attributes(struct fsl_mc_io *mc_io,
 	attr->num_cgs = rsp_params->num_cgs;
 	attr->lni = le16_to_cpu(rsp_params->lni);
 	attr->ceetm_id = le16_to_cpu(rsp_params->ceetm_id);
+	attr->ifpid = le16_to_cpu(rsp_params->ifpid);
+	attr->icid = le16_to_cpu(rsp_params->icid);
 
 	return 0;
 }

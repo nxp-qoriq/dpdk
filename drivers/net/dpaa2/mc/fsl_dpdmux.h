@@ -91,6 +91,8 @@ enum dpdmux_method {
  * @adv.max_vlan_ids: Maximum vlan ids allowed in the system -
  *	relevant only case of working in mac+vlan method.
  *	0 - indicates default 16 vlan ids.
+ * @adv.mem_size: Size of the memory used for internal buffers expressed as number of
+ * 256byte buffers.
  */
 struct dpdmux_cfg {
 	enum dpdmux_method method;
@@ -102,6 +104,7 @@ struct dpdmux_cfg {
 		uint16_t max_dmat_entries;
 		uint16_t max_mc_groups;
 		uint16_t max_vlan_ids;
+		uint16_t mem_size;
 	} adv;
 };
 

@@ -175,7 +175,7 @@ struct dpaa2_queue {
 	struct dpaa2_queue *tx_conf_queue;
 	int32_t eventfd;	/*!< Event Fd of this queue */
 	uint16_t nb_desc;
-	uint16_t resv;
+	uint16_t real_cqid;
 	uint64_t offloads;
 } __rte_cache_aligned;
 

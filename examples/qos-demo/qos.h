@@ -18,6 +18,8 @@ struct sched_shaper_data {
 	int lni_id; /* Internal and applicable for L2 */
 	qhandle_t channel_id; /* Internal and applicable for l1 */
 	unsigned int q_count; /* for l1 */
+	unsigned int mode;  /* 0 for strict and 1 for WRR */
+	unsigned int weight[L1_MAX_QUEUES];  /* number of values must be equal to q_count */
 	qhandle_t cq[L1_MAX_QUEUES];
 	unsigned int l2_id;
 	unsigned int port_idx;

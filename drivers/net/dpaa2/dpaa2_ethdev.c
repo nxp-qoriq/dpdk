@@ -803,7 +803,6 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	return 0;
 }
 
-extern int init_ceetm_res(uint32_t ceetmid, uint32_t cqid, uint32_t fqid);
 static int
 dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			 uint16_t tx_queue_id,
@@ -885,9 +884,9 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		return -1;
 	}
 	dpaa2_q->fqid = qid.fqid;
+	dpaa2_q->real_cqid = qid.real_cqid;
 	/* printf("%s:  dpni[%d]  cqid %d fqid %d dctidx %d\n", __func__, priv->hw_id,
 						qid.real_cqid, qid.fqid, qid.dctidx); */
-	init_ceetm_res(priv->ceetm_id, qid.real_cqid, qid.fqid);
 
 	if (!(priv->flags & DPAA2_TX_CGR_OFF)) {
 		struct dpni_congestion_notification_cfg cong_notif_cfg = {0};
@@ -949,6 +948,7 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		}
 		dpaa2_tx_conf_q->fqid = qid.fqid;
 	}
+
 	return 0;
 }
 
@@ -2595,7 +2595,8 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->flags |= DPAA2_TX_CONF_ENABLE;
 #endif
 	/* Used with ``fslmc:dpni.1,drv_tx_conf=1`` */
-	if (dpaa2_get_devargs(dev->devargs, DRIVER_TX_CONF)) {
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_TX_CONF)
+		|| getenv("DPAA2_TX_CONF")) {
 		priv->flags |= DPAA2_TX_CONF_ENABLE;
 		DPAA2_PMD_INFO("TX_CONF Enabled");
 	}

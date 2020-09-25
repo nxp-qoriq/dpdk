@@ -83,10 +83,6 @@ struct lcore_queue_conf {
 } __rte_cache_aligned;
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
-#if OLD_CODE
-static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
-#endif
-
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
@@ -121,7 +117,12 @@ cmd_help(void)
 {
 	printf("************** CMDline help **************\n\n");
 	printf("q			: Quit the application\n");
-	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n\n");
+	printf("qos			: Print all QoS data\n");
+	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n");
+	printf("sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and\n"
+						    "\t\t\t\tWRR to SP on Level1 dynamically.\n"
+						    "\t\t\t\te.g sched 0 STRICT\n"
+						    "\t\t\t\tsched 0 WRR 100,200,300\n\n");
 }
 
 static void
@@ -139,6 +140,28 @@ print_routes(void)
 	}
 	printf("\n");
 
+}
+
+static void
+print_qos(void)
+{
+	printf("\n######### Level 2 Scheduler data #########\n");
+	for (int k = 0; k < q_data.l2_count; k++) {
+		printf("L2 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, Port Idx = %d\n", q_data.l2[k].id, q_data.l2[k].cir_rate, q_data.l2[k].cir_burst_size, q_data.l2[k].eir_rate, q_data.l2[k].eir_burst_size, q_data.l2[k].coupled, q_data.l2[k].port_idx);
+	}
+
+	printf("\n######### Level 1 Scheduler data #########\n");
+	for (int k = 0; k < q_data.l1_count; k++) {
+		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, mode = %s, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, (q_data.l1[k].mode == SCHED_WRR) ? "WRR" : "STRICT", q_data.l1[k].l2_id);
+		if (q_data.l1[k].mode == SCHED_WRR) {
+			for (unsigned int j = 0; j < q_data.l1[k].q_count; j++)
+				printf("CQ%d has weight = %d\n", j, q_data.l1[k].weight[j]);
+
+			printf("\n");
+		}
+	}
+
+	printf("\n\n");
 }
 
 static void
@@ -241,6 +264,8 @@ l2fwd_simple_forward(struct rte_mbuf *m,
 	dst_port = c_data->port_idx;
 	if (mac_updating)
 		l2fwd_mac_updating(m, dst_port);
+
+	//printf("vlan = %d, priority =%d, CQ id = %ld\n", vlan_id, priority, c_data->cq[priority]);
 
 	ret = dpaa2_dev_qos_tx(c_data->cq[priority], &m, 1);
 	if (ret == 0) {
@@ -592,17 +617,7 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Not able to read QoS data\n");
 
 	/* Dumping Qos data */
-	printf("\n######### Level 2 Scheduler data #########\n");
-	for (int k = 0; k < q_data.l2_count; k++) {
-		printf("L2 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, Port Idx = %d\n", q_data.l2[k].id, q_data.l2[k].cir_rate, q_data.l2[k].cir_burst_size, q_data.l2[k].eir_rate, q_data.l2[k].eir_burst_size, q_data.l2[k].coupled, q_data.l2[k].port_idx);
-	}
-
-	printf("\n######### Level 1 Scheduler data #########\n");
-	for (int k = 0; k < q_data.l1_count; k++) {
-		printf("L1 ID = %d: CIR = %f, CIR_SIZE = %d, EIR = %f, EIR_SIZE = %d, COUPLED = %d, CQ_COUNT = %d, L2_ID = %d\n", q_data.l1[k].id, q_data.l1[k].cir_rate, q_data.l1[k].cir_burst_size, q_data.l1[k].eir_rate, q_data.l1[k].eir_burst_size, q_data.l1[k].coupled, q_data.l1[k].q_count, q_data.l1[k].l2_id);
-	}
-
-	printf("\n\n");
+	print_qos();
 	printf("\n######### Cogestion Mngt. #########\n");
 	printf("Taildrop th. = %d\n\n", q_data.taildrop_th);
 	/* convert to number of cycles */
@@ -716,7 +731,7 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
-		ret = rte_eth_dev_configure(portid, 1, 1, &local_port_conf);
+		ret = rte_eth_dev_configure(portid, 1, L1_MAX_QUEUES, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, portid);
@@ -752,30 +767,16 @@ main(int argc, char **argv)
 #if OLD_CODE
 		txq_conf = dev_info.default_txconf;
 		txq_conf.offloads = local_port_conf.txmode.offloads;
-		ret = rte_eth_tx_queue_setup(portid, 0, nb_txd,
-				rte_eth_dev_socket_id(portid),
-				&txq_conf);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
-				ret, portid);
+		for (int i = 0; i < L1_MAX_QUEUES; i++) {
+			ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
+					rte_eth_dev_socket_id(portid),
+					&txq_conf);
+			if (ret < 0)
+				rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
+					ret, portid);
 
-		/* Initialize TX buffers */
-		tx_buffer[portid] = rte_zmalloc_socket("tx_buffer",
-				RTE_ETH_TX_BUFFER_SIZE(MAX_PKT_BURST), 0,
-				rte_eth_dev_socket_id(portid));
-		if (tx_buffer[portid] == NULL)
-			rte_exit(EXIT_FAILURE, "Cannot allocate buffer for tx on port %u\n",
-					portid);
-
-		rte_eth_tx_buffer_init(tx_buffer[portid], MAX_PKT_BURST);
-
-		ret = rte_eth_tx_buffer_set_err_callback(tx_buffer[portid],
-				rte_eth_tx_buffer_count_callback,
-				&port_statistics[portid].dropped);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-			"Cannot set error callback for tx buffer on port %u\n",
-				 portid);
+			init_ceetm_res(portid, i);
+		}
 
 #endif
 		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
@@ -867,8 +868,7 @@ main(int argc, char **argv)
 		if (l2_q_data == NULL)
 			rte_exit(EXIT_FAILURE, "L2_ID not exists, please check L1 configuration\n");
 
-		sch_param.sch_mode = 0;
-		//sch_param.sch_idx = q_data.l1[k].id;
+		sch_param.sch_mode = q_data.l1[k].mode;
 		sch_param.l2_sch_idx = l2_q_data->lni_id;
 		sch_param.shaped = 1;
 		sch_param.num_L1_queues = q_data.l1[k].q_count;
@@ -876,6 +876,8 @@ main(int argc, char **argv)
 		for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
 			sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
 			sch_param.td_thresh[ii] = q_data.taildrop_th;
+			if (q_data.l1[k].mode == SCHED_WRR)
+				sch_param.weight[ii] = q_data.l1[k].weight[ii];
 		}
 
 		q_data.l1[k].channel_id = dpaa2_add_L1_sch(l2_q_data->port_idx, &sch_param);
@@ -894,11 +896,12 @@ main(int argc, char **argv)
 	}
 
 
-	/* launch per-lcore init on every lcore */
+	/* launch per-lcore init on every lcore, except master */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, SKIP_MASTER);
 
 	rte_delay_us(100000);
 	/* Command prompt */
+	printf("******* CMDline prompt: *******\n");
 	while (!force_quit) {
 		char cmd[100];
 
@@ -921,59 +924,168 @@ main(int argc, char **argv)
 			 /* get key */
 			token = strtok(cmd, " ");
 			key_token = token;
-			if (strcmp(key_token, "move")) {
+			if (!strcmp(key_token, "move")) {
+				/* get values for key */
+				token = strtok(NULL, " ");
+				l1_id = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, "\n");
+				l2_id = strtoul(token, &err, 0);
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				for (int k = 0; k < q_data.l1_count; k++) {
+					if (q_data.l1[k].id == l1_id) {
+						l1_data =  &q_data.l1[k];
+						break;
+					}
+				}
+				if (l1_data == NULL) {
+					printf("%d L1 id is not present\n", l1_id);
+					cmd_help();
+					continue;
+				}
+				for (int k = 0; k < q_data.l2_count; k++) {
+					if (q_data.l2[k].id == l2_id) {
+						l2_data =  &q_data.l2[k];
+						break;
+					}
+				}
+				if (l2_data == NULL) {
+					printf("%d L2 id is not present\n", l2_id);
+					cmd_help();
+					continue;
+				}
+
+				ret = dpaa2_move_L1_sch(l1_data->channel_id,
+							l2_data->port_idx);
+				if (ret)
+					printf("failed to switch l1 instance\n");
+
+				l1_data->port_idx = l2_data->port_idx;
+				l1_data->l2_id = l2_id;
+				print_routes();
+			} else if (!strcmp(key_token, "sched")) {
+				int prio;
+				struct dpaa2_sch_params sch_param;
+
+				token = strtok(NULL, " ");
+				l1_id = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, " \n");
+				if (!strcmp(token, "STRICT")) {
+					prio = SCHED_STRICT_PRIORITY;
+				} else if (!strcmp(token, "WRR")) {
+					prio = SCHED_WRR;
+				} else {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				for (int k = 0; k < q_data.l1_count; k++) {
+					if (q_data.l1[k].id == l1_id) {
+						l1_data =  &q_data.l1[k];
+						break;
+					}
+				}
+				if (l1_data == NULL) {
+					printf("%d L1 id is not present\n", l1_id);
+					cmd_help();
+					continue;
+				}
+
+				printf("Current mode = %d, new mode = %d and queues = %d\n", l1_data->mode, prio, l1_data->q_count);
+				if (prio == SCHED_WRR) {
+					char *w_token;
+					unsigned int ii = 0, error = 0;
+
+					token = strtok(NULL, "\n");
+					if (token == NULL) {
+						printf("Weight is not given %s\n", token);
+						cmd_help();
+						continue;
+					}
+					w_token = strtok(token, ",");
+					l1_data->weight[ii] = strtoul(w_token, &err, 0);
+					ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+					if (ret) {
+						printf("Not a valid argument %s\n", token);
+						cmd_help();
+						continue;
+					}
+					printf("weight = %d, for queue =%d\n", l1_data->weight[ii], ii); 
+					ii++;
+					for (;ii < l1_data->q_count; ii++) {
+						w_token = strtok(NULL, ",");
+						if (w_token == NULL) {
+							printf("Weight is not given for all queues, Queues: %d\n", l1_data->q_count);
+							cmd_help();
+							error = 1;
+							break;
+						}
+
+						l1_data->weight[ii] = strtoul(w_token, &err, 0);
+					printf("weight = %d, for queue =%d\n", l1_data->weight[ii], ii); 
+						ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+						if (ret) {
+							printf("Error in reading weight\n");
+							error = 1;
+						}
+					}
+					if (error == 1)
+						continue;
+				}
+
+				for (int k = 0; k < q_data.l2_count; k++) {
+                                        if (q_data.l2[k].id == l1_data->l2_id) {
+                                                l2_data =  &q_data.l2[k];
+                                                break;
+                                        }
+                                }
+                                if (l2_data == NULL) {
+                                        printf("Unable to locate L2 data\n");
+                                        cmd_help();
+                                        continue;
+                                }
+
+				sch_param.sch_mode = prio;
+				sch_param.l2_sch_idx = l2_data->lni_id;
+				sch_param.shaped = 1;
+				sch_param.num_L1_queues = l1_data->q_count;
+				sch_param.q_handle = l1_data->cq;
+				for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
+					sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
+					sch_param.td_thresh[ii] = q_data.taildrop_th;
+					if (prio == SCHED_WRR)
+						sch_param.weight[ii] = l1_data->weight[ii];
+				}
+				l1_data->channel_id = dpaa2_reconf_L1_sch(l2_data->port_idx, l1_data->channel_id, &sch_param);
+				l1_data->mode = prio;
+				printf("done\n");
+			} else if (!strcmp(key_token, "qos\n")) {
+				print_qos();
+				print_routes();
+			} else {
 				printf("not a valid command\n");
 				cmd_help();
 				continue;
 			}
-			/* get values for key */
-			token = strtok(NULL, " ");
-			l1_id = strtoul(token, &err, 0);
-			ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
-			if (ret) {
-				printf("Not a valid argument %s\n", token);
-				cmd_help();
-				continue;
-			}
-
-			token = strtok(NULL, "\n");
-			l2_id = strtoul(token, &err, 0);
-			if (ret) {
-				printf("Not a valid argument %s\n", token);
-				cmd_help();
-				continue;
-			}
-
-			for (int k = 0; k < q_data.l1_count; k++) {
-				if (q_data.l1[k].id == l1_id) {
-					l1_data =  &q_data.l1[k];
-					break;
-				}
-			}
-			if (l1_data == NULL) {
-				printf("%d L1 id is not present\n", l1_id);
-				cmd_help();
-				continue;
-			}
-			for (int k = 0; k < q_data.l2_count; k++) {
-				if (q_data.l2[k].id == l2_id) {
-					l2_data =  &q_data.l2[k];
-					break;
-				}
-			}
-			if (l2_data == NULL) {
-				printf("%d L2 id is not present\n", l2_id);
-				cmd_help();
-				continue;
-			}
-
-			ret = dpaa2_move_L1_sch(l1_data->channel_id,
-						l2_data->port_idx);
-			if (ret)
-				printf("failed to switch l1 instance\n");
-			l1_data->port_idx = l2_data->port_idx;
-			l1_data->l2_id = l2_id;
-			print_routes();
 		}
 	}
 
