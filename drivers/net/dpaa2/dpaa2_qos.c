@@ -25,9 +25,6 @@
 
 #include "dpaa2_pmd_logs.h"
 #include "dpaa2_ethdev.h"
-//#include <mc/fsl_dpni.h>
-//#include <mc/fsl_dpio.h>
-//#include <mc/fsl_mc_sys.h>
 #include "qbman_portal.h"
 #include "qbman_portal_ex.h"
 #include <fsl_qbman_portal_ex.h>
@@ -43,36 +40,44 @@
 
 #define DRV_UT		0
 
+#define CEETM_CHANNEL_BASE0	16
+#define CEETM_CHANNEL_BASE1	20
+#define CEETM_CHANNEL_MAX	32
+
+#define CEETM_LFQ_BASE0		1024
+#define CEETM_LFQ_BASE1		1024
+#define CEETM_LFQ_MAX		2048
+
+
 struct class_q {
 	uint32_t cqid;
 	uint32_t lfqid;
+	uint32_t lfqidx;
 	uint32_t vrid;
 	uint32_t ccgrid;
 	uint16_t portid; /* Tx Port */
-	uint16_t conf_q_id;
 };
 
 struct class_sch {
-	uint32_t cs_lfqid_base;
 	uint32_t cq_count;
 	struct class_q  cq[L1_MAX_QUEUES];
 	uint32_t cq_inuse;
-	enum scheduler_mode mode;
 	uint8_t chid;
 };
 
 struct ceetm_res {
-	uint32_t lfqid_base;
-	uint32_t lfq_vrid_base;
-	uint32_t cqid_base;
 	uint32_t chid_base;
 	uint32_t cs_count;
+	uint32_t lfq_count;
 	struct class_sch cs[MAX_CH_PER_CEETM];
 	uint32_t cs_inuse;
+	uint8_t init;
 } ceetm[2] = {0};
 
+struct dpaa2_queue *reject_frames_queue = NULL;
+
 /* Global Privileged portal */
-struct qbman_swp *p_swp;
+struct qbman_swp *p_swp = NULL;
 
 static inline uint8_t get_ceetm_instid(uint32_t ceetm_id)
 {
@@ -80,7 +85,7 @@ static inline uint8_t get_ceetm_instid(uint32_t ceetm_id)
 
 	qbman_ceetmid_decompose(ceetm_id, &dcpid, &instanceid);
 
-	printf("%s: CEETM id %d instanceid %d\n", __func__, ceetm_id, instanceid);
+	DPAA2_PMD_DEBUG("%s: CEETM id %d instanceid %d\n", __func__, ceetm_id, instanceid);
 	return instanceid;
 }
 
@@ -105,79 +110,186 @@ struct dpaa2_dev_priv *dpaa2_get_dev_priv(uint16_t port_id)
 #if DRV_UT
 void mc_test(void);
 #endif
-int init_ceetm_res(uint16_t portid, uint16_t q_id);
+int init_ceetm_res(uint16_t portid);
 
-int32_t dpaa2_qos_init(void)
+int32_t dpaa2_qos_init(uint16_t portid)
 {
-
 	/* Validate whether PRIVILAGED QBMAn portal is available else return error */
-	p_swp = dpaa2_get_priv_qbman_swp();
-	if (NULL == p_swp) {
-		DPAA2_PMD_ERR("Privileged Portal not found\n");
-		return -EINVAL;
-	}
-	DPAA2_PMD_INFO("%s: Privileged Portal is avialble\n", __func__);
+	if (p_swp == NULL) {
 
-	/* Test with MC resources */
-#if DRV_UT
-	mc_test();
-#endif
+		p_swp = dpaa2_get_priv_qbman_swp();
+		if (NULL == p_swp) {
+			DPAA2_PMD_ERR("Privileged Portal not found\n");
+			return -EINVAL;
+		}
+		DPAA2_PMD_INFO("%s: Privileged Portal is avialble\n", __func__);
+
+	}
+	init_ceetm_res(portid);
+
 	return 0;
 }
 
-int init_ceetm_res(uint16_t portid, uint16_t conf_q_id)
+int init_ceetm_res(uint16_t portid)
 {
 
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
         struct rte_eth_dev_data *eth_data = eth_dev->data;
         struct dpaa2_dev_priv *priv = eth_data->dev_private;
-	struct dpaa2_queue *dpaa2_q = (struct dpaa2_queue *)
-                priv->tx_vq[conf_q_id];
-	uint32_t ceetmid, cs_count, cq_idx = 0, q_id, cq_id;
+	struct fsl_mc_io *dpni = eth_dev->process_private;
+	uint32_t ceetmid, k, lfq_count, cq_idx = 0, channel_base;
+	int err, ret;
+	uint32_t channel_number;
+	uint8_t ps = 1; // PFDR Stashing enable, optimisation
+	uint8_t pps = 0; // Pool selection, optimisation
+	uint32_t bdi = 0;
+	uint32_t va = 0;
+	uint32_t pl = 0;
+	uint32_t icid = priv->icid;
+	uint8_t instanceid;
 
-	ceetmid = priv->ceetm_id;
-	cq_id = dpaa2_q->real_cqid;
-	q_id = dpaa2_q->fqid;
-	cs_count =  ceetm[ceetmid].cs_count;
+	if (reject_frames_queue == NULL) {
+		struct dpni_queue_id qid;
+		struct dpni_queue tx_conf_cfg;
 
-	if ((cq_id % 16) != 0)
+		reject_frames_queue = rte_malloc(NULL, sizeof(struct dpaa2_queue),
+						RTE_CACHE_LINE_SIZE);
+		reject_frames_queue->eth_data = eth_data;
+		reject_frames_queue->tc_index = 0;
+		reject_frames_queue->flow_id = 0;
+		reject_frames_queue->q_storage = rte_malloc("dq_storage", sizeof(struct queue_storage_info_t),
+					RTE_CACHE_LINE_SIZE);
+		if (!reject_frames_queue->q_storage) {
+			printf("failed to allocate dq storage \n");
+			rte_free(reject_frames_queue);
+			reject_frames_queue = NULL;
+			return -1;
+		}
+
+		memset(reject_frames_queue->q_storage, 0, sizeof(struct queue_storage_info_t));
+
+		if (dpaa2_alloc_dq_storage(reject_frames_queue->q_storage)) {
+			printf("failed to allocate dq storage \n");
+			rte_free(reject_frames_queue);
+			reject_frames_queue = NULL;
+			return -1;
+		}
+
+		ret = dpni_get_queue(dpni, CMD_PRI_LOW, priv->token,
+                             DPNI_QUEUE_TX_CONFIRM, reject_frames_queue->tc_index,
+                             reject_frames_queue->flow_id, &tx_conf_cfg, &qid);
+                if (ret) {
+                        printf("Error in getting LFQID err=%d", ret);
+                        return -1;
+                }
+                reject_frames_queue->fqid = qid.fqid;
+                reject_frames_queue->real_cqid = qid.real_fqid;
+                printf("\nReject queue  real id =%d and fqid =%d\n", qid.real_fqid, qid.fqid);
+	}
+
+	ceetmid = priv->ceetm_id;  /*LNI is already avaialable in priv*/
+	instanceid = get_ceetm_instid((uint32_t)ceetmid);
+	if (ceetm[instanceid].init == 1)
 		return 0;
 
-	ceetmid = get_ceetm_instid((uint32_t)ceetmid);
-
-	/* TODO Initialize with resources created by MC */
-	ceetm[ceetmid].lfqid_base = 15745088;
-	ceetm[ceetmid].lfq_vrid_base = 414;
-	ceetm[ceetmid].cqid_base = 16;
-	ceetm[ceetmid].chid_base = 1;
-	ceetm[ceetmid].cs[cs_count].mode = SCHED_STRICT_PRIORITY;
-	ceetm[ceetmid].cs[cs_count].cs_lfqid_base = 0; /* TODO */
-	ceetm[ceetmid].cs[cs_count].chid = cq_id >> 4;
-
-	cq_idx = ceetm[ceetmid].cs[cs_count].cq_count;
-	for (int i = 0; i < L1_MAX_QUEUES; i++) {
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].conf_q_id = conf_q_id;
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].lfqid = 0;
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid = q_id;
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].portid = portid;
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid = cq_id & 0xF;
-		/* TODO MC configure CCGRID same as TC index */
-		ceetm[ceetmid].cs[cs_count].cq[cq_idx].ccgrid = cq_idx;
-		printf("%s:ceetm_inst[%d]  fqid %d cqid %d chid %u\n", __func__,
-			ceetmid, ceetm[ceetmid].cs[cs_count].cq[cq_idx].vrid,
-			ceetm[ceetmid].cs[cs_count].cq[cq_idx].cqid,
-			ceetm[ceetmid].cs[cs_count].chid);
-
-		q_id++;
-		conf_q_id++;
-		cq_id++;
-		cq_idx++;
+	lfq_count =  ceetm[ceetmid].lfq_count;
+	if (instanceid == 0) {
+		channel_base = CEETM_CHANNEL_BASE0;
+	} else {
+		channel_base = CEETM_CHANNEL_BASE1;
 	}
-	ceetm[ceetmid].cs_count++;
-	ceetm[ceetmid].cs[cs_count].cq_count = cq_idx;
 
-	printf("%s:cs_count = %d  cq_count = %d\n", __func__,
-		ceetm[ceetmid].cs_count, ceetm[ceetmid].cs[cs_count].cq_count);
+	ceetm[instanceid].chid_base = channel_base;
+
+	printf("Ceetmid = %d and instanceid = %d\n", ceetmid, instanceid);
+	channel_number = channel_base;
+	for (k = 0; k < (CEETM_CHANNEL_MAX - channel_base); k++) {
+		ceetm[instanceid].cs[k].chid = channel_number & 0x1f;
+		cq_idx = ceetm[instanceid].cs[k].cq_count;
+
+		for (int i = 0; i < L1_MAX_QUEUES; i++) {
+			if (instanceid == 0) {
+				if ((CEETM_LFQ_BASE0 + lfq_count) > CEETM_LFQ_MAX) {
+					printf("No LFQ resources left\n");
+					return -1;
+				}
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = CEETM_LFQ_BASE0 + lfq_count;
+			} else {
+				if ((CEETM_LFQ_BASE1 + lfq_count) > CEETM_LFQ_MAX) {
+					printf("No LFQ resources left\n");
+					return -1;
+				}
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = CEETM_LFQ_BASE1 + lfq_count;
+			}
+			ceetm[instanceid].cs[k].cq[cq_idx].lfqid = qbman_lfqid_compose_ex(ceetmid,
+						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx);
+			/* Assuming 1 sender */
+			err = qbman_auth_add_find(p_swp, icid, qbman_auth_type_fqid,
+						&ceetm[instanceid].cs[k].cq[cq_idx].vrid,
+						ceetm[instanceid].cs[k].cq[cq_idx].lfqid,
+						QBMAN_AUTH_SWP | QBMAN_AUTH_DCP);
+			if (err != 0)
+				printf("qbman_auth_add_find() failed for TX-Q\n");
+
+			/* Configure DCT assuming one Sender */
+			/* TODO MC configure CCGRID same as TC index, only one per CEETM is required */
+			ceetm[instanceid].cs[k].cq[cq_idx].ccgrid = cq_idx;
+			ceetm[instanceid].cs[k].cq[cq_idx].portid = portid;
+			ceetm[instanceid].cs[k].cq[cq_idx].cqid = (channel_number << 4) + cq_idx;
+
+			err = qbman_cq_configure(p_swp, ceetmid, ceetm[instanceid].cs[k].cq[cq_idx].cqid,
+						/*ccgid*/ cq_idx, ps, pps);
+			if (err != 0)
+				printf("qbman_CQ_configure() failed for TX-Q\n");
+
+			/* We are using same LFQIDX for DCTIDX */
+			err = qbman_lfq_configure(p_swp,
+						ceetm[instanceid].cs[k].cq[cq_idx].lfqid,
+						ceetm[instanceid].cs[k].cq[cq_idx].cqid,
+						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx,
+						/*fqider*//*dpaa2_q->tx_conf_queue->real_cqid*/ reject_frames_queue->real_cqid);
+			if (err != 0) {
+				printf("qbman_lfq_configure failed\n");
+				return -1;
+			}
+
+			/* TODO: ifpid , may call this API in scheduler configure*/
+			/* We are using same LFQIDX for DCTIDX */
+			err = qbman_dct_configure(p_swp, ceetmid,
+						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx,
+						bdi, va, icid, pl, /*ctx*/((uint64_t)priv->ifpid << 48));
+			if (err != 0) {
+				printf("qbman_dct_configure failed\n");
+				return -1;
+			}
+
+#if 0
+			printf("cidx %d fqid %d cqid %d chid %u lfqid %d, lfqidx %d, ifpid %d\n", k,
+				ceetm[instanceid].cs[k].cq[cq_idx].vrid,
+				ceetm[instanceid].cs[k].cq[cq_idx].cqid,
+				ceetm[instanceid].cs[k].chid,
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqid,
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx,
+				priv->ifpid);
+#endif
+
+			ceetm[instanceid].cs[k].cq_count++;
+			cq_idx++;
+			lfq_count++;
+		}
+
+		channel_number++;
+	}
+	ceetm[instanceid].cs_count += k;
+	ceetm[instanceid].lfq_count += lfq_count;
+
+	ceetm[instanceid].init = 1;
+
+	printf("\ncs_count = %d  lfq count = %d\n",
+		ceetm[instanceid].cs_count, ceetm[instanceid].lfq_count);
+
+
+
 	return 0;
 }
 
@@ -220,7 +332,7 @@ void mc_test(void)
 }
 #endif
 
-void dpaa2_qos_deinit(void)
+void dpaa2_qos_deinit(__rte_unused uint16_t portid)
 {
 	/* TODO */
 }
@@ -235,7 +347,7 @@ int32_t dpaa2_add_L2_sch(uint16_t portid)
 		return -EINVAL;
 
 	/* Get the LNI index from the given port and validate */
-	DPAA2_PMD_INFO("%s: PortId %d [dpni.%d]-- LNI Id %d CEETM Id %d\n", __func__,
+	DPAA2_PMD_DEBUG("%s: PortId %d [dpni.%d]-- LNI Id %d CEETM Id %d\n", __func__,
 				portid, priv->hw_id, priv->lni, priv->ceetm_id);
 
 	/* Return result to user */
@@ -262,7 +374,7 @@ int32_t dpaa2_cfg_L2_shaper(uint16_t portid,
 	qbman_shaper_set_commit_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->c_bs * 1000, bps);
 	qbman_shaper_set_crtbl(&attr, burst_size);
-	printf("%s: PortId %d - cr %ld cbs %d\n", __func__,
+	DPAA2_PMD_INFO("%s: PortId %d - cr %ld cbs %d\n", __func__,
 					portid, bps, burst_size);
 	bps = (uint64_t)(sh_param->e_rate * 1000000.0);
 	qbman_shaper_set_excess_rate(&attr, bps);
@@ -292,6 +404,9 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 	struct class_sch *cs = NULL;
 	uint32_t  i;
 	int err, csms;
+	uint32_t bdi = 0;
+	uint32_t va = 0;
+	uint32_t pl = 0;
 
 	/* Get the device data to fetch CEETM, LNI index etc. from the given port
 	   and validate */
@@ -318,17 +433,15 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		return -EINVAL;
 	}
 
-#if 0
-	printf("%s: ceetm %d lin %d chid %d shaped %d \n", __func__,
-		priv->ceetm_id, priv->lni, cs->chid, sch_param->shaped);
-	err = qbman_cchannel_configure(p_swp, priv->ceetm_id,
-			cs->chid, priv->lni, sch_param->shaped);
-	if (err) {
-		printf("%s: qbman_cchannel_configure failed err %d\n",
-							__func__, err);
-		return -EINVAL;
+	for (i = 0; i < sch_param->num_L1_queues; i++) {
+		err = qbman_dct_configure(p_swp, priv->ceetm_id,
+					cs->cq[i].lfqidx,
+					bdi, va, priv->icid, pl, /*ctx*/((uint64_t)priv->ifpid << 48));
+		if (err != 0) {
+			printf("qbman_dct_configure failed\n");
+			return -1;
+		}
 	}
-#endif
 
 	/* Clear schedulaer attributes */
 	qbman_cscheduler_attr_clear(&attr);
@@ -373,8 +486,9 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		int rej_cnt_mode, td_en;
 		uint32_t mode, td_thresh;
 
+		cs->cq[i].portid = portid;
 		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
-		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
+		DPAA2_PMD_DP_DEBUG("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
 					i, sch_param->q_handle[i], cs->cq[i].vrid);
 		/* CCGR */
 		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
@@ -382,7 +496,7 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
 		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
 		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-		printf("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+		DPAA2_PMD_DP_DEBUG("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
 				__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
 		if (sch_param->td_thresh[i]) {
 			mode = sch_param->td_mode[i];
@@ -399,7 +513,7 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		err = qbman_ccgr_configure(p_swp, priv->ceetm_id, cs->chid,
 							cs->cq[i].ccgrid, &attr);
 		if (err) {
-			printf("%s: qbman_cchannel_configure failed err %d\n",
+			DPAA2_PMD_DP_DEBUG("%s: qbman_cchannel_configure failed err %d\n",
 							__func__, err);
 			return -EINVAL;
 		}
@@ -408,7 +522,7 @@ int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
 		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
 		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
 		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-		printf("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+		DPAA2_PMD_DP_DEBUG("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
 			__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
 	}
 
@@ -427,6 +541,9 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 	struct class_sch *cs;
 	uint32_t cur_idx, i;
 	int err, csms;
+	uint32_t bdi = 0;
+	uint32_t va = 0;
+	uint32_t pl = 0;
 
 	/* Get the device data to fetch CEETM, LNI index etc. from the given port
 	   and validate */
@@ -453,7 +570,17 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		return -EINVAL;
 	}
 
-	printf("%s: ceetm %d lin %d chid %d shaped %d \n", __func__,
+	for (i = 0; i < sch_param->num_L1_queues; i++) {
+		err = qbman_dct_configure(p_swp, priv->ceetm_id,
+					cs->cq[i].lfqidx,
+					bdi, va, priv->icid, pl, /*ctx*/((uint64_t)priv->ifpid << 48));
+		if (err != 0) {
+			printf("qbman_dct_configure failed\n");
+			return -1;
+		}
+	}
+
+	DPAA2_PMD_DEBUG("%s: ceetm %d lin %d chid %d shaped %d \n", __func__,
 		priv->ceetm_id, priv->lni, cs->chid, sch_param->shaped);
 	err = qbman_cchannel_configure(p_swp, priv->ceetm_id,
 			cs->chid, priv->lni, sch_param->shaped);
@@ -507,12 +634,9 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		int rej_cnt_mode, td_en;
 		uint32_t mode, td_thresh;
 
-		/* Update  Tx port in Queue handle 
-		 * FIXME: below changes are required for offloads,
-		 * and in case different mempool for each DPNI */
-		//cs->cq[i].portid = portid;
+		cs->cq[i].portid = portid;
 		sch_param->q_handle[i] = (qhandle_t) &cs->cq[i];
-		printf("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
+		DPAA2_PMD_DP_DEBUG("%s: Updated Tc[%d] handle %ld fqid = %d\n", __func__,
 					i, sch_param->q_handle[i], cs->cq[i].vrid);
 		/* CCGR */
 		qbman_ccgr_query(p_swp,  priv->ceetm_id, cs->chid,
@@ -520,7 +644,7 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
 		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
 		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-		printf("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+		DPAA2_PMD_DP_DEBUG("%s:ccgrid %d: existing: rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
 				__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
 		if (sch_param->td_thresh[i]) {
 			mode = sch_param->td_mode[i];
@@ -546,7 +670,7 @@ int32_t dpaa2_add_L1_sch(uint16_t portid,
 		qbman_cgr_attr_get_mode(&attr, &mode, &rej_cnt_mode);
 		qbman_cgr_attr_get_td_ctrl(&attr, &td_en);
 		qbman_cgr_attr_get_td_thres(&attr, &td_thresh);
-		printf("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
+		DPAA2_PMD_DP_DEBUG("%s:NEW : ccgrid %d rej_cnt_mode %d mode %d td_en %d td_thresh %d\n",
 			__func__, cs->cq[i].ccgrid, rej_cnt_mode, mode, td_en, td_thresh);
 	}
 	cs->cq_inuse += sch_param->num_L1_queues;
@@ -610,8 +734,10 @@ int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid)
 							__func__, err);
 		return -EINVAL;
 	}
-	printf("%s: ceetm %d lni %d chid %d shaped %d \n", __func__,
+	DPAA2_PMD_DEBUG("%s: ceetm %d lni %d chid %d shaped %d \n", __func__,
 		priv->ceetm_id, priv->lni, l1_sch_handle, 1);
+	printf("done\n");
+
 	return 0;
 }
 
@@ -628,6 +754,110 @@ int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid)
 extern void
 eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd, uint16_t bpid) __attribute__((unused));
+
+static uint16_t dpaa2_dev_tx_reject(void *queue)
+{
+	/* Function receive frames for a given device and VQ */
+	struct dpaa2_queue *dpaa2_q = (struct dpaa2_queue *)queue;
+	struct qbman_result *dq_storage;
+	uint32_t fqid = dpaa2_q->fqid;
+	int ret, num_pulled;
+	uint8_t pending, status;
+	struct qbman_swp *swp;
+	const struct qbman_fd *fd, *next_fd;
+	struct qbman_pull_desc pulldesc;
+	struct qbman_release_desc releasedesc;
+	uint32_t bpid;
+	uint64_t buf;
+
+	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
+		ret = dpaa2_affine_qbman_swp();
+		if (ret) {
+			DPAA2_PMD_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
+			return 0;
+		}
+	}
+	swp = DPAA2_PER_LCORE_PORTAL;
+
+	rte_spinlock_lock(&err_q_lock);
+	do {
+		dq_storage = dpaa2_q->q_storage->dq_storage[0];
+		qbman_pull_desc_clear(&pulldesc);
+		qbman_pull_desc_set_fq(&pulldesc, fqid);
+		qbman_pull_desc_set_storage(&pulldesc, dq_storage,
+			(size_t)(DPAA2_VADDR_TO_IOVA(dq_storage)), 1);
+		qbman_pull_desc_set_numframes(&pulldesc, dpaa2_dqrr_size);
+
+		while (1) {
+			if (qbman_swp_pull(swp, &pulldesc)) {
+				DPAA2_PMD_DP_DEBUG("VDQ command is not issued."
+					"QBMAN is busy\n");
+				/* Portal was busy, try again */
+				continue;
+			}
+			break;
+		}
+
+		rte_prefetch0((void *)((size_t)(dq_storage + 1)));
+		/* Check if the previous issued command is completed. */
+		while (!qbman_check_command_complete(dq_storage))
+			;
+
+		num_pulled = 0;
+		pending = 1;
+		do {
+			/* Loop until the dq_storage is updated with
+			 * new token by QBMAN
+			 */
+			while (!qbman_check_new_result(dq_storage))
+				;
+			rte_prefetch0((void *)((size_t)(dq_storage + 2)));
+			/* Check whether Last Pull command is Expired and
+			 * setting Condition for Loop termination
+			 */
+			if (qbman_result_DQ_is_pull_complete(dq_storage)) {
+				pending = 0;
+				/* Check for valid frame. */
+				status = qbman_result_DQ_flags(dq_storage);
+				if (unlikely((status &
+					QBMAN_DQ_STAT_VALIDFRAME) == 0))
+					continue;
+			}
+			fd = qbman_result_DQ_fd(dq_storage);
+
+			next_fd = qbman_result_DQ_fd(dq_storage + 1);
+			/* Prefetch Annotation address for the parse results */
+			rte_prefetch0((void *)(size_t)
+				(DPAA2_GET_FD_ADDR(next_fd) +
+				DPAA2_FD_PTA_SIZE + 16));
+
+			bpid = DPAA2_GET_FD_BPID(fd);
+
+			/* Create a release descriptor required for releasing
+			 * buffers into QBMAN
+			 */
+			qbman_release_desc_clear(&releasedesc);
+			qbman_release_desc_set_bpid(&releasedesc, bpid);
+
+			buf = DPAA2_GET_FD_ADDR(fd);
+			/* feed them to bman */
+			do {
+				ret = qbman_swp_release(swp, &releasedesc,
+							&buf, 1);
+			} while (ret == -EBUSY);
+
+			dq_storage++;
+			num_pulled++;
+		} while (pending);
+
+	/* Last VDQ provided all packets and more packets are requested */
+	} while (num_pulled == dpaa2_dqrr_size);
+	rte_spinlock_unlock(&err_q_lock);
+
+	return 0;
+}
 
 uint16_t dpaa2_dev_qos_tx( qhandle_t q_handle,
 			struct rte_mbuf **bufs,
@@ -651,10 +881,7 @@ uint16_t dpaa2_dev_qos_tx( qhandle_t q_handle,
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	uint32_t flags[MAX_TX_RING_SLOTS] = {0};
 
-
-	struct dpaa2_queue *dpaa2_q = eth_data->tx_queues[cq->conf_q_id];
-	priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
-	dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
+	dpaa2_dev_tx_reject(reject_frames_queue);
 
 	DPAA2_PMD_DP_DEBUG("%s: sending traffic on dev %s port %d hw_id %d \n",
 			__func__, eth_data->name , eth_data->port_id, priv->hw_id);
@@ -672,8 +899,6 @@ uint16_t dpaa2_dev_qos_tx( qhandle_t q_handle,
 	DPAA2_PMD_DP_DEBUG("===> eth_data =%p, fqid =%d\n",
 			eth_data, cq->vrid);
 
-	if (priv->flags & DPAA2_TX_CONF_ENABLE)
-		dpaa2_dev_tx_conf(priv->tx_conf_vq[cq->cqid]);
 	/*Prepare enqueue descriptor*/
 	qbman_eq_desc_clear(&eqdesc);
 	qbman_eq_desc_set_no_orp(&eqdesc, DPAA2_EQ_RESP_ERR_FQ);

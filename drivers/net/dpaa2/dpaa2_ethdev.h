@@ -10,6 +10,7 @@
 
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_pmd_dpaa2.h>
+#include <rte_spinlock.h>
 
 #include <dpaa2_hw_pvt.h>
 
@@ -116,6 +117,8 @@ extern enum rte_filter_type dpaa2_filter_type;
 
 #define IP_ADDRESS_OFFSET_INVALID (-1)
 
+extern rte_spinlock_t err_q_lock;
+
 struct dpaa2_key_info {
 	uint8_t key_offset[DPKG_MAX_NUM_OF_EXTRACTS];
 	uint8_t key_size[DPKG_MAX_NUM_OF_EXTRACTS];
@@ -164,6 +167,8 @@ struct dpaa2_dev_priv {
 	uint8_t cgid_in_use[MAX_RX_QUEUES];
 	uint16_t ceetm_id; /** CEETM index */
 	uint16_t lni;	/**< CEETM LNI index */
+	uint16_t icid;
+	uint16_t ifpid;
 
 	struct extract_s extract;
 

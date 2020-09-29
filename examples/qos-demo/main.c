@@ -42,8 +42,6 @@
 
 #include "qos.h"
 
-#define OLD_CODE 1
-
 static volatile bool force_quit;
 
 /* MAC updating enabled by default */
@@ -118,6 +116,7 @@ cmd_help(void)
 	printf("************** CMDline help **************\n\n");
 	printf("q			: Quit the application\n");
 	printf("qos			: Print all QoS data\n");
+	printf("buffers			: Available buffers count\n");
 	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n");
 	printf("sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and\n"
 						    "\t\t\t\tWRR to SP on Level1 dynamically.\n"
@@ -222,8 +221,6 @@ get_vlan_id(struct rte_mbuf *m, unsigned *vlan_id, unsigned *prio)
 
 		*prio = rte_be_to_cpu_16(vh->vlan_tci) >> 13;
 		*vlan_id = rte_be_to_cpu_16(vh->vlan_tci) & 0xfff;
-
-//		printf("vlan_id = %d, prio = %d, tci = %d\n", *vlan_id, *prio, rte_be_to_cpu_16(vh->vlan_tci));
 	} else {
 		return -1;
 	}
@@ -256,7 +253,7 @@ l2fwd_simple_forward(struct rte_mbuf *m,
 
 	c_data = &q_data.l1[map_l1_port[l1_id]];
 	if (priority >= c_data->q_count) {
-		printf("No queue vailable for priority = %d, max queues =%d in L1 sched. ID= %d, dropping it.\n", priority, c_data->q_count, c_data->id);
+		printf("No queue available for priority = %d, max queues =%d in L1 sched. ID= %d, dropping it.\n", priority, c_data->q_count, c_data->id);
 		rte_pktmbuf_free(m);
 		return;
 	}
@@ -705,9 +702,6 @@ main(int argc, char **argv)
 	/* Initialise each port */
 	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_rxconf rxq_conf;
-#if OLD_CODE
-		struct rte_eth_txconf txq_conf;
-#endif
 		struct rte_eth_conf local_port_conf = port_conf;
 		struct rte_eth_dev_info dev_info;
 
@@ -764,21 +758,12 @@ main(int argc, char **argv)
 
 		/* init one TX queue on each port */
 		fflush(stdout);
-#if OLD_CODE
-		txq_conf = dev_info.default_txconf;
-		txq_conf.offloads = local_port_conf.txmode.offloads;
-		for (int i = 0; i < L1_MAX_QUEUES; i++) {
-			ret = rte_eth_tx_queue_setup(portid, i, nb_txd,
-					rte_eth_dev_socket_id(portid),
-					&txq_conf);
-			if (ret < 0)
-				rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
-					ret, portid);
 
-			init_ceetm_res(portid, i);
-		}
+		/* Intialialize QoS resources */
+		ret = dpaa2_qos_init(portid);
+		if (ret)
+			rte_exit(EXIT_FAILURE, "Error in QoS intialisation\n");
 
-#endif
 		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
 					     0);
 		if (ret < 0)
@@ -826,10 +811,6 @@ main(int argc, char **argv)
 	struct dpaa2_shaper_params shaper;
 
 	memset(&shaper, 0, sizeof(struct dpaa2_shaper_params));
-	/* Initialise QoS */
-	ret = dpaa2_qos_init();
-	if (ret)
-		rte_exit(EXIT_FAILURE, "Error in QoS intialisation\n");
 
 	/* configure Level 2 schedulers */
 	for (int k = 0; k < q_data.l2_count; k++) {
@@ -1010,7 +991,10 @@ main(int argc, char **argv)
 					continue;
 				}
 
-				printf("Current mode = %d, new mode = %d and queues = %d\n", l1_data->mode, prio, l1_data->q_count);
+				printf("Current mode = %s, new mode = %s and queues = %d\n",
+					(l1_data->mode == SCHED_WRR) ? "WRR" : "STRICT",
+					(prio) ? "WRR" : "STRICT",
+					l1_data->q_count);
 				if (prio == SCHED_WRR) {
 					char *w_token;
 					unsigned int ii = 0, error = 0;
@@ -1081,6 +1065,8 @@ main(int argc, char **argv)
 			} else if (!strcmp(key_token, "qos\n")) {
 				print_qos();
 				print_routes();
+			} else if (!strcmp(key_token, "buffers\n")) {
+				printf("Available buffers count = %d\n", rte_mempool_avail_count(l2fwd_pktmbuf_pool));
 			} else {
 				printf("not a valid command\n");
 				cmd_help();

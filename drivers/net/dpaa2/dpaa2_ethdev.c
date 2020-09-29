@@ -33,6 +33,8 @@
 #define DRIVER_NO_PREFETCH_MODE "drv_no_prefetch"
 #define DRIVER_TX_CONF "drv_tx_conf"
 
+rte_spinlock_t err_q_lock;
+
 /* Supported Rx offloads */
 static uint64_t dev_rx_offloads_sup =
 		DEV_RX_OFFLOAD_CHECKSUM |
@@ -2588,6 +2590,8 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	/* CEETM parameter */
 	priv->lni = attr.lni;
 	priv->ceetm_id = attr.ceetm_id << 4;
+	priv->ifpid = attr.ifpid;
+	priv->icid = attr.icid;
 
 	priv->flags = 0;
 #if defined(RTE_LIBRTE_IEEE1588)
@@ -2862,6 +2866,8 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
+
+	rte_spinlock_init(&err_q_lock);
 
 	rte_eth_dev_release_port(eth_dev);
 	return diag;

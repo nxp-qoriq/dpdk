@@ -62,10 +62,13 @@ struct dpaa2_shaper_params {
  *
  * Initialize DPAA2 CEETM/QoS resources.
  *
+ * @param portid
+ *    ID of the port in context.
+ *
  * @return
  *    0 in case of success, Negative in case of failure.
  */
-int32_t dpaa2_qos_init(void);
+int32_t dpaa2_qos_init(uint16_t portid);
 
 
 /**
@@ -74,10 +77,13 @@ int32_t dpaa2_qos_init(void);
  *
  * De-initialize and reset all the allocated DPAA2 CEETM/QoS resources.
  *
+ * @param portid
+ *    ID of the port in context.
+ *
  * @return
  *    none
  */
-void dpaa2_qos_deinit(void);
+void dpaa2_qos_deinit(uint16_t portid);
 
 
 /**
@@ -196,11 +202,4 @@ int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
 int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
                         struct dpaa2_sch_params *sch_param);
 
-/**
- * TODO
- * This is a temporary API for resouce intialization.
- * It will be removed, once we done the proper resource
- * intialization.
- */
-int init_ceetm_res(uint16_t portid, uint16_t q_id);
 #endif /* _DPAA2_QOS_H */
