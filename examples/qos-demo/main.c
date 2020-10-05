@@ -608,6 +608,10 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Invalid L2FWD arguments\n");
 	printf("MAC updating %s\n", mac_updating ? "enabled" : "disabled");
 
+	/* zero core is required for command-line interface */
+	if (rte_lcore_is_enabled(0) == false)
+		rte_exit(EXIT_FAILURE, "Core 0 is disabled\n");
+
 	memset(&q_data, 0, sizeof(q_data));
 	ret = qos_data_read(qos_file, &q_data);
 	if (ret < 0)

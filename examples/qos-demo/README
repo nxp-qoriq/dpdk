@@ -46,7 +46,9 @@ EXECUTION COMMANDS:
 . ./dynamic_dpl.sh dpmac.5 dpmac.6
 ./qos-demo -c 0x7 -- -p 0x3 –f “./input.data”
 
--c is coremask, Please note that one extra core is required for command prompt.
+-c is coremask, Please note that number of cores in coremask must be
+	equal to number of ports plus 1 extra core 0.
+	core 0 is required for command prompt, so it must be present in coremask.
 -p is port mask
 -f is input file name of QoS data
 
