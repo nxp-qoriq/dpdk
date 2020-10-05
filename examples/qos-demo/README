@@ -14,7 +14,8 @@ VLAN header.
 /*********************************************************/
 SUPPORTED FEATURES:
 
-* Two Level2 and two Level1 schedulers can be configured
+* Many Level2 and many Level1 schedulers can be configured. Resources
+  availability depends upon the MC DPC file.
 * 8 Class queue per Level1 scheduler are supported.
 * User can configure STRICT/WRR scheduling on Level1 and
   Shaper (CIR /EIR) on Level1 and Level2.
@@ -35,10 +36,14 @@ make -C examples/qos-demo/
 
 
 /*********************************************************/
+PREREQUISITES:
+* Port links should be up before running "qos-demo".
+* dynamic_dpl.sh script to create required resources.
+
+/*********************************************************/
 EXECUTION COMMANDS:
 
-. ./dynamic_dpl.sh dpmac.3 dpmac.4
-export DPAA2_TX_CONF=1
+. ./dynamic_dpl.sh dpmac.5 dpmac.6
 ./qos-demo -c 0x7 -- -p 0x3 –f “./input.data”
 
 -c is coremask, Please note that one extra core is required for command prompt.
@@ -53,15 +58,18 @@ On executing qos-demo application, user will see a command line prompt with symb
 where user can give some commands to the application at run-time.
 Below are some supported commands:
 
-q                       : Quit the application
-move <l1_id> <l2_id>    : Move one L1 instance from one L2 to another L2 instance,
-			  where l1_id and l2_id both must exist in the application,
-			  e.g: move 0 1 : It will attach L1 instance whose ID is 0 to
-			  to L2 instance whose ID is 1.
-sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and WRR to SP
-				    on Level1 dynamically.
-				    e.g sched 0 STRICT
-					sched 0 WRR 100,200,300
+q			: Quit the application
+qos			: Print all QoS data
+buffers			: Available buffers count
+move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance,
+			where l1_id and l2_id both must exist in the application,
+			e.g: move 0 1 : It will attach L1 instance whose ID is 0 to
+			to L2 instance whose ID is 1.
+sched <l1_id> STRICT/WRR <weight>	:
+			Switching scheduling from SP to WRR and WRR to SP
+			on Level1 dynamically.
+			e.g sched 0 STRICT
+			sched 0 WRR 100,200,300
 
 
 /*********************************************************/
@@ -76,25 +84,26 @@ first keyword must be "L2". Data should be given in “keyword=value” form, wh
 must be in the next line.
 
 ######################### L1 Scheduler keywords description: #####################
-ID: Unique ID within Level 1 schedulers, starting from 0.
-CIR: Committed information rate, in Mbps.
+ID	: Unique ID within Level 1 schedulers, starting from 0.
+CIR	: Committed information rate, in Mbps.
 CIR_SIZE: CIR burst size in Kbps.
-EIR: Excess information rate, in Mbps.
+EIR	: Excess information rate, in Mbps.
 EIR_SIZE: EIR burst size in Kbps.
-COUPLED: Use Commit and Excess rate shaper in coupled manner. 1 mean coupled and 0 mean non-coupled.
+COUPLED	: Use Commit and Excess rate shaper in coupled manner. 1 mean coupled and 0 mean non-coupled.
 CQ_COUNT: Number of class queues.
-MODE: STRICT or WRR. 
-WEIGHT: Valid in case mode is "WRR". values must be in comma separated and equal to CQ_COUNT.
-L2_ID: ID of L2 scheduler to which it will be attached.
+MODE	: STRICT or WRR.
+WEIGHT	: Valid in case mode is "WRR". values must be comma separated and equal to CQ_COUNT.
+	Accepted range is 100 - 24800.
+L2_ID	: ID of L2 scheduler to which it will be attached.
 
 
 ############################ L2 Scheduler keywords description: #####################
-ID: Unique ID within Level 2 schedulers, starting from 0
-CIR: Committed information rate, in Mbps.
+ID	: Unique ID within Level 2 schedulers, starting from 0
+CIR	: Committed information rate, in Mbps.
 CIR_SIZE: CIR burst size in Kbps.
-EIR: Excess information rate, in Mbps.
+EIR	: Excess information rate, in Mbps.
 EIR_SIZE: EIR burst size in Kbps.
-COUPLED: Use Commit and Excess rate shaper in coupled manner (1 or 0)
+COUPLED	: Use Commit and Excess rate shaper in coupled manner (1 or 0)
 PORT_IDX: port index (refer -p option of command line)
 
 ########################### Congestion management ####################################
