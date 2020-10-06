@@ -1,8 +1,16 @@
 DPDK_20.0 {
 	global:
 
+	dpaa2_add_L1_sch;
+	dpaa2_add_L2_sch;
+	dpaa2_cfg_L1_shaper;
+	dpaa2_cfg_L2_shaper;
+	dpaa2_dev_qos_tx;
 	dpaa2_eth_eventq_attach;
 	dpaa2_eth_eventq_detach;
+	dpaa2_move_L1_sch;
+	dpaa2_qos_init;
+	dpaa2_reconf_L1_sch;
 
 	local: *;
 };
