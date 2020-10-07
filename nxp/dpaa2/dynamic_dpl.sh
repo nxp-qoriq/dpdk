@@ -75,6 +75,9 @@ script help :----->
 						Default is disabled.
 						Only 2 DPNIs can be created in this mode.
 						e.g. export ENABLE_ORDERED_QUEUE=1
+		ENABLE_QOS	   = Enable this to create required resources for QoS.
+					e.g. export ENABLE_QOS=1
+
 	/**DPNI**:-->
 		MAX_QUEUES         = max number of Rx/Tx Queues on DPNI.
 					Set the parameter using below command:
@@ -286,7 +289,13 @@ get_dpni_parameters() {
 	if [[ -z "$DPNI_OPTIONS" ]]
 	then
 		#enable custom cgr to configure per queue cgr based taildrop
-		DPNI_OPTIONS="DPNI_OPT_SINGLE_SENDER,DPNI_OPT_CUSTOM_CG"
+		if [[ "$ENABLE_QOS" == "1" ]]
+		then
+			 DPNI_OPTIONS="DPNI_OPT_NO_TX"
+		else
+			 DPNI_OPTIONS="DPNI_OPT_SINGLE_SENDER"
+		fi
+		DPNI_OPTIONS="$DPNI_OPTIONS,DPNI_OPT_CUSTOM_CG"
 
 		if [[ $board_type != "1088" ]]
 		then
@@ -296,6 +305,7 @@ get_dpni_parameters() {
 		then
 			DPNI_OPTIONS="$DPNI_OPTIONS,DPNI_OPT_HAS_OPR,DPNI_OPT_OPR_PER_TC"
 		fi
+		echo "DPNI options " $DPNI_OPTIONS >> dynamic_dpl_logs
 		NEWDPNI_OPTIONS=1
 	fi
 	if [[ -z "$DPNI_NORMAL_BUF" ]]
@@ -858,10 +868,13 @@ then
 	done;
 
 	#/* DPIO objects creation*/
-	## Create 1 privilaged portal for CEETM (QoS) support
-	DPIO=$(restool -s dpio create --options=DPIO_OPT_PRIVILEGED --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)
-	echo "PRIVILEGED " $DPIO "Created" >> dynamic_dpl_logs
-	obj_assign $DPIO
+	if [[ "$ENABLE_QOS" == "1" ]]
+	then
+		## Create 1 privilaged portal for CEETM (QoS) support
+		DPIO=$(restool -s dpio create --options=DPIO_OPT_PRIVILEGED --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)
+		echo "PRIVILEGED " $DPIO "Created" >> dynamic_dpl_logs
+		obj_assign $DPIO
+	fi
 	for i in $(seq 1 ${DPIO_COUNT}); do
 		## Create all as privilaged portal for CEETM (QoS) support
 		DPIO=$(restool -s dpio create --channel-mode=DPIO_LOCAL_CHANNEL --num-priorities=$DPIO_PRIORITIES --container=$DPRC)

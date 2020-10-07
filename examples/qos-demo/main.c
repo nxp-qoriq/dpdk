@@ -729,7 +729,7 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
-		ret = rte_eth_dev_configure(portid, 1, L1_MAX_QUEUES, &local_port_conf);
+		ret = rte_eth_dev_configure(portid, 1, 0, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, portid);

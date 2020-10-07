@@ -43,6 +43,7 @@ PREREQUISITES:
 /*********************************************************/
 EXECUTION COMMANDS:
 
+export ENABLE_QOS=1
 . ./dynamic_dpl.sh dpmac.5 dpmac.6
 ./qos-demo -c 0x7 -- -p 0x3 –f “./input.data”
 
