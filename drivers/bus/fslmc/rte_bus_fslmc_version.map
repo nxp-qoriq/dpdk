@@ -56,7 +56,9 @@ DPDK_20.0 {
 	qbman_cchannel_shaper_configure;
 	qbman_ccgr_configure;
 	qbman_ccgr_query;
+	qbman_ccgr_query_i_cnt;
 	qbman_ceetmid_decompose;
+	qbman_ceetm_statistics_query;
 	qbman_check_command_complete;
 	qbman_check_new_result;
 	qbman_cgr_attr_get_mode;
@@ -77,6 +79,7 @@ DPDK_20.0 {
 	qbman_cscheduler_set_prio_a;
 	qbman_cscheduler_query;
 	qbman_cq_configure;
+	qbman_cq_query_pending_frame;
 	qbman_dct_configure;
 	qbman_eq_desc_clear;
 	qbman_eq_desc_set_dca;

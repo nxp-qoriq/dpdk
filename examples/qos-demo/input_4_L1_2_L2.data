@@ -58,13 +58,13 @@ ID=
 0
 
 CIR=
-2
+4
 
 CIR_SIZE=
 64
 
 EIR=
-2
+4
 
 EIR_SIZE=
 64
@@ -88,16 +88,16 @@ ID=
 1
 
 CIR=
-2
+6
 
 CIR_SIZE=
-64
+128
 
 EIR=
-2
+6
 
 EIR_SIZE=
-64
+128
 
 COUPLED=
 1

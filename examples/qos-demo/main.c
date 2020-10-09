@@ -114,14 +114,23 @@ static void
 cmd_help(void)
 {
 	printf("************** CMDline help **************\n\n");
-	printf("q			: Quit the application\n");
-	printf("qos			: Print all QoS data\n");
-	printf("buffers			: Available buffers count\n");
-	printf("move <l1_id> <l2_id>	: Move one L1 instance from one L2 to another L2 instance\n");
-	printf("sched <l1_id> STRICT/WRR <weight> : Switching scheduling from SP to WRR and\n"
-						    "\t\t\t\tWRR to SP on Level1 dynamically.\n"
-						    "\t\t\t\te.g sched 0 STRICT\n"
-						    "\t\t\t\tsched 0 WRR 100,200,300\n\n");
+	printf("q				: Quit the application\n");
+	printf("qos				: Print all QoS data\n");
+	printf("buffers				: Available buffers count\n");
+	printf("stats <l1_id> <que_idx> <clear>	: Per queue statistics and latency\n"
+						"\t\t\t\t  l1_id  = Level1 ID\n"
+						"\t\t\t\t  que_idx= Queue Index\n"
+						"\t\t\t\t  clear  = Clear the statistics after read\n"
+						"\t\t\t\t\t   0 means no clear, 1 means clear\n");
+	printf("stats_all <clear>		: All queues statistics and latency\n"
+						"\t\t\t\t  clear  = Clear the statistics after read\n"
+						"\t\t\t\t\t   0 means no clear, 1 means clear\n");
+	printf("move <l1_id> <l2_id>		: Move one L1 instance from one L2 to another L2 instance\n");
+	printf("sched <l1_id> STRICT/WRR <weight> :\n"
+						"\t\t\t\t  Switching scheduling from SP to WRR and\n"
+						"\t\t\t\t  WRR to SP on Level1 dynamically.\n"
+						"\t\t\t\t  e.g sched 0 STRICT\n"
+						"\t\t\t\t  sched 0 WRR 100,200,300\n\n");
 }
 
 static void
@@ -1069,6 +1078,130 @@ main(int argc, char **argv)
 			} else if (!strcmp(key_token, "qos\n")) {
 				print_qos();
 				print_routes();
+			} else if (!strcmp(key_token, "stats")) {
+				uint16_t cq_idx;
+				uint64_t start_time = 0, last_time = 0;
+				struct dpaa2_qos_stats stats;
+				int clear = 0;
+
+				token = strtok(NULL, " ");
+				l1_id = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, " ");
+				cq_idx = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument %s\n", token);
+					cmd_help();
+					continue;
+				}
+
+				token = strtok(NULL, "\n");
+				clear = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument\n");
+					cmd_help();
+					continue;
+				}
+
+				if (clear != 0 && clear !=1) {
+					printf("Argument 'clear' is not valid = %d\n", clear);
+					cmd_help();
+					continue;
+				}
+
+				for (int k = 0; k < q_data.l1_count; k++) {
+                                        if (q_data.l1[k].id == l1_id) {
+                                                l1_data =  &q_data.l1[k];
+                                                break;
+                                        }
+                                }
+                                if (l1_data == NULL) {
+                                        printf("%d L1 id is not present\n", l1_id);
+                                        cmd_help();
+                                        continue;
+                                }
+
+				if (cq_idx >= l1_data->q_count) {
+                                        printf("CQ index %d is invalid\n", cq_idx);
+                                        cmd_help();
+                                        continue;
+				}
+				start_time = rte_rdtsc_precise();
+
+				ret = dpaa2_get_qos_stats(l1_data->port_idx, l1_data->channel_id,
+							  l1_data->cq[cq_idx], &stats, clear);
+				if (ret)
+					continue;
+
+				last_time = rte_rdtsc_precise() - start_time;
+				printf("Dequeued frames =\t%lu\nDequeued Bytes =\t%lu\n"
+					"Frames in queue =\t%u\n",
+					stats.dq_frames, stats.dq_bytes, stats.q_frames);
+				printf("Latency = %lf us\n", (double)(last_time * 1000000) /(double)rte_get_tsc_hz());
+			} else if (!strcmp(key_token, "stats_all")) {
+				struct dpaa2_qos_stats stats[L1_MAX_CHANNELS][L1_MAX_QUEUES];
+				uint64_t start_time = 0, last_time = 0;
+				FILE *fp;
+				double latency;
+				int clear = 0;
+
+				token = strtok(NULL, "\n");
+				clear = strtoul(token, &err, 0);
+				ret = ((err == NULL) || (*err != '\0')) ? -1 : 0;
+				if (ret) {
+					printf("Not a valid argument\n");
+					cmd_help();
+					continue;
+				}
+
+				if (clear != 0 && clear !=1) {
+					printf("Argument 'clear' is not valid = %d\n", clear);
+					cmd_help();
+					continue;
+				}
+
+				start_time = rte_rdtsc_precise();
+				for (int k = 0; k < q_data.l1_count; k++) {
+					for (unsigned int j = 0; j < q_data.l1[k].q_count; j++) {
+						ret = dpaa2_get_qos_stats(q_data.l1[k].port_idx, q_data.l1[k].channel_id,
+								q_data.l1[k].cq[j], &stats[k][j], clear);
+						if (ret)
+							continue;
+					}
+				}
+				last_time = rte_rdtsc_precise() - start_time;
+
+				latency = (double)(last_time * 1000000) /(double)rte_get_tsc_hz();
+				printf("Latency = %lf us\n", latency);
+				fp = fopen("qos-demo-stats", "wb");
+				if (!fp) {
+					printf("File open failed\n");
+					fclose(fp);
+					continue;
+				}
+				fprintf(fp, "Latency = %lf us\n\n", latency);
+				fprintf(fp, "/*********************************************/\n");
+				for (int k = 0; k < q_data.l1_count; k++) {
+					fprintf(fp, "Level1 ID = %d\n", q_data.l1[k].id);
+					for (unsigned int j = 0; j < q_data.l1[k].q_count; j++) {
+						fprintf(fp, "Queue index = %d\n", j);
+						fprintf(fp, "\tDequeued frames =\t%lu\n\tDequeued Bytes =\t%lu"
+							"\n\tFrames in queue =\t%u\n\n",
+							stats[k][j].dq_frames, stats[k][j].dq_bytes,
+							stats[k][j].q_frames);
+					}
+					fprintf(fp, "\n\n");
+				}
+				fclose(fp);
+				printf("Please see the file 'qos-demo-stats' for statistics\n");
 			} else if (!strcmp(key_token, "buffers\n")) {
 				printf("Available buffers count = %d\n", rte_mempool_avail_count(l2fwd_pktmbuf_pool));
 			} else {

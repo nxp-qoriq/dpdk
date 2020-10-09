@@ -8,6 +8,7 @@ DPDK_20.0 {
 	dpaa2_dev_qos_tx;
 	dpaa2_eth_eventq_attach;
 	dpaa2_eth_eventq_detach;
+	dpaa2_get_qos_stats;
 	dpaa2_move_L1_sch;
 	dpaa2_qos_init;
 	dpaa2_reconf_L1_sch;

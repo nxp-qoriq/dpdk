@@ -11,6 +11,7 @@
 
 #define INVALD_VAL		0xFF
 #define L1_MAX_QUEUES		8
+#define L1_MAX_CHANNELS		64
 
 typedef int32_t handle_t;
 typedef int64_t qhandle_t;
@@ -56,6 +57,17 @@ struct dpaa2_shaper_params {
 	uint32_t oal;		/* Overhead accounting length, requires for shaper adjusment */
 	int32_t  cpl;		/* 1: CR and ER are coupled;  0: CR and ER are not coupled. */
 };
+
+/**
+ * QoS statistics
+ */
+struct dpaa2_qos_stats {
+	uint64_t dq_frames;	/* Number of frames dequeued */
+	uint64_t dq_bytes;	/* Total bytes dequeued */
+	uint32_t q_frames;	/* Number of frames present in the queue */
+	uint64_t q_bytes;	/* Total bytes present in the queue */
+};
+
 /**
  * @warning
  * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
@@ -201,5 +213,10 @@ int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
 
 int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
                         struct dpaa2_sch_params *sch_param);
+
+int32_t dpaa2_get_qos_stats(uint16_t portid, handle_t ch_id,
+			    qhandle_t q_handle,
+			    struct dpaa2_qos_stats *stats,
+			    int clear);
 
 #endif /* _DPAA2_QOS_H */

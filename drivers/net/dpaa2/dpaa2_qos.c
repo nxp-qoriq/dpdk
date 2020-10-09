@@ -132,7 +132,6 @@ int32_t dpaa2_qos_init(uint16_t portid)
 
 int init_ceetm_res(uint16_t portid)
 {
-
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
         struct rte_eth_dev_data *eth_data = eth_dev->data;
         struct dpaa2_dev_priv *priv = eth_data->dev_private;
@@ -192,7 +191,7 @@ int init_ceetm_res(uint16_t portid)
 	if (ceetm[instanceid].init == 1)
 		return 0;
 
-	lfq_count =  ceetm[ceetmid].lfq_count;
+	lfq_count =  ceetm[instanceid].lfq_count;
 	if (instanceid == 0) {
 		channel_base = CEETM_CHANNEL_BASE0;
 	} else {
@@ -337,6 +336,42 @@ void dpaa2_qos_deinit(__rte_unused uint16_t portid)
 	/* TODO */
 }
 
+int32_t dpaa2_get_qos_stats(uint16_t portid, handle_t ch_id,
+			    qhandle_t q_handle,
+			    struct dpaa2_qos_stats *stats, int clear)
+{
+	int ret;
+	struct class_q *cq = (struct class_q *)q_handle;
+	struct dpaa2_dev_priv *priv;
+
+	priv = dpaa2_get_dev_priv(portid);
+	if (NULL == priv)
+		return -EINVAL;
+
+	/* clear == 0 == query_dq_statistics
+	 * clear == 1 == query_and_clear_dq_statistics
+	 */
+	ret = qbman_ceetm_statistics_query(p_swp, priv->ceetm_id, cq->cqid, clear,
+				     &stats->dq_frames, &stats->dq_bytes);
+	if (ret) {
+		printf("Unable to retrieve statistics\n");
+		return ret;
+	}
+	ret = qbman_cq_query_pending_frame(p_swp, priv->ceetm_id, cq->cqid, &stats->q_frames);
+	if (ret) {
+		printf("Unable to retrieve queue statistics\n");
+		return ret;
+	}
+
+	ret = qbman_ccgr_query_i_cnt(p_swp, priv->ceetm_id, ch_id, cq->ccgrid,
+			       &stats->q_bytes);
+	if (ret) {
+		printf("Unable to retrieve bytes in the queue\n");
+		return ret;
+	}
+
+	return 0;
+}
 
 int32_t dpaa2_add_L2_sch(uint16_t portid)
 {
@@ -700,7 +735,7 @@ int32_t dpaa2_cfg_L1_shaper(uint16_t portid,
 	qbman_shaper_set_commit_rate(&attr, bps);
 	burst_size = qbman_fix_burst_size(sh_param->c_bs * 1000, bps);
 	qbman_shaper_set_crtbl(&attr, burst_size);
-	printf("%s: PortId %d - cr %ld cbs %d\n", __func__,
+	DPAA2_PMD_INFO("%s: PortId %d - cr %ld cbs %d\n", __func__,
 					portid, bps, burst_size);
 	bps = (uint64_t)(sh_param->e_rate * 1000000.0);
 	qbman_shaper_set_excess_rate(&attr, bps);
