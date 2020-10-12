@@ -40,8 +40,9 @@
 
 #define DRV_UT		0
 
-#define CEETM_CHANNEL_BASE0	16
-#define CEETM_CHANNEL_BASE1	20
+/* Please make sure MC hasn't reserved these resources */
+#define CEETM_CHANNEL_BASE0	4
+#define CEETM_CHANNEL_BASE1	0
 #define CEETM_CHANNEL_MAX	32
 
 #define CEETM_LFQ_BASE0		1024
