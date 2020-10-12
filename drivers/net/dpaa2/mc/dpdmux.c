@@ -1308,3 +1308,59 @@ int dpdmux_if_get_taildrop(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t
 	return err;
 }
 
+/**
+ * dpdmux_dump_table() - Dump the content of table_type table into memory.
+ * @mc_io: Pointer to MC portal's I/O object
+ * @cmd_flags: Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token: Token of DPSW object
+ * @table_type: The type of the table to dump
+ * 	- DPDMUX_DMAT_TABLE
+ *	- DPDMUX_MISS_TABLE
+ *	- DPDMUX_PRUNE_TABLE
+ * @table_index: The index of the table to dump in case of more than one table
+ * 	if table_type == DPDMUX_DMAT_TABLE
+ * 		- DPDMUX_HMAP_UNICAST
+ * 		- DPDMUX_HMAP_MULTICAST
+ * 	else 0
+ * @iova_addr: The snapshot will be stored in this variable as an header of struct dump_table_header
+ *             followed by an array of struct dump_table_entry
+ * @iova_size: Memory size allocated for iova_addr
+ * @num_entries: Number of entries written in iova_addr
+ *
+ * Return: Completion status. '0' on Success; Error code otherwise.
+ *
+ * The memory allocated at iova_addr must be zeroed before command execution.
+ * If the table content exceeds the memory size provided the dump will be truncated.
+ */
+int dpdmux_dump_table(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint16_t table_type,
+			 uint16_t table_index,
+			 uint64_t iova_addr,
+			 uint32_t iova_size,
+			 uint16_t *num_entries)
+{
+	struct mc_command cmd = { 0 };
+	int err;
+	struct dpdmux_cmd_dump_table *cmd_params;
+	struct dpdmux_rsp_dump_table *rsp_params;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPDMUX_CMDID_DUMP_TABLE, cmd_flags, token);
+	cmd_params = (struct dpdmux_cmd_dump_table *)cmd.params;
+	cmd_params->table_type = cpu_to_le16(table_type);
+	cmd_params->table_index = cpu_to_le16(table_index);
+	cmd_params->iova_addr = cpu_to_le64(iova_addr);
+	cmd_params->iova_size = cpu_to_le32(iova_size);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	rsp_params = (struct dpdmux_rsp_dump_table *)cmd.params;
+	*num_entries = le16_to_cpu(rsp_params->num_entries);
+
+	return 0;
+}

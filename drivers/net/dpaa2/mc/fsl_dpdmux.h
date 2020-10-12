@@ -509,5 +509,21 @@ int dpdmux_if_set_taildrop(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t
 int dpdmux_if_get_taildrop(struct fsl_mc_io *mc_io, uint32_t cmd_flags, uint16_t token,
 			      uint16_t if_id, struct dpdmux_taildrop_cfg *cfg);
 
+#define DPDMUX_MAX_KEY_SIZE 56
+
+enum dpdmux_table_type {
+	DPDMUX_DMAT_TABLE = 1,
+	DPDMUX_MISS_TABLE = 2,
+	DPDMUX_PRUNE_TABLE = 3,
+};
+
+int dpdmux_dump_table(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 uint16_t table_type,
+			 uint16_t table_index,
+			 uint64_t iova_addr,
+			 uint32_t iova_size,
+			 uint16_t *num_entries);
 
 #endif /* __FSL_DPDMUX_H */

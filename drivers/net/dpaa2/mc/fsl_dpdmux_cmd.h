@@ -71,6 +71,9 @@
 #define DPDMUX_CMDID_IF_SET_TAILDROP		DPDMUX_CMD(0x0bc)
 #define DPDMUX_CMDID_IF_GET_TAILDROP		DPDMUX_CMD(0x0bd)
 
+#define DPDMUX_CMDID_DUMP_TABLE           DPDMUX_CMD(0x0be)
+
+
 #define DPDMUX_MASK(field)        \
 	GENMASK(DPDMUX_##field##_SHIFT + DPDMUX_##field##_SIZE - 1, \
 		DPDMUX_##field##_SHIFT)
@@ -314,5 +317,35 @@ struct dpdmux_rsp_get_taildrop {
 	uint8_t		pad4;
 	uint32_t	threshold;
 };
+
+struct dpdmux_cmd_dump_table {
+	uint16_t table_type;
+	uint16_t table_index;
+	uint32_t pad0;
+	uint64_t iova_addr;
+	uint32_t iova_size;
+};
+
+struct dpdmux_rsp_dump_table {
+	uint16_t num_entries;
+};
+
+struct dpdmux_dump_table_header {
+	uint16_t table_type;
+	uint16_t table_num_entries;
+	uint16_t table_max_entries;
+	uint8_t default_action;
+	uint8_t match_type;
+	uint8_t reserved[24];
+};
+
+struct dpdmux_dump_table_entry {
+	uint8_t key[DPDMUX_MAX_KEY_SIZE];
+	uint8_t mask[DPDMUX_MAX_KEY_SIZE];
+	uint8_t key_action;
+	uint16_t result[3];
+	uint8_t reserved[21];
+};
+
 #pragma pack(pop)
 #endif /* _FSL_DPDMUX_CMD_H */
