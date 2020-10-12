@@ -637,9 +637,17 @@ extern uint16_t qman_pres;
 int qbman_cq_configure(struct qbman_swp *, uint32_t ceetmid, uint16_t cqid,
 		       uint8_t ccgid, int ps, uint8_t pps);
 
+/* Extract the number of frames in the cq from qbman_attr */
+void qbman_cq_attr_get_frm_cnt(struct qbman_attr *d, uint32_t *frm_cnt);
+
 /* query cq and save the query result in qbman_attr */
 int qbman_cq_query(struct qbman_swp *, uint32_t ceetmid, uint16_t cqid,
 		   uint8_t *ccgid, int *ps, struct qbman_attr *attr, uint8_t *pps);
+
+/* query cq and extract the number of pending frames */
+int qbman_cq_query_pending_frame(struct qbman_swp *s, uint32_t ceetmid,
+				 uint16_t cqid,
+				 uint32_t *pending_frame);
 
 /* Get the number of frames in a Class Queue, should be called after
  * qbman_cq_query.
@@ -1015,6 +1023,8 @@ void qbman_ccgr_attr_clear(struct qbman_attr *);
 
 void qbman_ccgr_attr_set_oal(struct qbman_attr *d, uint32_t oal);
 void qbman_ccgr_attr_get_oal(struct qbman_attr *d, uint32_t *oal);
+void qbman_ccgr_attr_get_i_cnt(struct qbman_attr *d, uint64_t *i_cnt);
+void qbman_ccgr_attr_get_a_cnt(struct qbman_attr *d, uint64_t *a_cnt);
 
 /* Congiure/Query CCGR
  * @ceetmid: identifies the CEETM instance with the DCP
@@ -1026,6 +1036,10 @@ int qbman_ccgr_configure(struct qbman_swp *s, uint32_t ceetmid, uint8_t cchannel
 			 uint8_t ccgid, const struct qbman_attr *attr);
 int qbman_ccgr_query(struct qbman_swp *s, uint32_t ceetmid, uint8_t cchannelid,
 		     uint8_t ccgid, struct qbman_attr *attr);
+
+/* This is a qbman_ccgr_query but only extract the i_cnt only, to improve speed. */
+int qbman_ccgr_query_i_cnt(struct qbman_swp *s, uint32_t ceetmid,
+			   uint8_t cchannelid, uint8_t ccgid, uint64_t *i_cnt);
 
 /* Reset the CCGR
  * @ceetmid: identifies the CEETM instance with the DCP

@@ -2577,6 +2577,12 @@ int qbman_cq_configure(struct qbman_swp *s, uint32_t ceetmid, uint16_t cqid,
 }
 
 static struct qb_attr_code code_cq_frm_cnt = QB_CODE(3, 0, 24);
+void qbman_cq_attr_get_frm_cnt(struct qbman_attr *d, uint32_t *frm_cnt)
+{
+	uint32_t *p = ATTR32(d);
+	*frm_cnt = qb_attr_code_decode(&code_cq_frm_cnt, p);
+}
+
 int qbman_cq_query(struct qbman_swp *s, uint32_t ceetmid, uint16_t cqid,
 		   uint8_t *ccgid, int *ps, struct qbman_attr *attr, uint8_t *pps)
 {
@@ -2614,6 +2620,40 @@ int qbman_cq_query(struct qbman_swp *s, uint32_t ceetmid, uint16_t cqid,
 	if (pps)
 		*pps = (uint8_t)(qb_attr_code_decode(&code_cq_pps, p) & 0xff);
 	word_copy(&a[1], &p[1], 15);
+	return 0;
+}
+
+int qbman_cq_query_pending_frame(struct qbman_swp *s, uint32_t ceetmid, uint16_t cqid,
+		   uint32_t *pending_frame)
+{
+	uint32_t *p;
+	uint32_t verb, rslt;
+
+	*pending_frame = 0;
+	p = qbman_swp_mc_start(s);
+	if (!p)
+		return -EBUSY;
+	qb_attr_code_encode(&code_ceetm_id, p, ceetmid);
+	qb_attr_code_encode(&code_ceetm_cqid, p, cqid);
+	p = qbman_swp_mc_complete(s, p, p[0] | QBMAN_MC_CQ_QUERY);
+	if (!p) {
+		pr_err("SWP %d is not responding\n", s->desc.idx);
+		return -EIO;
+	}
+
+	/* Decode the outcome */
+	verb = qb_attr_code_decode(&code_generic_verb, p);
+	rslt = qb_attr_code_decode(&code_generic_rslt, p);
+	BUG_ON(verb != QBMAN_MC_CQ_QUERY);
+
+	/* Determine success or failure */
+	if (unlikely(rslt != QBMAN_MC_RSLT_OK)) {
+		pr_err("Query of CQID 0x%x failed, code=0x%02x\n",
+		       cqid, rslt);
+		return -EIO;
+	}
+	*pending_frame = qb_attr_code_decode(&code_cq_frm_cnt, p);
+
 	return 0;
 }
 
@@ -4214,6 +4254,10 @@ static struct qb_attr_code code_ccgr_ccgid = QB_CODE(0, 16, 4);
 static struct qb_attr_code code_ccgr_cchannelid = QB_CODE(0, 20, 5);
 static struct qb_attr_code code_ccgr_command_type = QB_CODE(0, 30, 2);
 static struct qb_attr_code code_ccgr_oal = QB_CODE(2, 16, 12);
+static struct qb_attr_code code_ccgr_i_cnt_hi = QB_CODE(13, 0, 8);
+static struct qb_attr_code code_ccgr_i_cnt_lo = QB_CODE(12, 0, 32);
+static struct qb_attr_code code_ccgr_a_cnt_hi = QB_CODE(15, 0, 8);
+static struct qb_attr_code code_ccgr_a_cnt_lo = QB_CODE(14, 0, 32);
 
 /* Write-enable bits */
 static struct qb_attr_code code_ccgr_we_oal = QB_CODE(1, 30, 1);
@@ -4234,6 +4278,18 @@ void qbman_ccgr_attr_get_oal(struct qbman_attr *d, uint32_t *oal)
 {
 	uint32_t *p = ATTR32(d);
 	*oal = qb_attr_code_decode(&code_ccgr_oal, p);
+}
+
+void qbman_ccgr_attr_get_i_cnt(struct qbman_attr *d, uint64_t *i_cnt)
+{
+	uint64_t *p = (uint64_t *)ATTR32(d);
+	*i_cnt = qb_attr_code_decode_64(&code_ccgr_i_cnt_lo, p) & 0xFFFFFFFFFF;
+}
+
+void qbman_ccgr_attr_get_a_cnt(struct qbman_attr *d, uint64_t *a_cnt)
+{
+	uint64_t *p = (uint64_t *)ATTR32(d);
+	*a_cnt = qb_attr_code_decode_64(&code_ccgr_a_cnt_lo, p) & 0xFFFFFFFFFF;
 }
 
 int qbman_ccgr_configure(struct qbman_swp *s, uint32_t ceetmid, uint8_t cchannelid,
@@ -4343,6 +4399,48 @@ int qbman_ccgr_query(struct qbman_swp *s, uint32_t ceetmid, uint8_t cchannelid,
 		 */
 		word_copy(&d[i][1], &p[1], 15);
 	}
+	return 0;
+}
+
+int qbman_ccgr_query_i_cnt(struct qbman_swp *s, uint32_t ceetmid,
+		           uint8_t cchannelid, uint8_t ccgid, uint64_t *i_cnt)
+{
+	uint32_t *p;
+	uint32_t verb, rslt;
+	unsigned int i;
+	
+	*i_cnt = 0;
+
+	p = qbman_swp_mc_start(s);
+	if (!p)
+		return -EBUSY;
+
+	qb_attr_code_encode(&code_ccgr_ccgid, p, ccgid);
+	qb_attr_code_encode(&code_ccgr_cchannelid, p, cchannelid);
+	qb_attr_code_encode(&code_ccgr_command_type, p, 0);
+	qb_attr_code_encode(&code_ceetm_id, p, ceetmid);
+
+	p = qbman_swp_mc_complete(s, p, p[0] | QBMAN_MC_CCGR_QUERY);
+	if (!p) {
+		pr_err("SWP %d is not responding\n", s->desc.idx);
+		return -EIO;
+	}
+
+	/* Decode the outcome */
+	verb = qb_attr_code_decode(&code_generic_verb, p);
+	rslt = qb_attr_code_decode(&code_generic_rslt, p);
+	BUG_ON(verb != QBMAN_MC_CCGR_QUERY);
+
+	/* Determine success or failure */
+	if (unlikely(rslt != QBMAN_MC_RSLT_OK)) {
+		pr_err("Query of CCGID 0x%x in Cchannel 0x%x"
+			" failed, verb=0x%02x code=0x%02x\n",
+			ccgid, cchannelid, verb, rslt);
+		return -EIO;
+	}
+	if(i_cnt)
+		*i_cnt = qb_attr_code_decode_64(&code_ccgr_i_cnt_lo,
+						(uint64_t *)p) & 0xFFFFFFFFFF;
 	return 0;
 }
 
@@ -4522,7 +4620,7 @@ int qbman_ceetm_statistics_query(struct qbman_swp *s, uint32_t ceetmid,
 	if (!p)
 		return -EBUSY;
 	qb_attr_code_encode(&code_ceetm_id, p, ceetmid);
-	qb_attr_code_encode(&code_ceetm_cid, p, cid);
+	qb_attr_code_encode(&code_ceetm_cqid, p, cid);
 	qb_attr_code_encode(&code_statistics_query_ct, p, ct);
 	p = qbman_swp_mc_complete(s, p, p[0] | QBMAN_MC_STATISTICS_QUERY);
 	if (!p) {
