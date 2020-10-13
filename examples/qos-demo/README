@@ -21,8 +21,7 @@ SUPPORTED FEATURES:
   Shaper (CIR /EIR) on Level1 and Level2.
 * Dynamic switching of one Level1 instance from one Level2 instance to another Level2 instance.
 * Dynamic switching of SP to WRR and vice versa.
-* Statistics and Latency. (Statistics for total bytes in the queue
-  are not supported)
+* Statistics and Latency.
 
 
 /*********************************************************/
@@ -122,5 +121,5 @@ COUPLED	: Use Commit and Excess rate shaper in coupled manner (1 or 0)
 PORT_IDX: port index (refer -p option of command line)
 
 ########################### Congestion management ####################################
-TAILDROP_TH: Tail-drop threshold value in number of packets.
+TAILDROP_TH: Tail-drop threshold value in number of bytes.
 	     Tail-Drop will be applicable on each CQ configured in the system.

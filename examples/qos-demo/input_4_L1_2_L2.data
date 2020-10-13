@@ -179,4 +179,4 @@ L2_ID=
 
 ############ Congestion Management ############
 TAILDROP_TH=
-16
+1024

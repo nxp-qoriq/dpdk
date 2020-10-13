@@ -868,7 +868,7 @@ main(int argc, char **argv)
 		sch_param.num_L1_queues = q_data.l1[k].q_count;
 		sch_param.q_handle = q_data.l1[k].cq;
 		for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
-			sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
+			sch_param.td_mode[ii] = CONGESTION_UNIT_BYTES;
 			sch_param.td_thresh[ii] = q_data.taildrop_th;
 			if (q_data.l1[k].mode == SCHED_WRR)
 				sch_param.weight[ii] = q_data.l1[k].weight[ii];
@@ -1067,7 +1067,7 @@ main(int argc, char **argv)
 				sch_param.num_L1_queues = l1_data->q_count;
 				sch_param.q_handle = l1_data->cq;
 				for (int ii = 0; ii < sch_param.num_L1_queues; ii++) {
-					sch_param.td_mode[ii] = CONGESTION_UNIT_FRAMES;
+					sch_param.td_mode[ii] = CONGESTION_UNIT_BYTES;
 					sch_param.td_thresh[ii] = q_data.taildrop_th;
 					if (prio == SCHED_WRR)
 						sch_param.weight[ii] = l1_data->weight[ii];
@@ -1143,8 +1143,9 @@ main(int argc, char **argv)
 
 				last_time = rte_rdtsc_precise() - start_time;
 				printf("Dequeued frames =\t%lu\nDequeued Bytes =\t%lu\n"
-					"Frames in queue =\t%u\n",
-					stats.dq_frames, stats.dq_bytes, stats.q_frames);
+					"Frames in queue =\t%u\nBytes in queue =\t%lu\n",
+					stats.dq_frames, stats.dq_bytes, stats.q_frames,
+					stats.q_bytes);
 				printf("Latency = %lf us\n", (double)(last_time * 1000000) /(double)rte_get_tsc_hz());
 			} else if (!strcmp(key_token, "stats_all")) {
 				struct dpaa2_qos_stats stats[L1_MAX_CHANNELS][L1_MAX_QUEUES];
@@ -1194,9 +1195,9 @@ main(int argc, char **argv)
 					for (unsigned int j = 0; j < q_data.l1[k].q_count; j++) {
 						fprintf(fp, "Queue index = %d\n", j);
 						fprintf(fp, "\tDequeued frames =\t%lu\n\tDequeued Bytes =\t%lu"
-							"\n\tFrames in queue =\t%u\n\n",
+							"\n\tFrames in queue =\t%u\n\tBytes in queue =\t%lu\n\n",
 							stats[k][j].dq_frames, stats[k][j].dq_bytes,
-							stats[k][j].q_frames);
+							stats[k][j].q_frames, stats[k][j].q_bytes);
 					}
 					fprintf(fp, "\n\n");
 				}
