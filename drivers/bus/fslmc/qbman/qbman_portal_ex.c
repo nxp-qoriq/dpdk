@@ -1675,6 +1675,43 @@ int qbman_bp_configure(struct qbman_swp *s, uint32_t bpid,
 	return 0;
 }
 
+int qbman_bp_query_num_free_bufs(struct qbman_swp *s, uint32_t bpid,
+				 uint32_t *num_free_bufs)
+{
+	uint32_t *p;
+	uint32_t verb, rslt;
+
+	*num_free_bufs=0;
+
+	/* Start the management command */
+	p = qbman_swp_mc_start(s);
+	if (!p)
+		return -EBUSY;
+
+	/* Encode the caller-provided attributes */
+	qb_attr_code_encode(&code_bp_bpid, p, bpid);
+
+	/* Complete the management command */
+	p = qbman_swp_mc_complete(s, p, p[0] | QBMAN_MC_BP_QUERY);
+	if (!p) {
+		pr_err("SWP %d is not responding\n", s->desc.idx);
+		return -EIO;
+	}
+
+	/* Decode the outcome */
+	verb = qb_attr_code_decode(&code_generic_verb, p);
+	rslt = qb_attr_code_decode(&code_generic_rslt, p);
+	BUG_ON(verb != QBMAN_MC_BP_QUERY);
+
+	/* Determine success or failure */
+	if (unlikely(rslt != QBMAN_MC_RSLT_OK)) {
+		pr_err("Query of BPID 0x%x failed, code=0x%02x\n", bpid, rslt);
+		return -EIO;
+	}
+	*num_free_bufs = qb_attr_code_decode(&code_bp_fill, p);
+	return 0;
+}
+
 int qbman_bp_query(struct qbman_swp *s, uint32_t bpid,
 			struct qbman_attr *a)
 {

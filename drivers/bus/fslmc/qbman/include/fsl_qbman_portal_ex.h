@@ -391,6 +391,14 @@ void qbman_bp_attr_get_dbe(struct qbman_attr *a, int *dbe);
 int qbman_bp_configure(struct qbman_swp *s, uint32_t bpid,
 			    struct qbman_attr *a);
 
+/* Query the buffer pool for the number of free buffers
+ * @s: software portal
+ * @bpid: the buffer pool id
+ * @num_free_bufs: number of free buffers in buffer pool
+ */
+int qbman_bp_query_num_free_bufs(struct qbman_swp *s, uint32_t bpid,
+                   		 uint32_t *num_free_bufs);
+
 /* Query the buffer pool
  * @s: software portal
  * @bpid: the buffer pool id
