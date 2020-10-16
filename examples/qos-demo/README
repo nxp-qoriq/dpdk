@@ -23,6 +23,7 @@ SUPPORTED FEATURES:
 * Dynamic switching of SP to WRR and vice versa.
 * Statistics and latency.
 * Available buffers in pool and latency.
+* Jumbo frames
 
 /*********************************************************/
 DPDK Compilation:
@@ -46,13 +47,14 @@ EXECUTION COMMANDS:
 
 export ENABLE_QOS=1
 . ./dynamic_dpl.sh dpmac.5 dpmac.6
-./qos-demo -c 0x7 -- -p 0x3 –f “./input.data”
+./qos-demo -c 0x7 -- -p 0x3 -j 9600 -f “./input.data”
 
--c is coremask, Please note that number of cores in coremask must be
+-c : coremask, Please note that number of cores in coremask must be
 	equal to number of ports plus 1 extra core 0.
 	core 0 is required for command prompt, so it must be present in coremask.
--p is port mask
--f is input file name of QoS data
+-p : port mask
+-f : input file name of QoS data
+-j : set jumbo packet size
 
 
 /*********************************************************/

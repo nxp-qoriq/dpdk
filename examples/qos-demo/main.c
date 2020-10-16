@@ -52,6 +52,7 @@ static int mac_updating = 1;
 #define MAX_PKT_BURST 32
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 #define MEMPOOL_CACHE_SIZE 256
+#define MAX_JUMBO_SIZE 9600
 
 static int max_burst_size = MAX_PKT_BURST;
 /*
@@ -84,6 +85,8 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.offloads = 0,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -116,7 +119,7 @@ cmd_help(void)
 	printf("************** CMDline help **************\n\n");
 	printf("q				: Quit the application\n");
 	printf("qos				: Print all QoS data\n");
-	printf("buffers				: Available buffers count\n");
+	printf("buffers				: Available buffers count and latency\n");
 	printf("stats <l1_id> <que_idx> <clear>	: Per queue statistics and latency\n"
 						"\t\t\t\t  l1_id  = Level1 ID\n"
 						"\t\t\t\t  que_idx= Queue Index\n"
@@ -139,7 +142,7 @@ print_routes(void)
 	printf("\n######### Traffic Routes #########\n");
 	for (int k = 0; k < MAX_L1; k++) {
 		if (map_l1_port[k] != -1)
-			printf("(VLAN ID = %d) --> Level 1 Scheduler ID=%d "
+			printf("(VLAN ID = %d) --> Level1 ID=%d "
 				"(CQ Select based on Priority field of VLAN "
 				"Header)---> Level2 ID:%d --> Output port:%d\n",
 				100 + k, map_l1_port[k],
@@ -341,13 +344,8 @@ l2fwd_usage(const char *prgname)
 {
 	printf("%s [EAL options] -- -p PORTMASK [-q NQ]\n"
 	       "  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
-	       "  -q NQ: number of queue (=ports) per lcore (default is 1)\n"
-		   "  -T PERIOD: statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
-		   "  --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default)\n"
-		   "      When enabled:\n"
-		   "       - The source MAC address is replaced by the TX port MAC address\n"
-		   "       - The destination MAC address is replaced by 02:00:00:00:00:TX_PORT_ID\n"
-		"  -b NUM: burst size for receive packet (default is 32)\n",
+	       "  -j Jumbo packet size: Enable jumbo and set packet size (max 9600)\n"
+		"  -f QoS policy file\n",
 	       prgname);
 }
 
@@ -407,6 +405,7 @@ static const char short_options[] =
 	"q:"  /* number of queues */
 	"T:"  /* timer period */
 	"b:"  /* burst size */
+	"j:"  /* jumbo packet size */
 	"f:"  /* QoS data file */
 	;
 
@@ -431,7 +430,7 @@ static const struct option lgopts[] = {
 static int
 l2fwd_parse_args(int argc, char **argv)
 {
-	int opt, ret, timer_secs, burst_size;
+	int opt, ret, timer_secs, burst_size, pkt_len;
 	char **argvopt;
 	int option_index;
 	char *prgname = argv[0];
@@ -490,6 +489,20 @@ l2fwd_parse_args(int argc, char **argv)
                                         sizeof(qos_file),
                                         "%s", optarg);
 			printf("QoS data file name = %s\n", qos_file);
+			break;
+
+		/* Jumbo frame support */
+		case 'j':
+			port_conf.rxmode.offloads |=
+				DEV_RX_OFFLOAD_JUMBO_FRAME;
+			pkt_len = (unsigned int)atoi(optarg);
+			if (pkt_len < 64 || pkt_len > MAX_JUMBO_SIZE) {
+				printf("invalid pkt len,"
+					"setting the value to default = %d\n",
+					MAX_JUMBO_SIZE);
+				pkt_len = MAX_JUMBO_SIZE;
+			}
+			port_conf.rxmode.max_rx_pkt_len = pkt_len;
 			break;
 
 		/* long options */
@@ -629,7 +642,7 @@ main(int argc, char **argv)
 	/* Dumping Qos data */
 	print_qos();
 	printf("\n######### Cogestion Mngt. #########\n");
-	printf("Taildrop th. = %d\n\n", q_data.taildrop_th);
+	printf("Taildrop Threshold = %d\n\n", q_data.taildrop_th);
 	/* convert to number of cycles */
 	timer_period *= rte_get_timer_hz();
 
@@ -707,7 +720,8 @@ main(int argc, char **argv)
 
 	/* create the mbuf pool */
 	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
-		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+		MEMPOOL_CACHE_SIZE, 0, port_conf.rxmode.max_rx_pkt_len
+		+ RTE_PKTMBUF_HEADROOM,
 		rte_socket_id());
 	if (l2fwd_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
