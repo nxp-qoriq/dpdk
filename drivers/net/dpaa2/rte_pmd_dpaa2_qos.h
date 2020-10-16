@@ -210,13 +210,68 @@ uint16_t dpaa2_dev_qos_tx(qhandle_t q_handle,
  */
 int dpaa2_move_L1_sch(handle_t l1_sch_handle, uint16_t dst_portid);
 
-
+/**
+ * @warning
+ * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
+ *
+ * Reconfigure Level-1 Scheduler instance
+ *
+ * @param portid
+ *    ID of the port in context.
+ *
+ * @param channel_id
+ *    L1 scheduler instance ID.
+ *
+ * @param sh_param
+ *    Scheduler configuration parameters.
+ *
+ * @return
+ *    channel id in case of success, Negative in case of failure.
+ */
 int32_t dpaa2_reconf_L1_sch(uint16_t portid, uint8_t channel_id,
                         struct dpaa2_sch_params *sch_param);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
+ *
+ * Per class queue statistics.
+ *
+ * @param portid
+ *    ID of the port in context.
+ *
+ * @param q_handle
+ *    class queue handle.
+ *
+ * @param stats
+ *    statistics filled by the API.
+ *
+ * @param clear
+ *    clear the statistics after read, 0 means no clear
+ *    and 1 means clear.
+ *
+ *
+ * @return
+ *    zero in case of success, Negative in case of failure.
+ */
 int32_t dpaa2_get_qos_stats(uint16_t portid, handle_t ch_id,
 			    qhandle_t q_handle,
 			    struct dpaa2_qos_stats *stats,
 			    int clear);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
+ *
+ * Available buffers in pool.
+ *
+ * @param mp
+ *    mempool pointor.
+ *
+ * @param bufs
+ *    number of free buffers returned.
+ *
+ */
+void dpaa2_get_free_bufs(const struct rte_mempool *mp, uint32_t *bufs);
 
 #endif /* _DPAA2_QOS_H */

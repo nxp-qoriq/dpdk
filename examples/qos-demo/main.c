@@ -1204,7 +1204,18 @@ main(int argc, char **argv)
 				fclose(fp);
 				printf("Please see the file 'qos-demo-stats' for statistics\n");
 			} else if (!strcmp(key_token, "buffers\n")) {
-				printf("Available buffers count = %d\n", rte_mempool_avail_count(l2fwd_pktmbuf_pool));
+				uint64_t start_time = 0, last_time = 0;
+				double latency;
+				uint32_t count;
+
+				start_time = rte_rdtsc_precise();
+
+				dpaa2_get_free_bufs(l2fwd_pktmbuf_pool, &count);
+
+				last_time = rte_rdtsc_precise() - start_time;
+				latency = (double)(last_time * 1000000) /(double)rte_get_tsc_hz();
+				printf("Available buffers count = %d\n", count);
+				printf("Latency = %lf us\n", latency);
 			} else {
 				printf("not a valid command\n");
 				cmd_help();

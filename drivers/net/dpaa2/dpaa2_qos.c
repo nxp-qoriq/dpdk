@@ -223,7 +223,6 @@ int init_ceetm_res(uint16_t portid)
 			}
 			ceetm[instanceid].cs[k].cq[cq_idx].lfqid = qbman_lfqid_compose_ex(ceetmid,
 						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx);
-			/* Assuming 1 sender */
 			err = qbman_auth_add_find(p_swp, icid, qbman_auth_type_fqid,
 						&ceetm[instanceid].cs[k].cq[cq_idx].vrid,
 						ceetm[instanceid].cs[k].cq[cq_idx].lfqid,
@@ -247,7 +246,7 @@ int init_ceetm_res(uint16_t portid)
 						ceetm[instanceid].cs[k].cq[cq_idx].lfqid,
 						ceetm[instanceid].cs[k].cq[cq_idx].cqid,
 						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx,
-						/*fqider*//*dpaa2_q->tx_conf_queue->real_cqid*/ reject_frames_queue->real_cqid);
+						reject_frames_queue->real_cqid);
 			if (err != 0) {
 				printf("qbman_lfq_configure failed\n");
 				return -1;
@@ -335,6 +334,18 @@ void mc_test(void)
 void dpaa2_qos_deinit(__rte_unused uint16_t portid)
 {
 	/* TODO */
+}
+
+void dpaa2_get_free_bufs(const struct rte_mempool *mp, uint32_t *bufs)
+{
+	struct dpaa2_bp_info *bp_info;
+        uint32_t bpid;
+
+	/* Assuming mp is a valid mempool */
+	bp_info = (struct dpaa2_bp_info *)mp->pool_data;
+	bpid = bp_info->bp_list->buf_pool.bpid;
+
+	qbman_bp_query_num_free_bufs(p_swp, bpid, bufs);
 }
 
 int32_t dpaa2_get_qos_stats(uint16_t portid, handle_t ch_id,

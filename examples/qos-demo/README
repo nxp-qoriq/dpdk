@@ -21,8 +21,8 @@ SUPPORTED FEATURES:
   Shaper (CIR /EIR) on Level1 and Level2.
 * Dynamic switching of one Level1 instance from one Level2 instance to another Level2 instance.
 * Dynamic switching of SP to WRR and vice versa.
-* Statistics and Latency.
-
+* Statistics and latency.
+* Available buffers in pool and latency.
 
 /*********************************************************/
 DPDK Compilation:
@@ -64,7 +64,7 @@ Below are some supported commands:
 
 q				: Quit the application
 qos				: Print all QoS data
-buffers				: Available buffers count
+buffers				: Available buffers count and latency.
 stats <l1_id> <que_idx> <clear>	: Per queue statistics and latency
 				  l1_id  = Level1 ID
 				  que_idx= Queue Index
@@ -98,11 +98,9 @@ must be in the next line.
 ######################### L1 Scheduler keywords description: #####################
 ID	: Unique ID within Level 1 schedulers, starting from 0.
 CIR	: Committed information rate, in Mbps.
-CIR_SIZE: CIR burst size in Kbps. Same size is used as weight for SFQ
-	  scheduling at level2 scheduler.
+CIR_SIZE: CIR burst size in Kbps.
 EIR	: Excess information rate, in Mbps.
-EIR_SIZE: EIR burst size in Kbps. Same size is used as weight for SFQ
-	  scheduling at level2 scheduler.
+EIR_SIZE: EIR burst size in Kbps.
 COUPLED	: Use Commit and Excess rate shaper in coupled manner. 1 mean coupled and 0 mean non-coupled.
 CQ_COUNT: Number of class queues.
 MODE	: STRICT or WRR.

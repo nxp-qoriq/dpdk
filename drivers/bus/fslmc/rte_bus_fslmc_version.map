@@ -52,6 +52,7 @@ DPDK_20.0 {
 	per_lcore__dpaa2_io;
 	per_lcore_dpaa2_held_bufs;
 	qbman_auth_add_find;
+	qbman_bp_query_num_free_bufs;
 	qbman_cchannel_configure;
 	qbman_cchannel_shaper_configure;
 	qbman_ccgr_configure;
