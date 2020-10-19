@@ -572,7 +572,7 @@ int dpni_get_attributes(struct fsl_mc_io *mc_io,
 	struct mc_command cmd = { 0 };
 	struct dpni_rsp_get_attr *rsp_params;
 
-	int err;
+	int i, err;
 
 	/* prepare command */
 	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_ATTR,
@@ -602,6 +602,13 @@ int dpni_get_attributes(struct fsl_mc_io *mc_io,
 	attr->ceetm_id = le16_to_cpu(rsp_params->ceetm_id);
 	attr->ifpid = le16_to_cpu(rsp_params->ifpid);
 	attr->icid = le16_to_cpu(rsp_params->icid);
+
+	for (i = 0; i < 4; i++) {
+		attr->cq_ranges[i].min = rsp_params->cq_ranges[i].min;
+		attr->cq_ranges[i].max = rsp_params->cq_ranges[i].max;
+		attr->lfq_ranges[i].min = le16_to_cpu(rsp_params->lfq_ranges[i].min);
+		attr->lfq_ranges[i].max = le16_to_cpu(rsp_params->lfq_ranges[i].max);
+	}
 
 	return 0;
 }

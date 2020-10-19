@@ -252,6 +252,10 @@ struct dpni_rsp_get_attr {
 	uint16_t ceetm_id;
 	uint16_t ifpid;
 	uint16_t icid;
+	uint16_t pad5;
+	/* reponse word 4, 5, 6 */
+	struct cq_range cq_ranges[4];
+	struct lfq_range lfq_ranges[4];
 };
 
 #define DPNI_ERROR_ACTION_SHIFT		0
