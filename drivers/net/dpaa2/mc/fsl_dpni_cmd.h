@@ -253,9 +253,9 @@ struct dpni_rsp_get_attr {
 	uint16_t ifpid;
 	uint16_t icid;
 	uint16_t pad5;
-	/* reponse word 4, 5, 6 */
-	struct cq_range cq_ranges[4];
-	struct lfq_range lfq_ranges[4];
+	/* reponse word 4, 5 */
+	struct cq_range cq_ranges[QBMAN_MAX_CEETM_INS];
+	struct lfq_range lfq_ranges[QBMAN_MAX_CEETM_INS];
 };
 
 #define DPNI_ERROR_ACTION_SHIFT		0

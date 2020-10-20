@@ -357,11 +357,16 @@ int dpni_clear_irq_status(struct fsl_mc_io *mc_io,
  * @ifpid: DPNI object's Interface Profile ID.
  * @icid: Isolation Context ID, shared by all objects from the same root container.
  */
+#define QBMAN_MAX_CEETM_INS 2
+
+#define CQ_NO_FREE_ID 0xff
 
 struct cq_range {
 	uint8_t min;
 	uint8_t max;
 };
+
+#define LFQ_NO_FREE_ID 0xffff
 
 struct lfq_range {
 	uint16_t min;
@@ -385,8 +390,8 @@ struct dpni_attr {
 	uint16_t  ceetm_id;
 	uint16_t  ifpid;
 	uint16_t  icid;
-	struct cq_range cq_ranges[4];
-	struct lfq_range lfq_ranges[4];
+	struct cq_range cq_ranges[QBMAN_MAX_CEETM_INS];
+	struct lfq_range lfq_ranges[QBMAN_MAX_CEETM_INS];
 };
 
 int dpni_get_attributes(struct fsl_mc_io *mc_io,

@@ -2598,6 +2598,10 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->ceetm_id = attr.ceetm_id << 4;
 	priv->ifpid = attr.ifpid;
 	priv->icid = attr.icid;
+	for (int ii=0; ii < QBMAN_MAX_CEETM_INS; ii++)
+	{
+		printf("range%d: CQ min = %d cq max = %d\nlfq min = %d lfq max= %d\n\n", ii, attr.cq_ranges[ii].min, attr.cq_ranges[ii].max, attr.lfq_ranges[ii].min, attr.lfq_ranges[ii].max);
+	}
 
 	priv->flags = 0;
 #if defined(RTE_LIBRTE_IEEE1588)

@@ -603,7 +603,7 @@ int dpni_get_attributes(struct fsl_mc_io *mc_io,
 	attr->ifpid = le16_to_cpu(rsp_params->ifpid);
 	attr->icid = le16_to_cpu(rsp_params->icid);
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < QBMAN_MAX_CEETM_INS; i++) {
 		attr->cq_ranges[i].min = rsp_params->cq_ranges[i].min;
 		attr->cq_ranges[i].max = rsp_params->cq_ranges[i].max;
 		attr->lfq_ranges[i].min = le16_to_cpu(rsp_params->lfq_ranges[i].min);
