@@ -120,6 +120,7 @@ cmd_help(void)
 	printf("q				: Quit the application\n");
 	printf("qos				: Print all QoS data\n");
 	printf("buffers				: Available buffers count and latency\n");
+	printf("resources			: Print CEETM resources\n");
 	printf("stats <l1_id> <que_idx> <clear>	: Per queue statistics and latency\n"
 						"\t\t\t\t  l1_id  = Level1 ID\n"
 						"\t\t\t\t  que_idx= Queue Index\n"
@@ -1230,6 +1231,8 @@ main(int argc, char **argv)
 				latency = (double)(last_time * 1000000) /(double)rte_get_tsc_hz();
 				printf("Available buffers count = %d\n", count);
 				printf("Latency = %lf us\n", latency);
+			} else if (!strcmp(key_token, "resources\n")) {
+				dpaa2_print_ceetm_res();
 			} else {
 				printf("not a valid command\n");
 				cmd_help();

@@ -67,6 +67,7 @@ Below are some supported commands:
 q				: Quit the application
 qos				: Print all QoS data
 buffers				: Available buffers count and latency.
+resources			: Print CEETM resources
 stats <l1_id> <que_idx> <clear>	: Per queue statistics and latency
 				  l1_id  = Level1 ID
 				  que_idx= Queue Index

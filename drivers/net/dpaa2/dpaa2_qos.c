@@ -34,21 +34,12 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
-#define MAX_LFQID_PER_CEETM	2
 #define MAX_CH_PER_CEETM	32	/*  For PHASE-1 */
-
 
 #define DRV_UT		0
 
-/* Please make sure MC hasn't reserved these resources */
-#define CEETM_CHANNEL_BASE0	4
-#define CEETM_CHANNEL_BASE1	0
-#define CEETM_CHANNEL_MAX	32
-
-#define CEETM_LFQ_BASE0		1024
-#define CEETM_LFQ_BASE1		1024
-#define CEETM_LFQ_MAX		2048
-
+uint32_t ceetm_ch_base0, ceetm_ch_base1, ceetm_ch_max0, ceetm_ch_max1;
+uint32_t ceetm_lfq_base0, ceetm_lfq_base1, ceetm_lfq_max0, ceetm_lfq_max1;
 
 struct class_q {
 	uint32_t cqid;
@@ -139,7 +130,7 @@ int init_ceetm_res(uint16_t portid)
 	struct fsl_mc_io *dpni = eth_dev->process_private;
 	uint32_t ceetmid, k, lfq_count, cq_idx = 0, channel_base;
 	int err, ret;
-	uint32_t channel_number;
+	uint32_t channel_number, ceetm_lfq_max, ceetm_ch_max;
 	uint8_t ps = 1; // PFDR Stashing enable, optimisation
 	uint8_t pps = 0; // Pool selection, optimisation
 	uint32_t bdi = 0;
@@ -194,32 +185,52 @@ int init_ceetm_res(uint16_t portid)
 
 	lfq_count =  ceetm[instanceid].lfq_count;
 	if (instanceid == 0) {
-		channel_base = CEETM_CHANNEL_BASE0;
+		if (ceetm_ch_base0 == 0xff || ceetm_lfq_base0 == 0xffff) {
+			printf("No resources available \n");
+			return -1;
+		}
+		channel_base = ceetm_ch_base0;
+		ceetm_ch_max = ceetm_ch_max0;
+		ceetm_lfq_max = ceetm_lfq_max0;
 	} else {
-		channel_base = CEETM_CHANNEL_BASE1;
+		if (ceetm_ch_base1 == 0xff || ceetm_lfq_base1 == 0xffff) {
+			printf("No resources available \n");
+			return -1;
+		}
+		channel_base = ceetm_ch_base1;
+		ceetm_ch_max = ceetm_ch_max1;
+		ceetm_lfq_max = ceetm_lfq_max1;
 	}
 
 	ceetm[instanceid].chid_base = channel_base;
-
-	printf("Ceetmid = %d and instanceid = %d\n", ceetmid, instanceid);
 	channel_number = channel_base;
-	for (k = 0; k < (CEETM_CHANNEL_MAX - channel_base); k++) {
+
+	if (ceetm_ch_max == 0xff) {
+		printf("Maximum channel ID is invalid = %x\n", ceetm_ch_max);
+		return -1;
+	}
+
+	for (k = 0; k < ((ceetm_ch_max + 1) - channel_base); k++) {
 		ceetm[instanceid].cs[k].chid = channel_number & 0x1f;
 		cq_idx = ceetm[instanceid].cs[k].cq_count;
+		if (ceetm_lfq_max == 0xffff) {
+			printf("No free LFQs available\n");
+			return -1;
+		}
 
 		for (int i = 0; i < L1_MAX_QUEUES; i++) {
 			if (instanceid == 0) {
-				if ((CEETM_LFQ_BASE0 + lfq_count) > CEETM_LFQ_MAX) {
+				if ((ceetm_lfq_base0 + lfq_count) > (ceetm_lfq_max + 1)) {
 					printf("No LFQ resources left\n");
 					return -1;
 				}
-				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = CEETM_LFQ_BASE0 + lfq_count;
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = ceetm_lfq_base0 + lfq_count;
 			} else {
-				if ((CEETM_LFQ_BASE1 + lfq_count) > CEETM_LFQ_MAX) {
+				if ((ceetm_lfq_base1 + lfq_count) > (ceetm_lfq_max + 1)) {
 					printf("No LFQ resources left\n");
 					return -1;
 				}
-				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = CEETM_LFQ_BASE1 + lfq_count;
+				ceetm[instanceid].cs[k].cq[cq_idx].lfqidx = ceetm_lfq_base1 + lfq_count;
 			}
 			ceetm[instanceid].cs[k].cq[cq_idx].lfqid = qbman_lfqid_compose_ex(ceetmid,
 						ceetm[instanceid].cs[k].cq[cq_idx].lfqidx);
@@ -284,12 +295,47 @@ int init_ceetm_res(uint16_t portid)
 
 	ceetm[instanceid].init = 1;
 
-	printf("\ncs_count = %d  lfq count = %d\n",
-		ceetm[instanceid].cs_count, ceetm[instanceid].lfq_count);
-
-
-
 	return 0;
+}
+
+void dpaa2_print_ceetm_res(void)
+{
+	printf("CEETM instance0 resources:\n");
+	printf("~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+	if (ceetm_ch_base0 == 0xff) {
+		printf("\tchannels count = 0\n");
+		printf("\tclass queues count = 0\n");
+	} else {
+		printf("\tchannels count = %d\n",
+				(ceetm_ch_max0 + 1) - ceetm_ch_base0);
+		printf("\tclass queues count = %d\n",
+				((ceetm_ch_max0 + 1) - ceetm_ch_base0) * 8);
+	}
+
+	if (ceetm_lfq_base0 == 0xffff)
+		printf("\tLFQs count = 0\n");
+	else
+		printf("\tLFQs count = %d\n",
+				(ceetm_lfq_max0 + 1) - ceetm_lfq_base0);
+
+	printf("\nCEETM instance1 resources:\n");
+	printf("~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+	if (ceetm_ch_base1 == 0xff) {
+		printf("\tchannels count = 0\n");
+		printf("\tclass queues count = 0\n");
+	} else {
+		printf("\tchannels count = %d\n",
+				(ceetm_ch_max1 + 1) - ceetm_ch_base1);
+		printf("\tclass queues count = %d\n",
+				((ceetm_ch_max1 + 1) - ceetm_ch_base1) * 8);
+	}
+
+	if (ceetm_lfq_base1 == 0xffff)
+		printf("\tLFQs count = 0\n");
+	else
+		printf("\tLFQs count = %d\n",
+				(ceetm_lfq_max1 + 1) - ceetm_lfq_base1);
+
 }
 
 #if DRV_UT

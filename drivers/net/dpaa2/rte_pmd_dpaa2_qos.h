@@ -16,7 +16,6 @@
 typedef int32_t handle_t;
 typedef int64_t qhandle_t;
 
-
 enum scheduler_mode {
 	SCHED_STRICT_PRIORITY = 0,
 	SCHED_WRR
@@ -273,5 +272,15 @@ int32_t dpaa2_get_qos_stats(uint16_t portid, handle_t ch_id,
  *
  */
 void dpaa2_get_free_bufs(const struct rte_mempool *mp, uint32_t *bufs);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this APIs is for specific propritary use case and may change without prior notice
+ *
+ * Print CEETM resources available to Userspace.
+ *
+ */
+
+void dpaa2_print_ceetm_res(void);
 
 #endif /* _DPAA2_QOS_H */

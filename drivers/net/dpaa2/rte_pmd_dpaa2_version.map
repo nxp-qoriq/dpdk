@@ -11,6 +11,7 @@ DPDK_20.0 {
 	dpaa2_get_free_bufs;
 	dpaa2_get_qos_stats;
 	dpaa2_move_L1_sch;
+	dpaa2_print_ceetm_res;
 	dpaa2_qos_init;
 	dpaa2_reconf_L1_sch;
 

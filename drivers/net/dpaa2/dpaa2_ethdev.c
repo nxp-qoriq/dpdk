@@ -2598,9 +2598,19 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->ceetm_id = attr.ceetm_id << 4;
 	priv->ifpid = attr.ifpid;
 	priv->icid = attr.icid;
-	for (int ii=0; ii < QBMAN_MAX_CEETM_INS; ii++)
+	for (int ii = 0; ii < QBMAN_MAX_CEETM_INS; ii++)
 	{
-		printf("range%d: CQ min = %d cq max = %d\nlfq min = %d lfq max= %d\n\n", ii, attr.cq_ranges[ii].min, attr.cq_ranges[ii].max, attr.lfq_ranges[ii].min, attr.lfq_ranges[ii].max);
+		if (ii == 0) {
+			ceetm_ch_base0 = attr.cq_ranges[ii].min;
+			ceetm_lfq_base0 = attr.lfq_ranges[ii].min;
+			ceetm_ch_max0 = attr.cq_ranges[ii].max;
+			ceetm_lfq_max0 = attr.lfq_ranges[ii].max;
+		} else if (ii == 1) {
+			ceetm_ch_base1 = attr.cq_ranges[ii].min;
+			ceetm_lfq_base1 = attr.lfq_ranges[ii].min;
+			ceetm_ch_max1 = attr.cq_ranges[ii].max;
+			ceetm_lfq_max1 = attr.lfq_ranges[ii].max;
+		}
 	}
 
 	priv->flags = 0;

@@ -115,6 +115,11 @@ extern bool dpaa2_enable_ts[];
 extern const struct rte_flow_ops dpaa2_flow_ops;
 extern enum rte_filter_type dpaa2_filter_type;
 
+/* CEETM resources */
+extern uint32_t ceetm_ch_base0, ceetm_ch_base1, ceetm_ch_max0, ceetm_ch_max1;
+extern uint32_t ceetm_lfq_base0, ceetm_lfq_base1, ceetm_lfq_max0,
+ceetm_lfq_max1;
+
 #define IP_ADDRESS_OFFSET_INVALID (-1)
 
 extern rte_spinlock_t err_q_lock;
