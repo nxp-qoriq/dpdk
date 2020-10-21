@@ -3,6 +3,7 @@
 
 /*********************************************************/
 QOS DEMO Application
+~~~~~~~~~~~~~~~~~~~~
 
 Qos-demo is a DPDK sample application, using it user can test the 2-level
 scheduling and shaping feature of CEETM. Traffic distribution on TX side is
@@ -13,6 +14,7 @@ VLAN header.
 
 /*********************************************************/
 SUPPORTED FEATURES:
+~~~~~~~~~~~~~~~~~~
 
 * Many Level2 and many Level1 schedulers can be configured. Resources
   availability depends upon the MC DPC file.
@@ -27,23 +29,27 @@ SUPPORTED FEATURES:
 
 /*********************************************************/
 DPDK Compilation:
+~~~~~~~~~~~~~~~~
 
 Please refer LSDK document for DPDK compilation.
 
 
 /*********************************************************/
 APPLICATION COMPILATION CMD:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 make -C examples/qos-demo/
 
 
 /*********************************************************/
 PREREQUISITES:
+~~~~~~~~~~~~~
 * Port links should be up before running "qos-demo".
 * dynamic_dpl.sh script to create required resources.
 
 /*********************************************************/
 EXECUTION COMMANDS:
+~~~~~~~~~~~~~~~~~~
 
 export ENABLE_QOS=1
 . ./dynamic_dpl.sh dpmac.5 dpmac.6
@@ -56,9 +62,22 @@ export ENABLE_QOS=1
 -f : input file name of QoS data
 -j : set jumbo packet size
 
+Notes:
+-----
+* Core 1 to core 15 can be used for the data threads.
+* Command-line prompt is using the master core to execute the commands
+  and default master core is 0.
+* Master core can be changed by specify "--master-lcore <ID>" option
+  while executing the qos-demo.
+* It is recommended not to use core0 for latency measurement.
+
+Sample command to run CMDline prompt on core3:
+---------------------------------------------
+./qos-demo -c 0xf --master-lcore 3 -- -p 0x3 -f “./input.data”
 
 /*********************************************************/
 CMDline help:
+~~~~~~~~~~~~
 
 On executing qos-demo application, user will see a command line prompt with symbol "==>",
 where user can give some commands to the application at run-time.
@@ -89,6 +108,7 @@ sched <l1_id> STRICT/WRR <weight> :
 
 /*********************************************************/
 QoS data file Description:
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Level 1 scheduler and Level 2 scheduler data will be identified by application using
 keywords "L1" and "L2" respectively. All the data (in keyword = value pairs) after any
