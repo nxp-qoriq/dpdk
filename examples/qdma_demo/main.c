@@ -65,6 +65,14 @@ char *g_buf1;
 rte_iova_t g_iova;
 rte_iova_t g_iova1;
 
+struct latency {
+	double min;
+	double max;
+	double total;
+	int count;
+};
+struct latency latency_data[MAX_CORE_COUNT] = {0};
+
 struct qdma_test_case test_case[] = {
 	{"pci_to_pci", "EP mem to EP mem done from host", PCI_TO_PCI},
 	{"mem_to_pci", "Host mem to EP mem done from host", MEM_TO_PCI},
@@ -177,7 +185,6 @@ lcore_qdma_pcie32b_loop(__attribute__((unused)) void *arg)
 	size_t len;
 	int32_t ret = 0;
 	float time_us = 0.0;
-	int time_count = 0;
 	int fd;
 	void *tmp;
 	uint64_t start;
@@ -304,7 +311,7 @@ launch_pcie32b_cores(unsigned int cores)
 #endif
 
 static void calculate_latency(unsigned int lcore_id,
-	uint64_t cycle1, int time_count,
+	uint64_t cycle1,
 	int pkt_cnt, int pkt_enqueued,
 	int poll_miss)
 {
@@ -313,27 +320,25 @@ static void calculate_latency(unsigned int lcore_id,
 
 	float nsPerCycle = (float) (1000 * rate) / ((float) freq);
 	float time_us = 0.0;
-	float time_us_min = 9999999.0;
-	float time_us_max = 0.0;
-	double time_us_toal = 0.0;
 
 	cycle2 = rte_get_timer_cycles();
 	my_time_diff = cycle2 - cycle1;
 	time_us = nsPerCycle *	my_time_diff / 1000;
 
-	if (time_us < time_us_min)
-		time_us_min = time_us;
-	if (time_us > time_us_max)
-		time_us_max = time_us;
-	time_us_toal += time_us;
+	if (time_us < latency_data[lcore_id].min)
+		latency_data[lcore_id].min = time_us;
+	if (time_us > latency_data[lcore_id].max)
+		latency_data[lcore_id].max = time_us;
+	latency_data[lcore_id].total += time_us;
+	latency_data[lcore_id].count++;
 
 	printf("cpu=%d pkt_cnt:%d [%d], pkt_size %d,"
 		"time used (%.1f)us [min %.1f, max %.1f"
 		", mean %.1f] poll_miss:%d\n",
 		lcore_id, pkt_cnt, pkt_enqueued,
 		TEST_PACKET_SIZE, time_us,
-		time_us_min, time_us_max,
-		time_us_toal/time_count, poll_miss);
+		latency_data[lcore_id].min, latency_data[lcore_id].max,
+		latency_data[lcore_id].total/latency_data[lcore_id].count, poll_miss);
 	rte_delay_ms(1000);
 }
 
@@ -348,7 +353,6 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 	int poll_miss = 0;
 	int32_t ret = 0;
 
-	int time_count = 0;
 	int pkt_enquened = 0;
 	int in_dma = 0;
 	int burst_nb = g_scatter_gather ? 32 : RTE_QDMA_BURST_NB_MAX;
@@ -361,6 +365,7 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 	} while (!ret);
 	printf("Processing coreid: %d ready, now!\n", lcore_id);
 
+	latency_data[lcore_id].min = 9999999.0;
 	cycle1 = rte_get_timer_cycles();
 	while (!quit_signal) {
 		struct rte_qdma_job *job[RTE_QDMA_BURST_NB_MAX];
@@ -394,7 +399,6 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 				pkt_cnt++;
 				if (g_latency && (pkt_cnt >= TEST_PACKETS_NUM)) {
 					calculate_latency(lcore_id, cycle1,
-						time_count++,
 						pkt_cnt,
 						pkt_enquened, poll_miss);
 					pkt_cnt = 0;
@@ -433,7 +437,6 @@ dequeue:
 
 				if (g_latency && (pkt_cnt >= TEST_PACKETS_NUM)) {
 					calculate_latency(lcore_id, cycle1,
-						time_count++,
 						pkt_cnt,
 						pkt_enquened, poll_miss);
 					pkt_cnt = 0;
@@ -492,6 +495,8 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 		g_buf1 = rte_malloc("test qdma", g_pci_size, 4096);
 		printf("Local bufs, g_buf %p, g_buf1 %p\n",
 			g_buf, g_buf1);
+		g_iova = rte_malloc_virt2iova((const void *) g_buf);
+		g_iova1 = rte_malloc_virt2iova((const void *) g_buf1);
 	}
 
 	/* setup QDMA queues */
@@ -526,6 +531,8 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 				TEST_PACKETS_NUM*TEST_PACKET_SIZE, 4096);
 			printf("Local bufs, g_buf %p, g_buf1 %p\n",
 				g_buf, g_buf1);
+			g_iova = rte_malloc_virt2iova((const void *) g_buf);
+			g_iova1 = rte_malloc_virt2iova((const void *) g_buf1);
 		}
 
 		g_jobs[j] = rte_zmalloc("test qdma",
@@ -549,7 +556,7 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 			if (g_memcpy)
 				job->src = ((long)g_buf + (long) (i * TEST_PACKET_SIZE));
 			else
-				job->src = ((long)rte_malloc_virt2iova((const void *) g_buf) + (long) (i * TEST_PACKET_SIZE));
+				job->src = ((long)g_iova + (long) (i * TEST_PACKET_SIZE));
 			if (g_userbp) {
 				job->dest =
 				(TEST_PCIBUS_BASE_ADDR + (long) (i * TEST_PACKET_SIZE));
@@ -564,10 +571,10 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 				job->dest =
 					((long)g_buf1 + (long) (i * TEST_PACKET_SIZE));
 			} else {
-				job->src = ((long)rte_malloc_virt2iova((const void *) g_buf) +
+				job->src = ((long)g_iova +
 					   (long) (i * TEST_PACKET_SIZE));
 				job->dest =
-					((long) rte_malloc_virt2iova((const void *)g_buf1) +
+					((long) g_iova1 +
 					(long) (i * TEST_PACKET_SIZE));
 				job->flags = RTE_QDMA_JOB_SRC_PHY |
 							RTE_QDMA_JOB_DEST_PHY;
@@ -598,7 +605,7 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 			if (g_memcpy)
 				job->dest = ((long)g_buf + (long) (i * TEST_PACKET_SIZE));
 			else
-				job->dest = ((long)rte_malloc_virt2iova((const void *) g_buf) + (long) (i * TEST_PACKET_SIZE));
+				job->dest = ((long)g_iova + (long) (i * TEST_PACKET_SIZE));
 		}
 	}
 	}
