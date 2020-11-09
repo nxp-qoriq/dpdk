@@ -83,17 +83,21 @@
 
 #define FSL_QDMA_BCQMR_EN		0x80000000
 #define FSL_QDMA_BCQMR_EI		0x40000000
+#define FSL_QDMA_BCQMR_EI_BE           0x40
 #define FSL_QDMA_BCQMR_CD_THLD(x)	((x) << 20)
 #define FSL_QDMA_BCQMR_CQ_SIZE(x)	((x) << 16)
 
 #define FSL_QDMA_BCQSR_QF		0x10000
 #define FSL_QDMA_BCQSR_XOFF		0x1
+#define FSL_QDMA_BCQSR_QF_XOFF_BE      0x1000100
 
 #define FSL_QDMA_BSQMR_EN		0x80000000
 #define FSL_QDMA_BSQMR_DI		0x40000000
+#define FSL_QDMA_BSQMR_DI_BE		0x40
 #define FSL_QDMA_BSQMR_CQ_SIZE(x)	((x) << 16)
 
 #define FSL_QDMA_BSQSR_QE		0x20000
+#define FSL_QDMA_BSQSR_QE_BE		0x200
 #define FSL_QDMA_BSQSR_QF		0x10000
 
 #define FSL_QDMA_DMR_DQD		0x40000000
@@ -156,9 +160,13 @@
 #ifdef QDMA_BIG_ENDIAN
 #define QDMA_IN(addr)		ioread32be(addr)
 #define QDMA_OUT(addr, val)	iowrite32be(val, addr)
+#define QDMA_IN_BE(addr)	ioread32(addr)
+#define QDMA_OUT_BE(addr, val)	iowrite32(val, addr)
 #else
 #define QDMA_IN(addr)		ioread32(addr)
 #define QDMA_OUT(addr, val)	iowrite32(val, addr)
+#define QDMA_IN_BE(addr)	ioread32be(addr)
+#define QDMA_OUT_BE(addr, val)	iowrite32be(val, addr)
 #endif
 
 #define FSL_QDMA_BLOCK_BASE_OFFSET(fsl_qdma_engine, x)			\
@@ -254,8 +262,6 @@ struct fsl_qdma_engine {
 	int			block_offset;
 };
 
-static u64 pre_addr[CORE_NUMBER];
-static u64 pre_queue[CORE_NUMBER];
 static rte_atomic32_t wait_task[CORE_NUMBER];
 
 #ifndef QDMA_MEMZONE
