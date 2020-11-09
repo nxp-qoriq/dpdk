@@ -59,5 +59,6 @@ struct qdma_test_case {
 #define ARG_PCI_SIZE (1 << 4)
 #define ARG_MEMCPY (1 << 5)
 #define ARG_SCATTER_GATHER (1 << 6)
+#define ARG_BURST (1 << 7)
 
 #endif

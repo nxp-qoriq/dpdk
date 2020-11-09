@@ -88,6 +88,7 @@ int g_userbp = NO_RBP;
 int g_rbp_testcase = MEM_TO_PCI;
 uint32_t g_arg_mask;
 uint64_t g_target_pci_addr = TEST_PCICPU_BASE_ADDR;
+uint32_t g_burst = RTE_QDMA_BURST_NB_MAX;
 uint64_t g_target_pci_vaddr;
 int g_packet_size = 1024;
 uint64_t g_pci_size = TEST_PCI_SIZE_LIMIT;
@@ -355,7 +356,7 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 
 	int pkt_enquened = 0;
 	int in_dma = 0;
-	int burst_nb = g_scatter_gather ? 32 : RTE_QDMA_BURST_NB_MAX;
+	int burst_nb = g_scatter_gather ? 32 : g_burst;
 
 	lcore_id = rte_lcore_id();
 
@@ -368,8 +369,8 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 	latency_data[lcore_id].min = 9999999.0;
 	cycle1 = rte_get_timer_cycles();
 	while (!quit_signal) {
-		struct rte_qdma_job *job[RTE_QDMA_BURST_NB_MAX];
-		struct rte_qdma_job *job1[RTE_QDMA_BURST_NB_MAX];
+		struct rte_qdma_job *job[g_burst];
+		struct rte_qdma_job *job1[g_burst];
 		struct rte_qdma_enqdeq e_context, de_context;
 		int ret, j;
 		int job_num = burst_nb;
@@ -380,7 +381,7 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 				goto dequeue;
 			}
 			if (pkt_enquened >=
-				(TEST_PACKETS_NUM - RTE_QDMA_BURST_NB_MAX))
+				(int)(TEST_PACKETS_NUM - g_burst))
 				job_num = TEST_PACKETS_NUM - pkt_enquened;
 			if (job_num < 0)
 				job_num = burst_nb;
@@ -412,6 +413,7 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 
 		e_context.vq_id = g_vqid[lcore_id];
 		e_context.job = job;
+
 		/* Submit QDMA Jobs for processing */
 		ret = rte_qdma_enqueue_buffers(qdma_dev_id, NULL, job_num, &e_context);
 		if (unlikely(ret <= 0))
@@ -424,7 +426,7 @@ dequeue:
 			de_context.vq_id = g_vqid[lcore_id];
 			de_context.job = job1;
 			ret = rte_qdma_dequeue_buffers(qdma_dev_id, NULL,
-					RTE_QDMA_BURST_NB_MAX, &de_context);
+					g_burst, &de_context);
 			in_dma -= ret;
 			for (j = 0; j < ret; j++) {
 				if (job1[j]->status) {
@@ -776,6 +778,7 @@ void qdma_demo_usage(void)
 	printf("	: --latency_test\n");
 	printf("	: --memcpy\n");
 	printf("	: --scatter_gather\n");
+	printf("	: --burst\n");
 }
 
 int qdma_parse_long_arg(char *optarg, struct option *lopt)
@@ -858,6 +861,19 @@ int qdma_parse_long_arg(char *optarg, struct option *lopt)
 		g_frame_format = RTE_QDMA_LONG_FORMAT;
 		g_scatter_gather = 1;
 		break;
+	case ARG_BURST:
+		ret = sscanf(optarg, "%u", &g_burst);
+		if (ret == EOF) {
+			printf("Invalid burst size\n");
+			ret = -EINVAL;
+			goto out;
+		}
+		ret = 0;
+		if (g_burst > RTE_QDMA_BURST_NB_MAX || g_burst < 1)
+			g_burst = RTE_QDMA_BURST_NB_MAX;
+
+		printf("%s: burst size %u\n", __func__, g_burst);
+		break;
 	default:
 		printf("Unknown Argument\n");
 		ret = -EINVAL;
@@ -882,6 +898,7 @@ qdma_demo_parse_args(int argc, char **argv)
 	 {"pci_size", optional_argument, &flg, ARG_PCI_SIZE},
 	 {"memcpy", optional_argument, &flg, ARG_MEMCPY},
 	 {"scatter_gather", optional_argument, &flg, ARG_SCATTER_GATHER},
+	 {"burst", optional_argument, &flg, ARG_BURST},
 	 {0, 0, 0, 0},
 	};
 	struct option *lopt_cur;
