@@ -62,19 +62,11 @@ struct rte_ecpri_common_hdr {
 	union {
 		rte_be32_t u32;			/**< 4B common header in BE */
 		struct {
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-			uint32_t size:16;	/**< Payload Size */
-			uint32_t type:8;	/**< Message Type */
-			uint32_t c:1;		/**< Concatenation Indicator */
-			uint32_t res:3;		/**< Reserved */
-			uint32_t revision:4;	/**< Protocol Revision */
-#elif RTE_BYTE_ORDER == RTE_BIG_ENDIAN
 			uint32_t revision:4;	/**< Protocol Revision */
 			uint32_t res:3;		/**< Reserved */
 			uint32_t c:1;		/**< Concatenation Indicator */
 			uint32_t type:8;	/**< Message Type */
 			uint32_t size:16;	/**< Payload Size */
-#endif
 		};
 	};
 };
