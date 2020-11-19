@@ -593,7 +593,7 @@ fill_feca_desc_enc(struct bbdev_la12xx_q_priv *q_priv,
 	se_command->se_sc_x1_init = rte_cpu_to_be_32(SE_SC_X1_INIT);
 	se_command->se_sc_x2_init = rte_cpu_to_be_32(SE_SC_X2_INIT);
 
-	data_ptr = get_data_ptr(in_op_data);//rte_bbuf_mtod((struct rte_bbuf *)in_op_data->bdata, char *);
+	data_ptr = get_data_ptr(in_op_data);
 	l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 		data_ptr - huge_start_addr;
 	se_command->se_axi_in_addr_low = rte_cpu_to_be_32(l1_pcie_addr);
@@ -766,7 +766,7 @@ fill_feca_desc_dec(struct bbdev_la12xx_q_priv *q_priv,
 	sd_command->sd_sc_x2_init = rte_cpu_to_be_32(SD_SC_X2_INIT);
 
 	/* out_addr has already been swapped in the calling function */
-	data_ptr = get_data_ptr(out_op_data);//rte_bbuf_mtod((struct rte_bbuf *)out_op_data->bdata, char *);
+	data_ptr = get_data_ptr(out_op_data);
 	l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 		data_ptr - huge_start_addr;
 	sd_command->sd_axi_data_addr_low = rte_cpu_to_be_32(l1_pcie_addr);
@@ -870,7 +870,7 @@ fill_feca_desc_polar_op(struct bbdev_ipc_dequeue_op *bbdev_ipc_op,
 			rte_cpu_to_be_32(l_ce_cmd->ce_cfg3.raw_ce_cfg3);
 		ce_cmd->ce_pe_indices.raw_ce_pe_indices =
 			rte_cpu_to_be_32(l_ce_cmd->ce_pe_indices.raw_ce_pe_indices);
-		data_ptr = get_data_ptr(in_op_data);//rte_bbuf_mtod((struct rte_bbuf *)in_op_data->bdata, char *);
+		data_ptr = get_data_ptr(in_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 			data_ptr - huge_start_addr;
 		ce_cmd->ce_axi_addr_low = rte_cpu_to_be_32(l1_pcie_addr);
@@ -899,7 +899,7 @@ fill_feca_desc_polar_op(struct bbdev_ipc_dequeue_op *bbdev_ipc_op,
 			rte_cpu_to_be_32(l_cd_cmd->cd_cfg2.raw_cd_cfg2);
 		cd_cmd->cd_pe_indices.raw_cd_pe_indices =
 			rte_cpu_to_be_32(l_cd_cmd->cd_pe_indices.raw_cd_pe_indices);
-		data_ptr = get_data_ptr(out_op_data);//rte_bbuf_mtod((struct rte_bbuf *)out_op_data->bdata, char *);
+		data_ptr = get_data_ptr(out_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 			data_ptr - huge_start_addr;
 		cd_cmd->cd_axi_data_addr_low = rte_cpu_to_be_32(l1_pcie_addr);
@@ -949,8 +949,10 @@ prepare_ldpc_enc_op(struct rte_bbdev_enc_op *bbdev_enc_op,
 			"fill_feca_desc_enc failed, ret: %d", ret);
 		return ret;
 	}
-	rte_bbuf_append((struct rte_bbuf *)out_op_data->bdata,
-			ldpc_enc->output.length);
+
+	if (!out_op_data->is_direct_mem)
+		rte_bbuf_append((struct rte_bbuf *)out_op_data->bdata,
+				ldpc_enc->output.length);
 
 	return 0;
 }
@@ -1027,7 +1029,7 @@ prepare_ldpc_dec_op(struct rte_bbdev_dec_op *bbdev_dec_op,
 	if ((bbdev_dec_op->ldpc_dec.op_flags &
 	    RTE_BBDEV_LDPC_HQ_COMBINE_IN_ENABLE) &&
 	    harq_in_op_data->bdata) {
-		data_ptr = get_data_ptr(harq_in_op_data);//rte_bbuf_mtod((struct rte_bbuf *)harq_in_op_data->bdata, char *);
+		data_ptr = get_data_ptr(harq_in_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 			data_ptr - huge_start_addr;
 		bbdev_ipc_op->harq_in_addr = l1_pcie_addr;
@@ -1040,7 +1042,7 @@ prepare_ldpc_dec_op(struct rte_bbdev_dec_op *bbdev_dec_op,
 	    harq_out_op_data->bdata) {
 		sd_circ_buf = rte_be_to_cpu_32(
 			bbdev_ipc_op->feca_job.command_chain_t.sd_command_ch_obj.sd_circ_buf);
-		data_ptr = get_data_ptr(harq_out_op_data);//rte_bbuf_mtod((struct rte_bbuf *)harq_out_op_data->bdata, char *);
+		data_ptr = get_data_ptr(harq_out_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 			data_ptr - huge_start_addr;
 		bbdev_ipc_op->harq_out_addr = rte_cpu_to_be_32(l1_pcie_addr);
@@ -1060,10 +1062,11 @@ prepare_ldpc_dec_op(struct rte_bbdev_dec_op *bbdev_dec_op,
 			rte_cpu_to_be_32(harq_out_len_per_cb);
 	}
 
-	/* In case of retransmission, mbuf already have been filled in
-	 * the previous transmission. So skip appending data in mbuf.
+	/* In case of retransmission, bbuf already have been filled in
+	 * the previous transmission. So skip appending data in bbuf.
 	 */
-	if ((out_op_data_orig_len == 0) || (ldpc_dec->rv_index == 0))
+	if (((out_op_data_orig_len == 0) || (ldpc_dec->rv_index == 0)) &&
+			!out_op_data->is_direct_mem)
 		rte_bbuf_append((struct rte_bbuf *)out_op_data->bdata,
 				ldpc_dec->hard_output.length);
 
@@ -1084,7 +1087,7 @@ prepare_polar_op(struct rte_pmd_la12xx_polar_params *polar_params,
 	fill_feca_desc_polar_op(bbdev_ipc_op, polar_params, q_priv,
 				in_op_data, out_op_data);
 
-	if (out_op_data->bdata)
+	if (!out_op_data->is_direct_mem && out_op_data->bdata)
 		rte_bbuf_append((struct rte_bbuf *)out_op_data->bdata,
 				polar_params->output.length);
 
@@ -1107,7 +1110,7 @@ prepare_raw_op(struct rte_pmd_la12xx_raw_params *raw_params,
 		bbdev_ipc_op->out_addr = rte_cpu_to_be_32(l1_pcie_addr);
 	}
 
-	if (out_op_data->bdata)
+	if (!out_op_data->is_direct_mem && out_op_data->bdata)
 		rte_bbuf_append((struct rte_bbuf *)out_op_data->bdata,
 				raw_params->output.length);
 
@@ -1230,7 +1233,7 @@ enqueue_single_op(struct bbdev_la12xx_q_priv *q_priv, void *bbdev_op)
 	}
 
 	if (in_op_data->bdata) {
-		data_ptr = get_data_ptr(in_op_data);//rte_bbuf_mtod((struct rte_bbuf *)in_op_data->bdata, char *);
+		data_ptr = get_data_ptr(in_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 			       data_ptr - huge_start_addr;
 		bbdev_ipc_op->in_addr = l1_pcie_addr;
@@ -1238,7 +1241,7 @@ enqueue_single_op(struct bbdev_la12xx_q_priv *q_priv, void *bbdev_op)
 	}
 
 	if (out_op_data->bdata) {
-		data_ptr = get_data_ptr(out_op_data);//rte_bbuf_mtod((struct rte_bbuf *)out_op_data->bdata, char *);
+		data_ptr = get_data_ptr(out_op_data);
 		l1_pcie_addr = (uint32_t)GUL_USER_HUGE_PAGE_ADDR +
 				data_ptr - huge_start_addr;
 		bbdev_ipc_op->out_addr = rte_cpu_to_be_32(l1_pcie_addr);
@@ -1415,8 +1418,9 @@ dequeue_dec_ops(struct rte_bbdev_queue_data *q_data,
 				rte_be_to_cpu_32(bbdev_ipc_op.harq_out_len);
 			l_op->ldpc_dec.harq_combined_output.length =
 				harq_out_len;
-			rte_bbuf_append((struct rte_bbuf *)harq_out_op_data->bdata,
-					harq_out_len);
+			if (!harq_out_op_data->is_direct_mem)
+				rte_bbuf_append((struct rte_bbuf *)harq_out_op_data->bdata,
+						harq_out_len);
 			l_op->status = 1 << RTE_BBDEV_CRC_ERROR;
 		}
 
