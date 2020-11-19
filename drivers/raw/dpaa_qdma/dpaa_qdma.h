@@ -83,17 +83,21 @@
 
 #define FSL_QDMA_BCQMR_EN		0x80000000
 #define FSL_QDMA_BCQMR_EI		0x40000000
+#define FSL_QDMA_BCQMR_EI_BE           0x40
 #define FSL_QDMA_BCQMR_CD_THLD(x)	((x) << 20)
 #define FSL_QDMA_BCQMR_CQ_SIZE(x)	((x) << 16)
 
 #define FSL_QDMA_BCQSR_QF		0x10000
 #define FSL_QDMA_BCQSR_XOFF		0x1
+#define FSL_QDMA_BCQSR_QF_XOFF_BE      0x1000100
 
 #define FSL_QDMA_BSQMR_EN		0x80000000
 #define FSL_QDMA_BSQMR_DI		0x40000000
+#define FSL_QDMA_BSQMR_DI_BE		0x40
 #define FSL_QDMA_BSQMR_CQ_SIZE(x)	((x) << 16)
 
 #define FSL_QDMA_BSQSR_QE		0x20000
+#define FSL_QDMA_BSQSR_QE_BE		0x200
 #define FSL_QDMA_BSQSR_QF		0x10000
 
 #define FSL_QDMA_DMR_DQD		0x40000000
@@ -125,7 +129,7 @@
 #define QDMA_SG_EXT			BIT(31)
 #define QDMA_SG_LEN_MASK		GENMASK(29, 0)
 
-#define QDMA_BIG_ENDIAN			0x00000001
+#define QDMA_BIG_ENDIAN			1
 #define COMP_TIMEOUT			100000
 #define COMMAND_QUEUE_OVERFLLOW		10
 
@@ -143,28 +147,27 @@
 #define __arch_putq(v, a)	(*(volatile u64 *)(a) = (v))
 #define __arch_getq32(a)	(*(volatile u32 *)(a))
 #define __arch_putq32(v, a)	(*(volatile u32 *)(a) = (v))
-#define readq(c) \
-	({ u64 __v = __arch_getq(c); rte_io_rmb(); __v; })
-#define writeq(v, c) \
-	({ u64 __v = v; rte_io_wmb(); __arch_putq(__v, c); __v; })
 #define readq32(c) \
 	({ u32 __v = __arch_getq32(c); rte_io_rmb(); __v; })
 #define writeq32(v, c) \
-	({ u32 __v = v; rte_io_wmb(); __arch_putq32(__v, c); __v; })
-#define ioread64(_p)		readq(_p)
-#define iowrite64(_v, _p)	writeq(_v, _p)
+	({ u32 __v = v; __arch_putq32(__v, c); __v; })
 #define ioread32(_p)		readq32(_p)
 #define iowrite32(_v, _p)	writeq32(_v, _p)
 
 #define ioread32be(_p)          be32_to_cpu(readq32(_p))
 #define iowrite32be(_v, _p)	writeq32(be32_to_cpu(_v), _p)
 
-#define QDMA_IN(fsl_qdma_engine, addr)					\
-	(((fsl_qdma_engine)->big_endian & QDMA_BIG_ENDIAN) ?		\
-		ioread32be(addr) : ioread32(addr))
-#define QDMA_OUT(fsl_qdma_engine, addr, val)				\
-	(((fsl_qdma_engine)->big_endian & QDMA_BIG_ENDIAN) ?		\
-		iowrite32be(val, addr) : iowrite32(val, addr))
+#ifdef QDMA_BIG_ENDIAN
+#define QDMA_IN(addr)		ioread32be(addr)
+#define QDMA_OUT(addr, val)	iowrite32be(val, addr)
+#define QDMA_IN_BE(addr)	ioread32(addr)
+#define QDMA_OUT_BE(addr, val)	iowrite32(val, addr)
+#else
+#define QDMA_IN(addr)		ioread32(addr)
+#define QDMA_OUT(addr, val)	iowrite32(val, addr)
+#define QDMA_IN_BE(addr)	ioread32be(addr)
+#define QDMA_OUT_BE(addr, val)	iowrite32be(val, addr)
+#endif
 
 #define FSL_QDMA_BLOCK_BASE_OFFSET(fsl_qdma_engine, x)			\
 	(((fsl_qdma_engine)->block_offset) * (x))
@@ -213,7 +216,6 @@ enum dma_status {
 struct fsl_qdma_chan {
 	struct fsl_qdma_engine	*qdma;
 	struct fsl_qdma_queue	*queue;
-	enum dma_status         status;
 	bool			free;
 	struct list_head	list;
 };
@@ -253,7 +255,6 @@ struct fsl_qdma_engine {
 	u32			n_chans;
 	u32			n_queues;
 	int			error_irq;
-	bool			big_endian;
 	struct fsl_qdma_queue	*queue;
 	struct fsl_qdma_queue	**status;
 	struct fsl_qdma_chan	*chans;
@@ -261,8 +262,6 @@ struct fsl_qdma_engine {
 	int			block_offset;
 };
 
-static u64 pre_addr[CORE_NUMBER];
-static u64 pre_queue[CORE_NUMBER];
 static rte_atomic32_t wait_task[CORE_NUMBER];
 
 #ifndef QDMA_MEMZONE
