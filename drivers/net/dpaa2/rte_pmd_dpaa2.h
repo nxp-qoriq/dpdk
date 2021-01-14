@@ -50,12 +50,13 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
  *    output stream
  * @param dpdmux_id
  *    ID of the DPDMUX MC object.
+ * @param num_if
+ *    number of interface in dpdmux object
  *
  */
-
 __rte_experimental
 void
-rte_pmd_dpaa2_mux_dump_counter(FILE *f, uint32_t dpdmux_id);
+rte_pmd_dpaa2_mux_dump_counter(FILE *f, uint32_t dpdmux_id, int num_if);
 
 /**
  * @warning
