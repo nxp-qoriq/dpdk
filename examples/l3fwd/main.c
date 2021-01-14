@@ -1055,8 +1055,10 @@ signal_handler(int signum)
 		printf("\n\nSignal %d received, preparing to exit...\n",
 				signum);
 		force_quit = true;
-	if (traffic_split_proto || traffic_split_type)
-			rte_pmd_dpaa2_mux_dump_counter(stdout, 0);
+		if (traffic_split_proto || traffic_split_type) {
+			/* for upto 3 interfaces */
+			rte_pmd_dpaa2_mux_dump_counter(stdout, 0, 3);
+		}
 	}
 }
 
