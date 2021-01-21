@@ -24,6 +24,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac3_foffset_classif"/>
 		</entry>
@@ -34,6 +36,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac3_dist"/>
 		</entry>
@@ -44,6 +48,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac3_flows"/>
 			<data>0x868</data>
@@ -52,6 +58,7 @@
 	</classification>
 
 	<distribution name="gtp_mac3_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -62,6 +69,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac3_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac3_flows"/>
 		<protocols>
@@ -76,6 +84,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac4_foffset_classif"/>
 		</entry>
@@ -86,6 +96,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac4_dist"/>
 		</entry>
@@ -96,6 +108,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac4_flows"/>
 			<data>0x868</data>
@@ -104,6 +118,7 @@
 	</classification>
 
 	<distribution name="gtp_mac4_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -114,6 +129,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac4_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac4_flows"/>
 		<protocols>
@@ -131,6 +147,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac5_foffset_classif"/>
 		</entry>
@@ -141,6 +159,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac5_dist"/>
 		</entry>
@@ -151,6 +171,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac5_flows"/>
 			<data>0x868</data>
@@ -159,6 +181,7 @@
 	</classification>
 
 	<distribution name="gtp_mac5_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -169,6 +192,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac5_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac5_flows"/>
 		<protocols>
@@ -184,6 +208,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac6_foffset_classif"/>
 		</entry>
@@ -194,6 +220,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac6_dist"/>
 		</entry>
@@ -204,6 +232,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac6_flows"/>
 			<data>0x868</data>
@@ -212,6 +242,7 @@
 	</classification>
 
 	<distribution name="gtp_mac6_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -222,6 +253,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac6_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac6_flows"/>
 		<protocols>
@@ -239,6 +271,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac9_foffset_classif"/>
 		</entry>
@@ -249,6 +283,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac9_dist"/>
 		</entry>
@@ -259,6 +295,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac9_flows"/>
 			<data>0x868</data>
@@ -267,6 +305,7 @@
 	</classification>
 
 	<distribution name="gtp_mac9_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -277,6 +316,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac9_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac9_flows"/>
 		<protocols>
@@ -294,6 +334,8 @@
 			<fieldref name ="ipv4.mf"/>
 		</key>
 		<entry>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="classification" name="dpdk_mac10_foffset_classif"/>
 		</entry>
@@ -304,6 +346,8 @@
 			<fieldref name ="ipv4.foffset"/>
 		</key>
 		<entry>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
 			<data>0x0</data>
 			<action type="distribution" name="gtp_mac10_dist"/>
 		</entry>
@@ -314,6 +358,8 @@
 			<fieldref name ="udp.dport"/>
 		</key>
 		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
 			<!-- This queue is userspace queue-->
 			<vsp name="dpdk_mac10_flows"/>
 			<data>0x868</data>
@@ -322,6 +368,7 @@
 	</classification>
 
 	<distribution name="gtp_mac10_dist">
+		<!-- Distribution based on GTP/non-GTP packet-->
 		<!-- Default queue is kernel queue-->
 		<vsp name="shared_mac_pool"/>
 		<protocols>
@@ -332,6 +379,7 @@
 	</distribution>
 
 	<distribution name="frag_gtp_mac10_dist">
+		<!-- Distribution based on fragmented/non-fragmented packet-->
 		<!-- Default queue is userspace queue-->
 		<vsp name="dpdk_mac10_flows"/>
 		<protocols>
