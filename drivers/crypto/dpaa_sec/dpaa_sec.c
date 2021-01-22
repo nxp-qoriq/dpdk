@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2017-2019 NXP
+ *   Copyright 2017-2019,2021 NXP
  *
  */
 
@@ -307,6 +307,9 @@ dpaa_sec_prep_pdcp_cdb(dpaa_sec_session *ses)
 					ses->pdcp.hfn_threshold,
 					&cipherdata, &authdata,
 					0);
+	} else if (ses->pdcp.domain == RTE_SECURITY_PDCP_MODE_SHORT_MAC) {
+		shared_desc_len = cnstr_shdsc_pdcp_short_mac(cdb->sh_desc,
+						     1, swap, &authdata);
 	} else {
 		if (ses->dir == DIR_ENC) {
 			if (ses->pdcp.sdap_enabled)

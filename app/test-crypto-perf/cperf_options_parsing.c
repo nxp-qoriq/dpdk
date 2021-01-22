@@ -656,7 +656,8 @@ parse_pdcp_sn_sz(struct cperf_options *opts, const char *arg)
 
 const char *cperf_pdcp_domain_strs[] = {
 	[RTE_SECURITY_PDCP_MODE_CONTROL] = "control",
-	[RTE_SECURITY_PDCP_MODE_DATA] = "data"
+	[RTE_SECURITY_PDCP_MODE_DATA] = "data",
+	[RTE_SECURITY_PDCP_MODE_SHORT_MAC] = "short_mac"
 };
 
 static int
@@ -671,6 +672,11 @@ parse_pdcp_domain(struct cperf_options *opts, const char *arg)
 			cperf_pdcp_domain_strs
 			[RTE_SECURITY_PDCP_MODE_DATA],
 			RTE_SECURITY_PDCP_MODE_DATA
+		},
+		{
+			cperf_pdcp_domain_strs
+			[RTE_SECURITY_PDCP_MODE_SHORT_MAC],
+			RTE_SECURITY_PDCP_MODE_SHORT_MAC
 		}
 	};
 

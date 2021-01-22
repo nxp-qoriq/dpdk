@@ -8448,10 +8448,8 @@ test_pdcp_proto_SGL(int i, int oop,
 				rte_cryptodev_get_sec_ctx(
 				ts_params->valid_devs[0]);
 	struct rte_cryptodev_info dev_info;
-	uint64_t feat_flags;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
-	feat_flags = dev_info.feature_flags;
 
 	/* Verify the capabilities */
 	struct rte_security_capability_idx sec_cap_idx;
@@ -8918,6 +8916,48 @@ test_PDCP_SDAP_PROTO_encap_all(void)
 	printf("Success: %d, Failure: %d\n", size + all_err, -all_err);
 
 	return (all_err == TEST_SUCCESS) ? TEST_SUCCESS : TEST_FAILED;
+}
+
+static int
+test_PDCP_PROTO_short_mac(void)
+{
+	int i = 0, size = 0;
+	int err, all_err = TEST_SUCCESS;
+	const struct pdcp_short_mac_test *cur_test;
+
+	size = ARRAY_SIZE(list_pdcp_smac_tests);
+
+	for (i = 0; i < size; i++) {
+		cur_test = &list_pdcp_smac_tests[i];
+		err = test_pdcp_proto(
+			i, 0, RTE_CRYPTO_CIPHER_OP_ENCRYPT,
+			RTE_CRYPTO_AUTH_OP_GENERATE, cur_test->data_in,
+			cur_test->in_len, cur_test->data_out,
+			cur_test->in_len + ((cur_test->auth_key) ? 4 : 0),
+			RTE_CRYPTO_CIPHER_NULL, NULL,
+			0, cur_test->param.auth_alg,
+			cur_test->auth_key, cur_test->param.auth_key_len,
+			0, cur_test->param.domain, 0, 0,
+			0, 0, 0);
+		if (err) {
+			printf("\t%d) %s: Short MAC test failed\n",
+					cur_test->test_idx,
+					cur_test->param.name);
+			err = TEST_FAILED;
+		} else {
+			printf("\t%d) %s: Short MAC test PASS\n", cur_test->test_idx,
+					cur_test->param.name);
+			rte_hexdump(stdout, "MAC I",
+				    cur_test->data_out + cur_test->in_len + 2, 2);
+			err = TEST_SUCCESS;
+		}
+		all_err += err;
+	}
+
+	printf("Success: %d, Failure: %d\n", size + all_err, -all_err);
+
+	return (all_err == TEST_SUCCESS) ? TEST_SUCCESS : TEST_FAILED;
+
 }
 
 static int
@@ -13893,6 +13933,8 @@ static struct unit_test_suite cryptodev_testsuite  = {
 			test_snow3g_encryption_test_case_5),
 
 		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_short_mac),
+		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_snow3g_encryption_test_case_1_oop),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_snow3g_encryption_test_case_1_oop_sgl),
@@ -14111,6 +14153,8 @@ static struct unit_test_suite cryptodev_testsuite  = {
 			test_kasumi_decryption_test_case_1_oop),
 
 		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_short_mac),
+		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_kasumi_cipher_auth_test_case_1),
 
 		/** KASUMI generate auth, then encrypt (F8) */
@@ -14282,9 +14326,6 @@ static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
 	.setup = testsuite_setup,
 	.teardown = testsuite_teardown,
 	.unit_test_cases = {
-		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_cipheronly_dpaa2_sec_all),
-		TEST_CASE_ST(ut_setup, ut_teardown, test_authonly_dpaa2_sec_all),
-		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_chain_dpaa2_sec_all),
 #ifdef RTE_LIBRTE_SECURITY
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_PDCP_PROTO_cplane_encap_all),

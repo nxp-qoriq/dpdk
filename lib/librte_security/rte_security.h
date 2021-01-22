@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2017,2019-2020 NXP
+ * Copyright 2017,2019-2021 NXP
  * Copyright(c) 2017-2020 Intel Corporation.
  */
 
@@ -233,6 +233,7 @@ struct rte_security_macsec_xform {
 enum rte_security_pdcp_domain {
 	RTE_SECURITY_PDCP_MODE_CONTROL,	/**< PDCP control plane */
 	RTE_SECURITY_PDCP_MODE_DATA,	/**< PDCP data plane */
+	RTE_SECURITY_PDCP_MODE_SHORT_MAC,	/**< PDCP short mac */
 };
 
 /** PDCP Frame direction */

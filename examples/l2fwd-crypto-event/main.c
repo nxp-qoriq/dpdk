@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019 NXP
+ * Copyright 2019,2021 NXP
  */
 
 #include <time.h>
@@ -539,7 +539,7 @@ l2fwd_crypto_usage(const char *prgname)
 
 		"  --digest_size SIZE: size of digest to be generated/verified\n"
 		"  --pdcp_sn_bits SN_SIZE: sn_size can be 5/7/12/15/18\n"
-		"  --pdcp_domain mode: mode can be CONTROL/USER\n"
+		"  --pdcp_domain mode: mode can be CONTROL/USER/SHORT_MAC\n"
 
 		"  --cryptodev_mask MASK: hexadecimal bitmask of crypto devices to configure\n"
 		"  --fwd_mode ETH_CRYPTO / ETH_ONLY: Default ETH_CRYPTO\n"
@@ -586,6 +586,9 @@ parse_pdcp_domain(enum rte_security_pdcp_domain *op, char *optarg)
 		return 0;
 	} else if (strcmp("USER", optarg) == 0) {
 		*op = RTE_SECURITY_PDCP_MODE_DATA;
+		return 0;
+	} else if (strcmp("SHORT_MAC", optarg) == 0) {
+		*op = RTE_SECURITY_PDCP_MODE_SHORT_MAC;
 		return 0;
 	}
 
