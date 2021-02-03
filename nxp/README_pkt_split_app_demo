@@ -1,0 +1,116 @@
+-----------------------------------------
+Introduction to pkt_split_app application
+-----------------------------------------
+
+This DPDK application uses two ports, one of which is an OL port and other is
+Tap interface.
+
+An OL port is a pair of Frame queues which will be used as Tx and Rx frame
+queues. ASK module will send the packets on the Rx FQ using the classification
+information provided. The application will send the packets back to ASK module
+using Tx FQ.
+
+Packets with the provided UDP destination port will be sent back on same OL
+port. Other packets will be send to kernel by sending it to TAP interface.
+
+
+
+----------------------------
+Compilation of pkt_split_app
+----------------------------
+
+Run these commands in the DPDK directory:
+
+Compilation of DPDK drivers:
+  $ make T=arm64-dpaa-linuxapp-gcc install CONFIG_RTE_KNI_KMOD=n -j 2
+
+Compilation of pkt_split_app application:
+  $ make -C examples/pkt_split_app
+
+Location of pkt_split_app binary: examples/pkt_split_app/build/pkt_split_app
+
+
+
+----------------------------------------
+Steps to run pkt_split_app on LS1046ARDB
+----------------------------------------
+
+Flash the LS1046ARDB board with ASK images and fman microcode.
+After booting up the board, run the following commands:
+
+1. Start the ask module:
+   $ . /etc/init.d/lsdk_ask start
+
+2. Set the eth port UP which will be used as OL port:
+   $ ifconfig eth0 1.1.1.1 up
+
+3. Run the following command:
+   $ ethtool --offload eth0 tx off
+
+4. Run the DPDK configuration commands:
+   $ mkdir -p /dev/hugetlbfs
+   $ echo 448 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+   $ mount -t hugetlbfs hugetlbfs /dev/hugetlbfs/
+   $ export DPAA_FMCLESS_MODE=1
+   $ export DPAA_NUM_RX_QUEUES=1
+   $ export OLDEV_ENABLED=1
+
+5. Make sure the classification comfiguration file exists and have proper
+   values. Refer to the "Configure classification information" section for
+   details.
+
+NOTE: ARP should be resolved before sending the traffic.
+
+6. Run the pkt_split_app application:
+   $ ./pkt_split_app -c 0x6 -n 1 --vdev=net_tap0 -- -p 0x3 -m 8000
+
+   This command will use one OL port and one tap interface. Tap interface's mtu
+   is 8000.
+
+
+
+------------------------------------
+Configure classification information
+------------------------------------
+
+File named classif_info.input is used to configure the classification for
+pkt_split_app. This file should be present in the directory from where we are
+running the application. There are five entries in this file. All the entries
+are mandatory.
+Blank lines and the lines starting with '#' will be ignored.
+
+Entries in classif_info.input file:
+
+  1. IPV4 <Space separated list of destination IP addresses>
+     Minimum one and maximum five IP addresses can be used.
+     eg to receive packets with destination IP addresses 1.1.1.1 & 11.11.11.11:
+       "IPV4 1.1.1.1 11.11.11.11"
+
+     Packets with specified destination IP addresses will be received by
+     pkt_split_app.
+
+  NOTE: Currently, only IPV4 Classification is supported. IPV6 is not supported.
+
+  2. DEST_PORT <UDP destination port number>
+     eg to receive packets with destination port 2152: "DEST_PORT 2152"
+
+     Packets with specified UDP destination port number will be received by
+     pkt_split_app.
+
+  3. PROTOCOL_ID <IP protocol number>
+     eg to receive UDP packets: "PROTOCOL_ID 17"
+
+     Packets with specified IP protocol number wil be received by pkt_split_app.
+
+  4. MTU <MTU of OL port>
+     eg: "MTU 1500"
+
+     Set MTU of OL port
+
+  5. BH_PORT_ID <Backhaul port id>
+     eg to use eth0: "BH_PORT_ID 2"
+
+     This port will be used as OL port in pkt_split_app.
+
+  6. SEC_ENABLED <0/1>
+     eg to disable sec: "SEC_ENABLED 0"
