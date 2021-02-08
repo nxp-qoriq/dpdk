@@ -14209,6 +14209,17 @@ static struct unit_test_suite cryptodev_testsuite  = {
 	}
 };
 
+
+static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
+	.suite_name = "DPAA2 Raw Crypto Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_cipheronly_dpaa2_sec_all),
+		TEST_CASES_END()
+	}
+};
+
 static struct unit_test_suite cryptodev_virtio_testsuite = {
 	.suite_name = "Crypto VIRTIO Unit Test Suite",
 	.setup = testsuite_setup,
@@ -14645,6 +14656,28 @@ test_cryptodev_qat_raw_api(void /*argv __rte_unused, int argc __rte_unused*/)
 	return ret;
 }
 
+static int
+test_cryptodev_dpaa2_sec_raw_api(void)
+{
+	int ret;
+
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "DPAA2_SEC PMD must be loaded.\n");
+		return TEST_SKIPPED;
+	}
+
+	global_api_test_type = CRYPTODEV_RAW_API_TEST;
+	ret = unit_test_suite_runner(&dpaa2_raw_cryptodev_testsuite);
+	global_api_test_type = CRYPTODEV_API_TEST;
+
+	return ret;
+}
+
+REGISTER_TEST_COMMAND(cryptodev_dpaa2_sec_raw_api_autotest,
+		test_cryptodev_dpaa2_sec_raw_api);
 REGISTER_TEST_COMMAND(cryptodev_qat_raw_api_autotest,
 		test_cryptodev_qat_raw_api);
 REGISTER_TEST_COMMAND(cryptodev_qat_autotest, test_cryptodev_qat);
