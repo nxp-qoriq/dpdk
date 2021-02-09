@@ -4,14 +4,8 @@ IPV4 1.1.1.1 11.11.11.11
 # UDP destination port
 DEST_PORT 2152
 
-# MTU of OL port
-MTU 1500
-
 # Protocol ID to be received by dpdk(UDP=17)
 PROTOCOL_ID 17
 
-# Backhaul port ID
-BH_PORT_ID 2
-
-# SEC Enabled
-SEC_ENABLED 0
+# Backhaul port name
+BH_PORT_NAME eth0

@@ -102,15 +102,7 @@ Entries in classif_info.input file:
 
      Packets with specified IP protocol number wil be received by pkt_split_app.
 
-  4. MTU <MTU of OL port>
-     eg: "MTU 1500"
-
-     Set MTU of OL port
-
-  5. BH_PORT_ID <Backhaul port id>
-     eg to use eth0: "BH_PORT_ID 2"
+  4. BH_PORT_NAME <Backhaul port name>
+     eg to use eth0: "BH_PORT_ID eth0"
 
      This port will be used as OL port in pkt_split_app.
-
-  6. SEC_ENABLED <0/1>
-     eg to disable sec: "SEC_ENABLED 0"

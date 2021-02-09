@@ -43,12 +43,13 @@ struct ask_ctrl_dpdk_fq_info_s {
 					 * pool
 					 */
 	uint8_t  bp_id;			/* DPDK buffer pool id */
-
+	uint8_t bh_port_name[12];	/* BH port interface name , for testing
+					 * purpose
+					 */
 	/* below fields are taken from structure t_FmBufferPrefixContent, These
 	 * fields are required for VSP creation on DPDK buffer pool ID. These
 	 * fields should be set based on expected parameters from FMAN
 	 */
-
 	uint16_t privDataSize;		/* Number of bytes to be left at the
 					 * beginning of the external buffer;
 					 * Note that the private-area will start
@@ -104,15 +105,8 @@ struct ip_addr_s {
 struct dpdk_uplink_cls_info_s {
 	struct		ip_addr_s addrs[MAX_NUM_IP_ADDRS];
 	uint16_t	gtp_udp_port;	/* DPDK app listens on this GTP port */
-	uint16_t	mtu;		/* Expected MTU size of Rx packets */
 	uint8_t		gtp_proto_id;	/* DPDK app listens on UDP protocol */
 	uint8_t		num_addresses;
-	uint8_t		sec_enabled;	/* It is mainly for testing without
-					 * IPSec
-					 */
-	uint32_t	bh_port_id;	/* Backhaul port id value when
-					 * sec_enabled is 0
-					 */
 };
 
 #define ASK_CTRL_GET_OFFLINE_CHANNEL_INFO \
@@ -149,11 +143,14 @@ static uint32_t ask_get_channel_info(struct ask_ctrl_offline_channel *ch_info)
 
 	ret = ioctl(fd, ASK_CTRL_GET_OFFLINE_CHANNEL_INFO, ch_info);
 	if (!ret) {
-		DPAA_PMD_DEBUG("Get channel info successful\n");
-		DPAA_PMD_DEBUG("Channel id: %x\n", ch_info->channel_id);
-		DPAA_PMD_DEBUG("ctx_a_hi_val: %x\n", ch_info->ctx_a_hi_val);
-		DPAA_PMD_DEBUG("ctx_a_lo_val: %x\n", ch_info->ctx_a_lo_val);
-		DPAA_PMD_DEBUG("ctx_b_val: %x\n", ch_info->ctx_b_val);
+		DPAA_PMD_DEBUG("Get channel info successful");
+		DPAA_PMD_DEBUG("Channel id: %x", ch_info->channel_id);
+		DPAA_PMD_DEBUG("ctx_a_hi_val: %x", ch_info->ctx_a_hi_val);
+		DPAA_PMD_DEBUG("ctx_a_lo_val: %x", ch_info->ctx_a_lo_val);
+		DPAA_PMD_DEBUG("ctx_b_val: %x", ch_info->ctx_b_val);
+	} else {
+		DPAA_PMD_ERR("Get channel info ioctl failed with errno: %s",
+			     strerror(errno));
 	}
 
 	return ret;
@@ -167,11 +164,16 @@ static int ask_set_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
 
 	ret = ioctl(fd, ASK_CTRL_SET_DPDK_INFO, fq_info);
 	if (!ret) {
-		DPAA_PMD_DEBUG("Set fq info successful\n");
-		DPAA_PMD_DEBUG("Tx fqid: %x\n", fq_info->tx_fq_id);
-		DPAA_PMD_DEBUG("Rx fqid: %x\n", fq_info->rx_fq_id);
-		DPAA_PMD_DEBUG("buff_size: %x\n", fq_info->buff_size);
-		DPAA_PMD_DEBUG("bp_id: %x\n", fq_info->bp_id);
+		DPAA_PMD_DEBUG("Set fq info successful");
+		DPAA_PMD_DEBUG("Tx fqid: %x", fq_info->tx_fq_id);
+		DPAA_PMD_DEBUG("Rx fqid: %x", fq_info->rx_fq_id);
+		DPAA_PMD_DEBUG("buff_size: %d", fq_info->buff_size);
+		DPAA_PMD_DEBUG("bp_id: %d", fq_info->bp_id);
+		DPAA_PMD_DEBUG("Backhaul port name: %s",
+			       fq_info->bh_port_name);
+	} else {
+		DPAA_PMD_ERR("Set FQ info ioctl failed with errno: %s",
+			     strerror(errno));
 	}
 
 	return ret;
@@ -179,31 +181,31 @@ static int ask_set_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
 
 static int ask_set_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
 {
-	int ret = check_fd();
+	int i, ret = check_fd();
 	if (ret)
 		return ret;
 
 	ret = ioctl(fd, ASK_CTRL_SET_CLASSIF_INFO, classif_info);
 	if (!ret) {
-		DPAA_PMD_DEBUG("Set classification info successful\n");
-		DPAA_PMD_DEBUG("UDP dest port: %d\n",
+		DPAA_PMD_DEBUG("Set classification info successful");
+		DPAA_PMD_DEBUG("UDP dest port: %d",
 			       classif_info->gtp_udp_port);
-		DPAA_PMD_DEBUG("MTU: %d\n",
-			       classif_info->mtu);
-		DPAA_PMD_DEBUG("Protocol ID: %d\n",
+		DPAA_PMD_DEBUG("Protocol ID: %d",
 			       classif_info->gtp_proto_id);
-		DPAA_PMD_DEBUG("No of IP address: %d\n",
+		DPAA_PMD_DEBUG("No of IP address: %d",
 			       classif_info->num_addresses);
-		DPAA_PMD_DEBUG("SEC enabled: %d\n",
-			       classif_info->sec_enabled);
-		DPAA_PMD_DEBUG("Backhaul port ID: %d\n",
-			       classif_info->bh_port_id);
+		for (i = 0; i < classif_info->num_addresses; i++)
+			DPAA_PMD_DEBUG("IP Address %i: %.8x", i + 1,
+				       classif_info->addrs[i].ip_addr[0]);
+	} else {
+		DPAA_PMD_ERR("Set classification info ioctl failed with errno: %s",
+			     strerror(errno));
 	}
 
 	return ret;
 }
 
-static int ask_clear_classif_info(struct dpdk_uplink_cls_info_s classif_info)
+static int ask_reset_classif_info(struct dpdk_uplink_cls_info_s classif_info)
 {
 	int ret = check_fd();
 	if (ret)
@@ -211,10 +213,10 @@ static int ask_clear_classif_info(struct dpdk_uplink_cls_info_s classif_info)
 
 	ret = ioctl(fd, ASK_CTRL_RESET_CLASSIF_INFO, &classif_info);
 	if (ret) {
-		DPAA_PMD_ERR("Clear classification info failed with ret value: %d\n",
-			     ret);
+		DPAA_PMD_ERR("Reset classification info ioctl failed with errno: %s",
+			     strerror(errno));
 	} else {
-		DPAA_PMD_DEBUG("Clear classification info successful\n");
+		DPAA_PMD_DEBUG("Reset classification info successful");
 	}
 
 	return ret;
@@ -248,71 +250,15 @@ static int dpaa_ol_dev_info(struct rte_eth_dev *dev,
 	return 0;
 }
 
-static void
-parse_entry(char *line, struct dpdk_uplink_cls_info_s *classif_info)
+static int
+parse_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
 {
-	char delim[1] = " ";
-	char *token;
-	int ip_addr_count = 0;
-
-	token = strtok(line, delim);
-
-	if (!strcmp(token, "IPV4")) {
-		for (int i = 0; i < 5; i++) {
-			token = strtok(NULL, delim);
-			if (!token) {
-				classif_info->num_addresses = ip_addr_count;
-				return;
-			}
-			ip_addr_count++;
-			classif_info->addrs[i].ip_addr_type = 4;
-			classif_info->addrs[i].ip_addr[0] =
-					ntohl(inet_addr(token));
-		}
-	}
-
-	if (!strcmp(token, "DEST_PORT")) {
-		token = strtok(NULL, delim);
-		classif_info->gtp_udp_port = (uint16_t)atoi(token);
-		return;
-	}
-
-	if (!strcmp(token, "MTU")) {
-		token = strtok(NULL, delim);
-		classif_info->mtu = (uint16_t)atoi(token);
-		return;
-	}
-
-	if (!strcmp(token, "PROTOCOL_ID")) {
-		token = strtok(NULL, delim);
-		classif_info->gtp_proto_id = (uint8_t)atoi(token);
-		return;
-	}
-
-	if (!strcmp(token, "BH_PORT_ID")) {
-		token = strtok(NULL, delim);
-		classif_info->bh_port_id = (uint32_t)atoi(token);
-		return;
-	}
-
-	if (!strcmp(token, "SEC_ENABLED")) {
-		token = strtok(NULL, delim);
-		classif_info->sec_enabled = (uint8_t)atoi(token);
-		return;
-	}
-}
-
-static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
-{
-	struct dpdk_uplink_cls_info_s classif_info;
-	int ret;
 	size_t len = 0;
 	FILE *fp = NULL;
 	char *line = NULL;
-
-	PMD_INIT_FUNC_TRACE();
-
-	dev->tx_pkt_burst = dpaa_eth_queue_tx;
+	char space[1] = " ";
+	char newline[1] = "\n";
+	char *token;
 
 	fp = fopen(CLASSIF_INFO_FILENAME, "r");
 	if (fp == NULL) {
@@ -325,8 +271,84 @@ static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
 		    line[0] == '\r')
 			continue;
 
-		parse_entry(line, &classif_info);
+		line = strtok(line, newline);
+		token = strtok(line, space);
+
+		if (!strcmp(token, "BH_PORT_NAME")) {
+			token = strtok(NULL, space);
+			strcpy((char *)fq_info->bh_port_name, token);
+			continue;
+		}
 	}
+
+	return 0;
+}
+
+static int
+parse_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
+{
+	size_t len = 0;
+	FILE *fp = NULL;
+	char *line = NULL;
+	char space[1] = " ";
+	char *token;
+
+	fp = fopen(CLASSIF_INFO_FILENAME, "r");
+	if (fp == NULL) {
+		DPAA_PMD_ERR("File %s does not exist\n", CLASSIF_INFO_FILENAME);
+		return -1;
+	}
+
+	while (getline(&line, &len, fp) != -1) {
+		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
+		    line[0] == '\r')
+			continue;
+
+		token = strtok(line, space);
+
+		if (!strcmp(token, "IPV4")) {
+			for (int i = 0; i <= 5; i++) {
+				token = strtok(NULL, space);
+				if (!token) {
+					classif_info->num_addresses = i;
+					break;
+				}
+				classif_info->addrs[i].ip_addr_type =
+						DPA_ISC_IPV4_ADDR_TYPE;
+				classif_info->addrs[i].ip_addr[0] =
+						ntohl(inet_addr(token));
+			}
+			continue;
+		}
+
+		if (!strcmp(token, "DEST_PORT")) {
+			token = strtok(NULL, space);
+			classif_info->gtp_udp_port = (uint16_t)atoi(token);
+			continue;
+		}
+
+		if (!strcmp(token, "PROTOCOL_ID")) {
+			token = strtok(NULL, space);
+			classif_info->gtp_proto_id = (uint8_t)atoi(token);
+			continue;
+		}
+	}
+
+	return 0;
+}
+
+static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
+{
+	struct dpdk_uplink_cls_info_s classif_info;
+	int ret;
+
+	PMD_INIT_FUNC_TRACE();
+
+	dev->tx_pkt_burst = dpaa_eth_queue_tx;
+
+	ret = parse_classif_info(&classif_info);
+	if (ret)
+		return ret;
 
 	ret = ask_set_classif_info(&classif_info);
 	if (ret)
@@ -347,7 +369,7 @@ static int dpaa_ol_dev_stop(struct rte_eth_dev *dev)
 
 	memset(&classif_info, 0, sizeof(classif_info));
 
-	ret = ask_clear_classif_info(classif_info);
+	ret = ask_reset_classif_info(classif_info);
 	if (ret)
 		DPAA_PMD_ERR("Clear classification info failed with ret: %d",
 			     ret);
@@ -446,6 +468,10 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	fq_info.dataAlign = DATA_ALIGNMENT;
 	fq_info.manipExtraSpace = MAX_EXTRA_SIZE;
 
+	ret = parse_fq_info(&fq_info);
+	if (ret)
+		return ret;
+
 	ret = ask_set_fq_info(&fq_info);
 	if (ret) {
 		DPAA_PMD_ERR("Set FQ info failed with ret: %d", ret);
@@ -460,6 +486,8 @@ static int dpaa_ol_link_update(struct rte_eth_dev *dev,
 {
 	struct dpaa_if *dpaa_intf = dev->data->dev_private;
 	struct rte_eth_link *link = &dev->data->dev_link;
+
+	PMD_INIT_FUNC_TRACE();
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -667,6 +695,8 @@ static int rte_dpaa_probe(__rte_unused struct rte_dpaa_driver *dpaa_drv,
 
 static int rte_dpaa_remove(__rte_unused struct rte_dpaa_device *dpaa_dev)
 {
+	PMD_INIT_FUNC_TRACE();
+
 	return 0;
 }
 
