@@ -6,6 +6,3 @@ DEST_PORT 2152
 
 # Protocol ID to be received by dpdk(UDP=17)
 PROTOCOL_ID 17
-
-# Backhaul port name
-BH_PORT_NAME eth0

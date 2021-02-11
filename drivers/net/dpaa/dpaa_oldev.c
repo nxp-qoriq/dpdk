@@ -42,7 +42,7 @@ struct ask_ctrl_dpdk_fq_info_s {
 	uint16_t buff_size;		/* Size of each buffer in DPDPK buffer
 					 * pool
 					 */
-	uint8_t  bp_id;			/* DPDK buffer pool id */
+	uint8_t bp_id;			/* DPDK buffer pool id */
 	uint8_t bh_port_name[12];	/* BH port interface name , for testing
 					 * purpose
 					 */
@@ -235,6 +235,8 @@ static int dpaa_ol_dev_info(struct rte_eth_dev *dev,
 {
 	struct dpaa_if *dpaa_intf = dev->data->dev_private;
 
+	PMD_INIT_FUNC_TRACE();
+
 	dev_info->max_rx_queues = dpaa_intf->nb_rx_queues;
 	dev_info->max_tx_queues = dpaa_intf->nb_tx_queues;
 	dev_info->max_rx_pktlen = DPAA_MAX_RX_PKT_LEN;
@@ -246,40 +248,6 @@ static int dpaa_ol_dev_info(struct rte_eth_dev *dev,
 			       ETH_LINK_SPEED_100M_HD | ETH_LINK_SPEED_100M |
 			       ETH_LINK_SPEED_1G | ETH_LINK_SPEED_2_5G |
 			       ETH_LINK_SPEED_10G;
-
-	return 0;
-}
-
-static int
-parse_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
-{
-	size_t len = 0;
-	FILE *fp = NULL;
-	char *line = NULL;
-	char space[1] = " ";
-	char newline[1] = "\n";
-	char *token;
-
-	fp = fopen(CLASSIF_INFO_FILENAME, "r");
-	if (fp == NULL) {
-		DPAA_PMD_ERR("File %s does not exist\n", CLASSIF_INFO_FILENAME);
-		return -1;
-	}
-
-	while (getline(&line, &len, fp) != -1) {
-		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
-		    line[0] == '\r')
-			continue;
-
-		line = strtok(line, newline);
-		token = strtok(line, space);
-
-		if (!strcmp(token, "BH_PORT_NAME")) {
-			token = strtok(NULL, space);
-			strcpy((char *)fq_info->bh_port_name, token);
-			continue;
-		}
-	}
 
 	return 0;
 }
@@ -439,6 +407,7 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	struct qman_fq *rxq = &dpaa_intf->rx_queues[queue_idx];
 	struct ask_ctrl_dpdk_fq_info_s fq_info;
 	int ret;
+	const char *bh_port_name;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -468,9 +437,13 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	fq_info.dataAlign = DATA_ALIGNMENT;
 	fq_info.manipExtraSpace = MAX_EXTRA_SIZE;
 
-	ret = parse_fq_info(&fq_info);
-	if (ret)
-		return ret;
+	bh_port_name = getenv("BH_PORT_NAME");
+	if (bh_port_name == NULL) {
+		DPAA_PMD_ERR("BH_PORT_NAME not defined");
+		return -1;
+	}
+
+	strcpy((char *)fq_info.bh_port_name, bh_port_name);
 
 	ret = ask_set_fq_info(&fq_info);
 	if (ret) {

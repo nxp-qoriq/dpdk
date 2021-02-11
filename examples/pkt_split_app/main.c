@@ -43,6 +43,15 @@ static volatile bool force_quit;
 /* MAC updating enabled by default */
 static int mac_updating = 1;
 
+/* Tap interface port id */
+static int tap_interface_port = -1;
+
+/* OL interface port id */
+static int ol_interface_port = -1;
+
+/* Port count */
+static int nb_ports_available;
+
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
 #define MAX_PKT_BURST 32
@@ -211,22 +220,24 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
 	rte_be32_t temp;
 
 	if (is_ol_port_packet && !is_gtp_packet(m)) {
-		dst_port = l2fwd_dst_ports[portid];
+		dst_port = tap_interface_port;
 	} else {
-		dst_port = portid;
-		ipv4_hdr = rte_pktmbuf_mtod_offset(m,
-				struct rte_ipv4_hdr *,
-				sizeof(struct rte_ether_hdr));
-		udp_hdr = rte_pktmbuf_mtod_offset(m,
-				struct rte_udp_hdr *,
-				sizeof(struct rte_ether_hdr) +
+		dst_port = l2fwd_dst_ports[portid];
+		if (nb_ports_available == 2) {
+			ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_ipv4_hdr *,
+					sizeof(struct rte_ether_hdr));
+			udp_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_udp_hdr *,
+					sizeof(struct rte_ether_hdr) +
 					sizeof(struct rte_ipv4_hdr));
-		temp = ipv4_hdr->src_addr;
-		ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
-		ipv4_hdr->dst_addr = temp;
-		temp = udp_hdr->dst_port;
-		udp_hdr->dst_port = udp_hdr->src_port;
-		udp_hdr->src_port = temp;
+			temp = ipv4_hdr->src_addr;
+			ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
+			ipv4_hdr->dst_addr = temp;
+			temp = udp_hdr->dst_port;
+			udp_hdr->dst_port = udp_hdr->src_port;
+			udp_hdr->src_port = temp;
+		}
 	}
 
 	sent = rte_eth_tx_burst(dst_port, 0, &m, 1);
@@ -329,11 +340,10 @@ l2fwd_main_loop(void)
 	unsigned int lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 	unsigned int i, portid;
-	int nb_rx, j, ret;
+	int nb_rx, j;
 	struct lcore_queue_conf *qconf;
 	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) /
 			US_PER_S * BURST_TX_DRAIN_US;
-	struct rte_eth_dev_info dev_info;
 
 	prev_tsc = 0;
 	timer_tsc = 0;
@@ -399,14 +409,7 @@ l2fwd_main_loop(void)
 
 			port_statistics[portid].rx += nb_rx;
 
-			ret = rte_eth_dev_info_get(portid, &dev_info);
-			if (ret != 0)
-				rte_exit(EXIT_FAILURE,
-					 "Error during getting device (port %u)"
-					 "info: %s\n",
-					 portid, strerror(-ret));
-
-			if (!strcmp(dev_info.driver_name, "ol_dpaa")) {
+			if (portid == (unsigned int)ol_interface_port) {
 				/* Prefetch first packets */
 				for (j = 0; j < PREFETCH_OFFSET &&
 						j < nb_rx; j++) {
@@ -687,8 +690,7 @@ main(int argc, char **argv)
 	struct lcore_queue_conf *qconf;
 	int ret;
 	uint16_t nb_ports;
-	uint16_t nb_ports_available = 0;
-	uint16_t portid, last_port;
+	uint16_t portid;
 	unsigned int lcore_id, rx_lcore_id;
 	unsigned int nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
@@ -730,27 +732,16 @@ main(int argc, char **argv)
 	/* reset l2fwd_dst_ports */
 	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++)
 		l2fwd_dst_ports[portid] = 0;
-	last_port = 0;
 
-	/*
-	 * Each logical core is assigned a dedicated TX queue on each port.
-	 */
 	RTE_ETH_FOREACH_DEV(portid) {
 		/* skip ports that are not enabled */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
-
-		if (nb_ports_in_mask % 2) {
-			l2fwd_dst_ports[portid] = last_port;
-			l2fwd_dst_ports[last_port] = portid;
-		} else {
-			last_port = portid;
-		}
 		nb_ports_in_mask++;
 	}
 
-	if (nb_ports_in_mask != 2)
-		rte_exit(EXIT_FAILURE, "App needs exactly 2 ports\n");
+	if (nb_ports_in_mask < 2 || nb_ports_in_mask > 3)
+		rte_exit(EXIT_FAILURE, "App needs either two or three ports\n");
 
 	rx_lcore_id = 0;
 	qconf = NULL;
@@ -800,6 +791,58 @@ main(int argc, char **argv)
 		}
 	}
 
+	RTE_ETH_FOREACH_DEV(portid) {
+		struct rte_eth_dev_info dev_info;
+		int ret;
+
+		/* skip ports that are not enabled */
+		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0) {
+			printf("Skipping disabled port %u\n", portid);
+			continue;
+		}
+		nb_ports_available++;
+
+		ret = rte_eth_dev_info_get(portid, &dev_info);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				"Error during getting device (port %u) info: %s\n",
+				portid, strerror(-ret));
+
+		if (!strcmp(dev_info.driver_name, "net_tap"))
+			tap_interface_port = portid;
+		else if (!strcmp(dev_info.driver_name, "ol_dpaa"))
+			ol_interface_port = portid;
+	}
+
+	if (tap_interface_port == -1)
+		rte_exit(EXIT_FAILURE,
+			"Tap interfae not available.\n");
+	else if (ol_interface_port == -1)
+		rte_exit(EXIT_FAILURE,
+			"OL interfae not available.\n");
+
+	if (nb_ports_in_mask == 2) {
+		RTE_ETH_FOREACH_DEV(portid) {
+			/* skip ports that are not enabled */
+			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			l2fwd_dst_ports[portid] = portid;
+		}
+	} else {
+		RTE_ETH_FOREACH_DEV(portid) {
+			/* skip ports that are not enabled */
+			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			if (portid == tap_interface_port) {
+				l2fwd_dst_ports[tap_interface_port] =
+						tap_interface_port;
+			} else if (portid != ol_interface_port) {
+				l2fwd_dst_ports[portid] = ol_interface_port;
+				l2fwd_dst_ports[ol_interface_port] = portid;
+			}
+		}
+	}
+
 	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd + nb_txd + MAX_PKT_BURST +
 		nb_lcores * MEMPOOL_CACHE_SIZE), 8192U);
 
@@ -822,7 +865,6 @@ main(int argc, char **argv)
 			printf("Skipping disabled port %u\n", portid);
 			continue;
 		}
-		nb_ports_available++;
 
 		/* init port */
 		printf("Initializing port %u... ", portid);

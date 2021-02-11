@@ -19,8 +19,10 @@ port. Other packets will be send to kernel by sending it to TAP interface.
 Compilation of pkt_split_app
 ----------------------------
 
-Run these commands in the DPDK directory:
+Refer to nxp/README for cross compilation setup.
+Section: "Building DPDK: Libraries and Test Applications"
 
+Run these commands in the DPDK directory:
 Compilation of DPDK drivers:
   $ make T=arm64-dpaa-linuxapp-gcc install CONFIG_RTE_KNI_KMOD=n -j 2
 
@@ -55,17 +57,27 @@ After booting up the board, run the following commands:
    $ export DPAA_NUM_RX_QUEUES=1
    $ export OLDEV_ENABLED=1
 
-5. Make sure the classification comfiguration file exists and have proper
+5. Bind PCI device with DPDK driver.
+   $ dpdk-devbind -u 0001:01:00.0
+   $ dpdk-devbind --bind=uio_pci_generic 0001:01:00.0
+   $ dpdk-devbind --status
+
+6. Export environment variable to define backhaul port
+   $ export BH_PORT_NAME=<Backhaul port name>
+
+   eg: to use eth0 as backhaul port, run "export BH_PORT_NAME=eth0"
+
+7. Make sure the classification comfiguration file exists and have proper
    values. Refer to the "Configure classification information" section for
    details.
 
 NOTE: ARP should be resolved before sending the traffic.
 
-6. Run the pkt_split_app application:
-   $ ./pkt_split_app -c 0x6 -n 1 --vdev=net_tap0 -- -p 0x3 -m 8000
+8. Run the pkt_split_app application:
+   $ ./pkt_split_app -c 0xe -n 1 --vdev=net_tap0 -- -p 0x7 -m 8000
 
-   This command will use one OL port and one tap interface. Tap interface's mtu
-   is 8000.
+   This command will use one OL port, one PCI port and one tap interface. Tap
+   interface's mtu is 8000.
 
 
 
@@ -101,8 +113,3 @@ Entries in classif_info.input file:
      eg to receive UDP packets: "PROTOCOL_ID 17"
 
      Packets with specified IP protocol number wil be received by pkt_split_app.
-
-  4. BH_PORT_NAME <Backhaul port name>
-     eg to use eth0: "BH_PORT_ID eth0"
-
-     This port will be used as OL port in pkt_split_app.
