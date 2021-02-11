@@ -42,9 +42,6 @@
 
 static volatile bool force_quit;
 
-/* MAC updating enabled by default */
-static int mac_updating = 1;
-
 /* Tap interface port id */
 static int tap_interface_port = -1;
 
@@ -466,10 +463,6 @@ l2fwd_usage(const char *prgname)
 	printf("%s [EAL options] -- -p PORTMASK [-T PERIOD]\n"
 	       "  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
 	       "  -T PERIOD: statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
-	       "  --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default)\n"
-	       "      When enabled:\n"
-	       "       - The source MAC address is replaced by the TX port MAC address\n"
-	       "       - The destination MAC address is replaced by 02:00:00:00:00:TX_PORT_ID\n"
 	       "  -b NUM: burst size for receive packet (default is 32)\n"
 	       "  -m MTU: mtu for tap interface(s) (default is 1500)\n",
 	       prgname);
@@ -515,9 +508,6 @@ static const char short_options[] =
 	"m:"  /* mtu of tap interface(s) */
 	;
 
-#define CMD_LINE_OPT_MAC_UPDATING "mac-updating"
-#define CMD_LINE_OPT_NO_MAC_UPDATING "no-mac-updating"
-
 enum {
 	/* long options mapped to a short option */
 
@@ -528,8 +518,6 @@ enum {
 };
 
 static const struct option lgopts[] = {
-	{ CMD_LINE_OPT_MAC_UPDATING, no_argument, &mac_updating, 1},
-	{ CMD_LINE_OPT_NO_MAC_UPDATING, no_argument, &mac_updating, 0},
 	{NULL, 0, 0, 0}
 };
 
@@ -809,8 +797,6 @@ main(int argc, char **argv)
 	ret = l2fwd_parse_args(argc, argv);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid L2FWD arguments\n");
-
-	printf("MAC updating %s\n", mac_updating ? "enabled" : "disabled");
 
 	/* convert to number of cycles */
 	timer_period *= rte_get_timer_hz();
