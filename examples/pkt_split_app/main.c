@@ -36,7 +36,9 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_ip_frag.h>
+#include <arpa/inet.h>
 
+#include <rte_pmd_dpaa_oldev.h>
 
 static volatile bool force_quit;
 
@@ -223,7 +225,7 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
 		dst_port = tap_interface_port;
 	} else {
 		dst_port = l2fwd_dst_ports[portid];
-		if (nb_ports_available == 2) {
+		if (nb_ports_available == 2 && is_ol_port_packet) {
 			ipv4_hdr = rte_pktmbuf_mtod_offset(m,
 					struct rte_ipv4_hdr *,
 					sizeof(struct rte_ether_hdr));
@@ -684,6 +686,99 @@ signal_handler(int signum)
 	}
 }
 
+#define CLASSIF_INFO_FILENAME   "classif_info.input"
+
+static int
+set_classif_info(void)
+{
+	size_t len = 0;
+	FILE *fp = NULL;
+	char *line = NULL;
+	char space[1] = " ";
+	char *token;
+	uint16_t udp_port = 0;
+	uint8_t protocol_id = 0;
+	uint8_t num_addresses = 0;
+	struct rte_pmd_dpaa_ip_addr_s ip_addr_list[MAX_NUM_IP_ADDRS];
+	int ret;
+	struct in_addr dest_addr;
+
+	fp = fopen(CLASSIF_INFO_FILENAME, "r");
+	if (fp == NULL) {
+		printf("File %s does not exist\n", CLASSIF_INFO_FILENAME);
+		return -1;
+	}
+
+	while (getline(&line, &len, fp) != -1) {
+		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
+		    line[0] == '\r')
+			continue;
+
+		token = strtok(line, space);
+
+		if (!strcmp(token, "IPV4")) {
+			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
+				token = strtok(NULL, space);
+				if (!token || i > 4) {
+					num_addresses = i;
+					break;
+				}
+				ip_addr_list[i].ip_addr_type =
+						DPA_ISC_IPV4_ADDR_TYPE;
+				ip_addr_list[i].ip_addr[0] =
+						ntohl(inet_addr(token));
+			}
+			continue;
+		}
+
+		if (!strcmp(token, "DEST_PORT")) {
+			token = strtok(NULL, space);
+			udp_port = (uint16_t)atoi(token);
+			continue;
+		}
+
+		if (!strcmp(token, "PROTOCOL_ID")) {
+			token = strtok(NULL, space);
+			protocol_id = (uint8_t)atoi(token);
+			continue;
+		}
+	}
+
+	ret = rte_pmd_dpaa_ol_set_classif_info(udp_port,
+				protocol_id, num_addresses, ip_addr_list);
+	if (ret) {
+		rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
+		return ret;
+	}
+
+	printf("****************************************************\n");
+	printf("UDP destination port: %d\n", udp_port);
+	printf("Protocol ID: %d\n", protocol_id);
+	printf("Number of IP addresses: %d\n", num_addresses);
+	for (int i = 0; i < num_addresses; i++) {
+		printf("%d IP version: IPv%d\n", i+1,
+		       ip_addr_list[i].ip_addr_type);
+		dest_addr.s_addr = ip_addr_list[i].ip_addr[0];
+		printf("%d IP address: %s\n", i+1,
+		       inet_ntoa(dest_addr));
+	}
+	printf("****************************************************\n");
+
+	return ret;
+}
+
+static int
+reset_classif_info(void)
+{
+	int ret;
+
+	ret = rte_pmd_dpaa_ol_reset_classif_info();
+	if (ret)
+		rte_exit(EXIT_FAILURE, "Failed to reset classification info\n");
+
+	return ret;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -947,6 +1042,10 @@ main(int argc, char **argv)
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
+	ret = set_classif_info();
+	if (ret)
+		return ret;
+
 	ret = 0;
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MASTER);
@@ -956,6 +1055,10 @@ main(int argc, char **argv)
 			break;
 		}
 	}
+
+	ret = reset_classif_info();
+	if (ret)
+		return ret;
 
 	RTE_ETH_FOREACH_DEV(portid) {
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)

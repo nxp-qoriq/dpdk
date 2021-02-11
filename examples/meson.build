@@ -35,7 +35,7 @@ all_examples = [
 	'performance-thread/l3fwd-thread',
 	'performance-thread/pthread_shim',
 	'pipeline',
-	'ptpclient',
+	'pkt_split_app', 'ptpclient',
 	'qos_meter', 'qos_sched',
 	'rxtx_callbacks',
 	'server_node_efd/node',

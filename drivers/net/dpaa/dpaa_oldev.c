@@ -13,6 +13,8 @@
 
 #include <fsl_fman.h>
 
+#include "rte_pmd_dpaa_oldev.h"
+
 /* The ol device is a tx are queue pair, which is provided to the kernel through
  * ioctl calls. It is exposed as a virtual port to the application.
  * This ASK Device provides IOCTL calls to driver for communicating fqid's,
@@ -20,7 +22,6 @@
  */
 #define ASK_PATH		"/dev/cdx_ctrl"
 #define CDX_IOC_MAGIC		0xbe
-#define CLASSIF_INFO_FILENAME	"classif_info.input"
 
 static int fd = -1;
 static pthread_mutex_t fd_init_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -93,17 +94,8 @@ struct ask_ctrl_dpdk_fq_info_s {
 					 */
 };
 
-#define DPA_ISC_IPV4_ADDR_TYPE  0x04
-#define DPA_ISC_IPV6_ADDR_TYPE  0x06
-#define MAX_NUM_IP_ADDRS 5
-
-struct ip_addr_s {
-	uint8_t		ip_addr_type;
-	uint32_t	ip_addr[4];
-};
-
 struct dpdk_uplink_cls_info_s {
-	struct		ip_addr_s addrs[MAX_NUM_IP_ADDRS];
+	struct		rte_pmd_dpaa_ip_addr_s addrs[MAX_NUM_IP_ADDRS];
 	uint16_t	gtp_udp_port;	/* DPDK app listens on this GTP port */
 	uint8_t		gtp_proto_id;	/* DPDK app listens on UDP protocol */
 	uint8_t		num_addresses;
@@ -181,6 +173,7 @@ static int ask_set_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
 
 static int ask_set_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
 {
+	struct in_addr dest_addr;
 	int i, ret = check_fd();
 	if (ret)
 		return ret;
@@ -194,9 +187,11 @@ static int ask_set_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
 			       classif_info->gtp_proto_id);
 		DPAA_PMD_DEBUG("No of IP address: %d",
 			       classif_info->num_addresses);
-		for (i = 0; i < classif_info->num_addresses; i++)
-			DPAA_PMD_DEBUG("IP Address %i: %.8x", i + 1,
-				       classif_info->addrs[i].ip_addr[0]);
+		for (i = 0; i < classif_info->num_addresses; i++) {
+			dest_addr.s_addr = classif_info->addrs[i].ip_addr[0];
+			DPAA_PMD_DEBUG("IP Address %i: %s", i + 1,
+				       inet_ntoa(dest_addr));
+		}
 	} else {
 		DPAA_PMD_ERR("Set classification info ioctl failed with errno: %s",
 			     strerror(errno));
@@ -252,71 +247,24 @@ static int dpaa_ol_dev_info(struct rte_eth_dev *dev,
 	return 0;
 }
 
-static int
-parse_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
-{
-	size_t len = 0;
-	FILE *fp = NULL;
-	char *line = NULL;
-	char space[1] = " ";
-	char *token;
-
-	fp = fopen(CLASSIF_INFO_FILENAME, "r");
-	if (fp == NULL) {
-		DPAA_PMD_ERR("File %s does not exist\n", CLASSIF_INFO_FILENAME);
-		return -1;
-	}
-
-	while (getline(&line, &len, fp) != -1) {
-		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
-		    line[0] == '\r')
-			continue;
-
-		token = strtok(line, space);
-
-		if (!strcmp(token, "IPV4")) {
-			for (int i = 0; i <= 5; i++) {
-				token = strtok(NULL, space);
-				if (!token) {
-					classif_info->num_addresses = i;
-					break;
-				}
-				classif_info->addrs[i].ip_addr_type =
-						DPA_ISC_IPV4_ADDR_TYPE;
-				classif_info->addrs[i].ip_addr[0] =
-						ntohl(inet_addr(token));
-			}
-			continue;
-		}
-
-		if (!strcmp(token, "DEST_PORT")) {
-			token = strtok(NULL, space);
-			classif_info->gtp_udp_port = (uint16_t)atoi(token);
-			continue;
-		}
-
-		if (!strcmp(token, "PROTOCOL_ID")) {
-			token = strtok(NULL, space);
-			classif_info->gtp_proto_id = (uint8_t)atoi(token);
-			continue;
-		}
-	}
-
-	return 0;
-}
-
-static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
+int rte_pmd_dpaa_ol_set_classif_info(uint16_t udp_port, uint8_t proto_id,
+			     uint8_t num_addresses,
+			     struct rte_pmd_dpaa_ip_addr_s ip_addr_list[])
 {
 	struct dpdk_uplink_cls_info_s classif_info;
-	int ret;
+	int i, ret;
 
-	PMD_INIT_FUNC_TRACE();
-
-	dev->tx_pkt_burst = dpaa_eth_queue_tx;
-
-	ret = parse_classif_info(&classif_info);
-	if (ret)
-		return ret;
+	classif_info.gtp_udp_port = udp_port;
+	classif_info.gtp_proto_id = proto_id;
+	classif_info.num_addresses = num_addresses;
+	for (i = 0; i < num_addresses; i++) {
+		classif_info.addrs[i].ip_addr_type =
+				ip_addr_list[i].ip_addr_type;
+		classif_info.addrs[i].ip_addr[0] = ip_addr_list[i].ip_addr[0];
+		classif_info.addrs[i].ip_addr[1] = ip_addr_list[i].ip_addr[1];
+		classif_info.addrs[i].ip_addr[2] = ip_addr_list[i].ip_addr[2];
+		classif_info.addrs[i].ip_addr[3] = ip_addr_list[i].ip_addr[3];
+	}
 
 	ret = ask_set_classif_info(&classif_info);
 	if (ret)
@@ -326,14 +274,12 @@ static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
 	return ret;
 }
 
-static int dpaa_ol_dev_stop(struct rte_eth_dev *dev)
+int rte_pmd_dpaa_ol_reset_classif_info(void)
 {
 	struct dpdk_uplink_cls_info_s classif_info;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-
-	dev->tx_pkt_burst = dpaa_eth_tx_drop_all;
 
 	memset(&classif_info, 0, sizeof(classif_info));
 
@@ -342,7 +288,23 @@ static int dpaa_ol_dev_stop(struct rte_eth_dev *dev)
 		DPAA_PMD_ERR("Clear classification info failed with ret: %d",
 			     ret);
 
+	return ret;
+}
+
+static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
+{
+	PMD_INIT_FUNC_TRACE();
+
+	dev->tx_pkt_burst = dpaa_eth_queue_tx;
+
 	return 0;
+}
+
+static void dpaa_ol_dev_stop(struct rte_eth_dev *dev)
+{
+	PMD_INIT_FUNC_TRACE();
+
+	dev->tx_pkt_burst = dpaa_eth_tx_drop_all;
 }
 
 static int dpaa_ol_dev_close(__rte_unused struct rte_eth_dev *dev)

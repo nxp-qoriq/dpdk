@@ -188,6 +188,34 @@ dpaa_create_device_list(void)
 	if (!dpaa_netcfg && getenv("OLDEV_ENABLED"))
 		return 0;
 
+	rte_dpaa_bus.device_count = 0;
+
+	/* Creating OL Device */
+	if (getenv("OLDEV_ENABLED")) {
+		dev = calloc(1, sizeof(struct rte_dpaa_device));
+		if (!dev) {
+			DPAA_BUS_LOG(ERR, "Failed to allocate OL devices");
+			return -1;
+		}
+
+		dev->device_type = FSL_DPAA_OL;
+		dev->id.ol_id = 0;
+		dev->id.dev_id = rte_dpaa_bus.device_count;
+
+		/* Create device name */
+		memset(dev->name, 0, RTE_ETH_NAME_MAX_LEN);
+		sprintf(dev->name, "oldev%d", (dev->id.ol_id + 1));
+		DPAA_BUS_LOG(INFO, "%s oldev added", dev->name);
+		dev->device.name = dev->name;
+		dev->device.devargs = dpaa_devargs_lookup(dev);
+
+		dpaa_add_to_device_list(dev);
+		rte_dpaa_bus.device_count++;
+	}
+
+	if (!dpaa_netcfg && getenv("OLDEV_ENABLED"))
+		return 0;
+
 	/* Creating Ethernet Devices */
 	for (i = 0; i < dpaa_netcfg->num_ethports; i++) {
 		dev = calloc(1, sizeof(struct rte_dpaa_device));

@@ -6,6 +6,12 @@
 # To build this example as a standalone application with an already-installed
 # DPDK instance, use 'make'
 
+deps += ['ip_frag']
+
+if dpdk_conf.has('RTE_LIBRTE_DPAA_PMD')
+	deps += ['pmd_dpaa']
+endif
+
 # Enable experimental API flag as l2fwd uses rte_ethdev_set_ptype API
 allow_experimental_apis = true
 sources = files(
