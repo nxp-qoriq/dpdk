@@ -257,7 +257,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 	eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
 	/* if packet is IPv4 */
-	if (RTE_ETH_IS_IPV4_HDR(m->packet_type)) {
+	if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
 		struct rte_ipv4_hdr *ip_hdr;
 
 		ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
@@ -293,7 +293,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 		}
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4);
 
-	} else if (RTE_ETH_IS_IPV6_HDR(m->packet_type)) {
+	} else if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6)) {
 		/* if packet is IPv6 */
 		struct ipv6_extension_fragment *frag_hdr;
 		struct rte_ipv6_hdr *ip_hdr;
