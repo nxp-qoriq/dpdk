@@ -57,6 +57,9 @@ static int nb_ports_available;
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 #define MEMPOOL_CACHE_SIZE 256
 #define MAX_JUMBO_PKT_LEN  9600
+#define PKT_IPV4 0
+#define PKT_IPV6 1
+#define PKT_UNKNOWN 2
 
 static int max_burst_size = MAX_PKT_BURST;
 
@@ -191,14 +194,36 @@ print_stats(void)
 	fflush(stdout);
 }
 
-static bool is_gtp_packet(struct rte_mbuf *m)
+static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 {
 	struct rte_udp_hdr *udp;
+	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_ipv6_hdr *ipv6_hdr;
 	uint16_t dst_port;
 
-	udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+	if (ip_type == PKT_IPV4) {
+		ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
+				sizeof(struct rte_ether_hdr));
+		if (ipv4_hdr->next_proto_id == IPPROTO_UDP) {
+			udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
 				      sizeof(struct rte_ether_hdr) +
 				      sizeof(struct rte_ipv4_hdr));
+		} else {
+			return false;
+		}
+	} else if (ip_type == PKT_IPV6) {
+		ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
+				sizeof(struct rte_ether_hdr));
+		if (ipv6_hdr->proto == IPPROTO_UDP) {
+			udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+				      sizeof(struct rte_ether_hdr) +
+				      sizeof(struct rte_ipv6_hdr));
+		} else {
+			return false;
+		}
+	} else {
+		return false;
+	}
 
 	dst_port = rte_be_to_cpu_16(udp->dst_port);
 	if (dst_port == GTPU_DST_PORT)
@@ -210,32 +235,58 @@ static bool is_gtp_packet(struct rte_mbuf *m)
 
 static void
 l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
-		     bool is_ol_port_packet)
+		     bool is_ol_port_packet, uint8_t ip_type)
 {
 	unsigned int dst_port;
 	int sent;
 	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_ipv6_hdr *ipv6_hdr;
 	struct rte_udp_hdr *udp_hdr;
 	rte_be32_t temp;
+	uint8_t temp_ipv6[16];
 
-	if (is_ol_port_packet && !is_gtp_packet(m)) {
-		dst_port = tap_interface_port;
+	if (nb_ports_available == 3) {
+		if (is_ol_port_packet && !is_gtp_packet(m, ip_type))
+			dst_port = tap_interface_port;
+		else
+			dst_port = l2fwd_dst_ports[portid];
 	} else {
 		dst_port = l2fwd_dst_ports[portid];
-		if (nb_ports_available == 2 && is_ol_port_packet) {
-			ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+		if (is_ol_port_packet) {
+			if (ip_type == PKT_IPV4) {
+				ipv4_hdr = rte_pktmbuf_mtod_offset(m,
 					struct rte_ipv4_hdr *,
 					sizeof(struct rte_ether_hdr));
-			udp_hdr = rte_pktmbuf_mtod_offset(m,
-					struct rte_udp_hdr *,
-					sizeof(struct rte_ether_hdr) +
-					sizeof(struct rte_ipv4_hdr));
-			temp = ipv4_hdr->src_addr;
-			ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
-			ipv4_hdr->dst_addr = temp;
-			temp = udp_hdr->dst_port;
-			udp_hdr->dst_port = udp_hdr->src_port;
-			udp_hdr->src_port = temp;
+				temp = ipv4_hdr->src_addr;
+				ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
+				ipv4_hdr->dst_addr = temp;
+				if (ipv4_hdr->next_proto_id == IPPROTO_UDP) {
+					udp_hdr = rte_pktmbuf_mtod_offset(m,
+						struct rte_udp_hdr *,
+						sizeof(struct rte_ether_hdr) +
+						sizeof(struct rte_ipv4_hdr));
+					temp = udp_hdr->dst_port;
+					udp_hdr->dst_port = udp_hdr->src_port;
+					udp_hdr->src_port = temp;
+				}
+			} else if (ip_type == PKT_IPV6) {
+				ipv6_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_ipv6_hdr *,
+					sizeof(struct rte_ether_hdr));
+				ipv6_hdr->proto = ipv6_hdr->proto;
+				memcpy(&temp_ipv6, &ipv6_hdr->src_addr, 16);
+				memcpy(&ipv6_hdr->src_addr, &ipv6_hdr->dst_addr, 16);
+				memcpy(&ipv6_hdr->dst_addr, &temp_ipv6, 16);
+				if (ipv6_hdr->proto == IPPROTO_UDP) {
+					udp_hdr = rte_pktmbuf_mtod_offset(m,
+						struct rte_udp_hdr *,
+						sizeof(struct rte_ether_hdr) +
+						sizeof(struct rte_ipv6_hdr));
+					temp = udp_hdr->dst_port;
+					udp_hdr->dst_port = udp_hdr->src_port;
+					udp_hdr->src_port = temp;
+				}
+			}
 		}
 	}
 
@@ -252,6 +303,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 	struct rte_ip_frag_tbl *tbl;
 	struct rte_ip_frag_death_row *dr;
 	struct rx_queue *rxq;
+	uint8_t ip_type; /* 0 = ipv4, 1 = ipv6, 2 = unknown */
 
 	rxq = &qconf->rx_queue_list[queue];
 	eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -292,7 +344,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 			m->ol_flags |= (PKT_TX_IPV4 | PKT_TX_IP_CKSUM);
 		}
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4);
-
+		ip_type = PKT_IPV4;
 	} else if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6)) {
 		/* if packet is IPv6 */
 		struct ipv6_extension_fragment *frag_hdr;
@@ -326,9 +378,12 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 		}
 
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV6);
+		ip_type = PKT_IPV6;
+	} else {
+		ip_type = PKT_UNKNOWN;
 	}
 
-	l2fwd_simple_forward(m, portid, true);
+	l2fwd_simple_forward(m, portid, true, ip_type);
 }
 
 /* main processing loop */
@@ -442,7 +497,7 @@ l2fwd_main_loop(void)
 					rte_prefetch0(rte_pktmbuf_mtod(
 						      pkts_burst[j], void *));
 					l2fwd_simple_forward(pkts_burst[j],
-							     portid, false);
+							     portid, false, PKT_UNKNOWN);
 				}
 			}
 		}
@@ -689,7 +744,7 @@ set_classif_info(void)
 	uint8_t num_addresses = 0;
 	struct rte_pmd_dpaa_ip_addr_s ip_addr_list[MAX_NUM_IP_ADDRS];
 	int ret;
-	struct in_addr dest_addr;
+	struct in6_addr result;
 
 	fp = fopen(CLASSIF_INFO_FILENAME, "r");
 	if (fp == NULL) {
@@ -719,6 +774,29 @@ set_classif_info(void)
 			continue;
 		}
 
+		if (!strcmp(token, "IPV6")) {
+			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
+				token = strtok(NULL, " \n");
+				if (!token || i > 4) {
+					num_addresses = i;
+					break;
+				}
+				ret = inet_pton(AF_INET6, token, &result);
+				if (ret == 1) {
+					ip_addr_list[i].ip_addr_type =
+						DPA_ISC_IPV6_ADDR_TYPE;
+					memcpy(&ip_addr_list[i].ip_addr[0], &result.s6_addr, 16);
+					ip_addr_list[i].ip_addr[0] = htonl(ip_addr_list[i].ip_addr[0]);
+					ip_addr_list[i].ip_addr[1] = htonl(ip_addr_list[i].ip_addr[1]);
+					ip_addr_list[i].ip_addr[2] = htonl(ip_addr_list[i].ip_addr[2]);
+					ip_addr_list[i].ip_addr[3] = htonl(ip_addr_list[i].ip_addr[3]);
+				} else {
+					printf("IPv6 address parsing failed\n");
+				}
+			}
+			continue;
+		}
+
 		if (!strcmp(token, "DEST_PORT")) {
 			token = strtok(NULL, space);
 			udp_port = (uint16_t)atoi(token);
@@ -743,13 +821,6 @@ set_classif_info(void)
 	printf("UDP destination port: %d\n", udp_port);
 	printf("Protocol ID: %d\n", protocol_id);
 	printf("Number of IP addresses: %d\n", num_addresses);
-	for (int i = 0; i < num_addresses; i++) {
-		printf("%d IP version: IPv%d\n", i+1,
-		       ip_addr_list[i].ip_addr_type);
-		dest_addr.s_addr = ip_addr_list[i].ip_addr[0];
-		printf("%d IP address: %s\n", i+1,
-		       inet_ntoa(dest_addr));
-	}
 	printf("****************************************************\n");
 
 	return ret;

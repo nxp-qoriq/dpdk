@@ -102,6 +102,9 @@ After booting up the board, run the following commands:
    $ dpdk-devbind --bind=uio_pci_generic 0001:01:00.0
    $ dpdk-devbind --status
 
+   Note: If above commands fail because of "python: no such file" error,
+         Please try "ln -s /usr/bin/python3 /usr/bin/python"
+
 5. Export environment variable to define backhaul port
    $ export BH_PORT_NAME=<Backhaul port name>
 
@@ -141,23 +144,19 @@ Blank lines and the lines starting with '#' will be ignored.
 
 Entries in classif_info.input file:
 
-  1. IPV4 <Space separated list of destination IP addresses>
+  1. IPV4 <Space separated list of IPv4 addresses>
+     or
+     IPV6 <Space separated list of IPv6 addresses>
+
      Minimum one and maximum five IP addresses can be used.
-     eg to receive packets with destination IP addresses 1.1.1.1 & 11.11.11.11:
+     e.g.:
        "IPV4 1.1.1.1 11.11.11.11"
+       "IPV6 fe80:0000:0000:0000:0204:9fff:fe06:5112 2001:0db8:85a3:0000:0000:8a2e:0370:7335"
 
-     Packets with specified destination IP addresses will be received by
-     pkt_split_app.
-
-  NOTE: Currently, only IPV4 Classification is supported. IPV6 is not supported.
+     Note: IPv6 address format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx
 
   2. DEST_PORT <UDP destination port number>
-     eg to receive packets with destination port 2152: "DEST_PORT 2152"
-
-     Packets with specified UDP destination port number will be received by
-     pkt_split_app.
+     e.g.: "DEST_PORT 2152"
 
   3. PROTOCOL_ID <IP protocol number>
-     eg to receive UDP packets: "PROTOCOL_ID 17"
-
-     Packets with specified IP protocol number wil be received by pkt_split_app.
+     e.g.: "PROTOCOL_ID 17"
