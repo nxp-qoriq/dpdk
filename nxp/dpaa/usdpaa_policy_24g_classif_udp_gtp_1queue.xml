@@ -25,7 +25,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac3_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0x700" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac3_dist"/>
@@ -51,7 +52,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac4_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0x800" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac4_dist"/>
@@ -77,7 +79,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac5_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0x900" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac5_dist"/>
@@ -103,7 +106,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac6_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0xa00" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac6_dist"/>
@@ -129,7 +133,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac9_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0xd00" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac9_dist"/>
@@ -155,7 +160,8 @@
 		</key>
 		<entry>
 			<vsp name="dpdk_mac10_flows" />
-			<data>2152</data>
+			<!-- 2152 = 0x868 -->
+			<data>0x868</data>
 			<queue base="0xe00" count="1"/>
 		</entry>
 		<action condition="on-miss" type="distribution" name="default_mac10_dist"/>
