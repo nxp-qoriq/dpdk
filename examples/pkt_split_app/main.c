@@ -1115,6 +1115,7 @@ main(int argc, char **argv)
 	ret = reset_classif_info();
 	if (ret)
 		return ret;
+	print_stats();
 
 	RTE_ETH_FOREACH_DEV(portid) {
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
