@@ -14,6 +14,9 @@ In case of two ports, packets which are received from OL port with the provided
 UDP destination port will be sent back on same OL port. Source/Destination
 IP address and Source/Destination Port will be swapped for these packets. Other
 packets will be send to kernel by sending them to TAP interface.
+Packet coming from TAP interface will be forwarded back on TAP interface without
+any change.
+
 
 In case of three ports, packets which are received from OL port with the
 provided UDP destination port will be sent back on PCI port. Source/Destination
@@ -22,9 +25,8 @@ packets will be send to kernel by sending them to TAP interface.
 Similarly, Packets coming from PCI port will be forwarded on OL port.
 Source/Destination IP address and Source/Destination port of the packets will
 NOT BE swapped.
-
-In both cases, Packet coming from TAP interface will be forwarded back on TAP
-interface without any change.
+Packet coming from TAP interface will be forwarded on PCI interface without any
+change.
 
 
 For two ports and UDP destination port = 2152(GTP packet):
@@ -41,10 +43,14 @@ For two ports and UDP destination port = 2152(GTP packet):
 
 For three ports and UDP destination port = 2152(GTP packet):
 
-                GTP Packets                               All Packets
-          ------------------------                           ------
-         |                        |                         |      |
-        \|/                       |                         |     \|/
+                               All Packets
+          ------------------------------------------------------
+         |                                                      |
+         |                                                      |
+        \|/     GTP Packets                                     |
+          ------------------------                              |
+         |                        |                             |
+        \|/                       |                             |
       ---------  All Packets  ---------  Non GTP Packets    ---------
      |  PCI    |------------>|    OL   |------------------>|   TAP   |
      |  PORT   |             |   PORT  |                   |Interface|

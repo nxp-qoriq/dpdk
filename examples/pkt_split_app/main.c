@@ -985,12 +985,11 @@ main(int argc, char **argv)
 			/* skip ports that are not enabled */
 			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 				continue;
-			if (portid == tap_interface_port) {
-				l2fwd_dst_ports[tap_interface_port] =
-						tap_interface_port;
-			} else if (portid != ol_interface_port) {
+			if (portid != ol_interface_port &&
+			    portid != tap_interface_port) {
 				l2fwd_dst_ports[portid] = ol_interface_port;
 				l2fwd_dst_ports[ol_interface_port] = portid;
+				l2fwd_dst_ports[tap_interface_port] = portid;
 			}
 		}
 	}
