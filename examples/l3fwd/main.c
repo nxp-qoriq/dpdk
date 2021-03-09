@@ -1523,6 +1523,8 @@ configure_split_traffic_config(void)
 	case TRAFFIC_SPLIT_NONE:
 		return 0;
 	case TRAFFIC_SPLIT_ETHTYPE:
+		printf("traffic_split_type on ETH with Type=0x%x\n",
+			traffic_split_val);
 		eth_item.type = traffic_split_val;
 		mask = 0xffff;
 		pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
@@ -1530,6 +1532,8 @@ configure_split_traffic_config(void)
 		pattern[0].mask = &mask;
 		break;
 	case TRAFFIC_SPLIT_IP_PROTO:
+		printf("traffic_split_type on IP PROTO with Type=0x%x\n",
+			traffic_split_val);
 		ip_item.hdr.next_proto_id = traffic_split_val;
 		mask = 0xff;
 		pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -1537,6 +1541,8 @@ configure_split_traffic_config(void)
 		pattern[0].mask = &mask;
 		break;
 	case TRAFFIC_SPLIT_UDP_DST_PORT:
+		printf("traffic_split_type on UDP DST PORT with Type=%d\n",
+			traffic_split_val);
 		udp_item.hdr.dst_port = traffic_split_val;
 		mask = 0xffff;
 		pattern[0].spec = &udp_item;
