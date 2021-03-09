@@ -18,7 +18,8 @@ sources = files('base/dpaa2_hw_dpni.c',
 		'mc/dprtc.c',
 		'mc/dpkg.c',
 		'mc/dpdmux.c',
-		'mc/dpni.c')
+		'mc/dpni.c',
+		'base/dpaa2_tlu_hash.c')
 
 includes += include_directories('base', 'mc')
 
