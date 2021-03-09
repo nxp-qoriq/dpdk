@@ -27,6 +27,8 @@
 #include <rte_lpm.h>
 #include <rte_lpm6.h>
 
+#include <rte_pmd_dpaa2.h>
+
 #include "l3fwd.h"
 #include "l3fwd_event.h"
 
@@ -171,6 +173,46 @@ lpm_get_dst_port_with_ipv4(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
 #include "l3fwd_lpm.h"
 #endif
 
+static void
+test_queue_key(int nb_rx, struct rte_mbuf **pkts_burst, uint16_t queue_id)
+{
+	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_mbuf *m;
+	uint8_t key[20];
+	uint32_t crc64, src_addr, dst_addr;
+
+	int i;
+	struct lcore_conf *qconf;
+
+	qconf = &lcore_conf[rte_lcore_id()];
+
+	for (i = 0; i < nb_rx; ++i) {
+		m = pkts_burst[i];
+
+		if (RTE_ETH_IS_IPV4_HDR(m->packet_type)) {
+			/* Handle IPv4 headers.*/
+			ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
+							sizeof(struct rte_ether_hdr));
+
+			src_addr = rte_bswap32(ipv4_hdr->src_addr);
+			dst_addr = rte_bswap32(ipv4_hdr->dst_addr);
+
+			key[0] = (uint8_t) ((src_addr >> 24) & 0xFF);
+			key[1] = (uint8_t) ((src_addr >> 16) & 0xFF);
+			key[2] = (uint8_t) ((src_addr >> 8) & 0xFF);
+			key[3] = (uint8_t) (src_addr & 0xFF);
+			key[4] = (uint8_t) ((dst_addr >> 24) & 0xFF);
+			key[5] = (uint8_t) ((dst_addr >> 16) & 0xFF);
+			key[6] = (uint8_t) ((dst_addr >> 8) & 0xFF);
+			key[7] = (uint8_t) (dst_addr & 0xFF);
+			key[8] = ipv4_hdr->next_proto_id;
+			crc64 = rte_pmd_dpaa2_get_tlu_hash(key, 9);
+			printf ("\n hash = %u, queu = %d/%d == queueid=%d", crc64,
+				(uint8_t)(crc64 % qconf->n_rx_queue), (uint8_t)(crc64 % 8), queue_id);
+		}
+	}
+}
+
 /* main processing loop */
 int
 lpm_main_loop(__rte_unused void *dummy)
@@ -244,9 +286,11 @@ lpm_main_loop(__rte_unused void *dummy)
 			if (nb_rx == 0)
 				continue;
 
-			if (en_print)
-				printf("Packets received on portid: %d queueid: %d\n",
-					portid, queueid);
+			if (en_print) {
+				test_queue_key(nb_rx, pkts_burst, queueid);
+				printf("%d Packets received on portid: %d queueid: %d, %d\n",
+					nb_rx, portid, queueid, i);
+			}
 
 #if defined RTE_ARCH_X86 || defined __ARM_NEON \
 			 || defined RTE_ARCH_PPC_64
