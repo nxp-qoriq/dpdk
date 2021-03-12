@@ -318,7 +318,7 @@ static inline void
 dpaa_poll_queue_default_config(struct qm_mcc_initfq *opts)
 {
 	memset(opts, 0, sizeof(struct qm_mcc_initfq));
-	opts->we_mask = QM_INITFQ_WE_FQCTRL | QM_INITFQ_WE_CONTEXTA;
+	opts->we_mask = QM_INITFQ_WE_CONTEXTA;
 	opts->fqd.fq_ctrl = QM_FQCTRL_AVOIDBLOCK | QM_FQCTRL_CTXASTASHING |
 			    QM_FQCTRL_PREFERINCACHE;
 	opts->fqd.context_a.stashing.exclusive = 0;
@@ -491,7 +491,7 @@ static int dpaa_ol_tx_queue_init(struct qman_fq *fq, uint32_t fqid)
 		return ret;
 	}
 
-	opts.we_mask = QM_INITFQ_WE_DESTWQ | QM_INITFQ_WE_FQCTRL |
+	opts.we_mask = QM_INITFQ_WE_DESTWQ |
 		       QM_INITFQ_WE_CONTEXTB | QM_INITFQ_WE_CONTEXTA;
 
 	opts.fqd.dest.channel = ch_info.channel_id;
