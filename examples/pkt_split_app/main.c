@@ -41,12 +41,13 @@
 #include <rte_pmd_dpaa_oldev.h>
 
 static volatile bool force_quit;
+const char *split_port_driver_name;
 
 /* Tap interface port id */
 static int tap_interface_port = -1;
 
-/* OL interface port id */
-static int ol_interface_port = -1;
+/* Split port id */
+static int split_port = -1;
 
 /* Port count */
 static int nb_ports_available;
@@ -235,7 +236,7 @@ static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 
 static void
 l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
-		     bool is_ol_port_packet, uint8_t ip_type)
+		     bool is_split_port_packet, uint8_t ip_type)
 {
 	unsigned int dst_port;
 	int sent;
@@ -245,14 +246,13 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
 	rte_be32_t temp;
 	uint8_t temp_ipv6[16];
 
-	if (nb_ports_available == 3) {
-		if (is_ol_port_packet && !is_gtp_packet(m, ip_type))
-			dst_port = tap_interface_port;
-		else
-			dst_port = l2fwd_dst_ports[portid];
-	} else {
+	if (is_split_port_packet && !is_gtp_packet(m, ip_type))
+		dst_port = tap_interface_port;
+	else
 		dst_port = l2fwd_dst_ports[portid];
-		if (is_ol_port_packet) {
+
+	if (nb_ports_available == 2) {
+		if (is_split_port_packet) {
 			if (ip_type == PKT_IPV4) {
 				ipv4_hdr = rte_pktmbuf_mtod_offset(m,
 					struct rte_ipv4_hdr *,
@@ -463,7 +463,7 @@ l2fwd_main_loop(void)
 
 			port_statistics[portid].rx += nb_rx;
 
-			if (portid == (unsigned int)ol_interface_port) {
+			if (portid == (unsigned int)split_port) {
 				/* Prefetch first packets */
 				for (j = 0; j < PREFETCH_OFFSET &&
 						j < nb_rx; j++) {
@@ -519,7 +519,8 @@ l2fwd_usage(const char *prgname)
 	       "  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
 	       "  -T PERIOD: statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
 	       "  -b NUM: burst size for receive packet (default is 32)\n"
-	       "  -m MTU: mtu for tap interface(s) (default is 1500)\n",
+	       "  -m MTU: mtu for tap interface(s) (default is 1500)\n"
+	       "  -s PORTID: split port id. Use this option when Ethernet port is split port.\n",
 	       prgname);
 }
 
@@ -561,6 +562,7 @@ static const char short_options[] =
 	"T:"  /* timer period */
 	"b:"  /* burst size */
 	"m:"  /* mtu of tap interface(s) */
+	"s:"  /* split port id */
 	;
 
 enum {
@@ -629,6 +631,16 @@ l2fwd_parse_args(int argc, char **argv)
 			if (tap_mtu < RTE_ETHER_MIN_MTU ||
 					tap_mtu > TAP_MAX_MTU) {
 				printf("Invalid MTU for tap interface(s)");
+				l2fwd_usage(prgname);
+				return -1;
+			}
+			break;
+
+		/* split port */
+		case 's':
+			split_port = (uint16_t)atoi(optarg);
+			if (!((l2fwd_enabled_port_mask >> split_port) & 1)) {
+				printf("invalid split port id\n");
 				l2fwd_usage(prgname);
 				return -1;
 			}
@@ -962,16 +974,22 @@ main(int argc, char **argv)
 
 		if (!strcmp(dev_info.driver_name, "net_tap"))
 			tap_interface_port = portid;
-		else if (!strcmp(dev_info.driver_name, "ol_dpaa"))
-			ol_interface_port = portid;
+
+		if (split_port == -1) {
+			if (!strcmp(dev_info.driver_name, "ol_dpaa")) {
+				split_port_driver_name = dev_info.driver_name;
+				split_port = portid;
+			}
+		} else if (portid == split_port)
+			split_port_driver_name = dev_info.driver_name;
 	}
 
 	if (tap_interface_port == -1)
 		rte_exit(EXIT_FAILURE,
-			"Tap interfae not available.\n");
-	else if (ol_interface_port == -1)
+			"Tap interface not available.\n");
+	else if (split_port == -1)
 		rte_exit(EXIT_FAILURE,
-			"OL interfae not available.\n");
+			"split port not available.\n");
 
 	if (nb_ports_in_mask == 2) {
 		RTE_ETH_FOREACH_DEV(portid) {
@@ -985,10 +1003,10 @@ main(int argc, char **argv)
 			/* skip ports that are not enabled */
 			if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 				continue;
-			if (portid != ol_interface_port &&
+			if (portid != split_port &&
 			    portid != tap_interface_port) {
-				l2fwd_dst_ports[portid] = ol_interface_port;
-				l2fwd_dst_ports[ol_interface_port] = portid;
+				l2fwd_dst_ports[portid] = split_port;
+				l2fwd_dst_ports[split_port] = portid;
 				l2fwd_dst_ports[tap_interface_port] = portid;
 			}
 		}
@@ -1098,9 +1116,11 @@ main(int argc, char **argv)
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
-	ret = set_classif_info();
-	if (ret)
-		return ret;
+	if (!strcmp(split_port_driver_name, "ol_dpaa")) {
+		ret = set_classif_info();
+		if (ret)
+			return ret;
+	}
 
 	ret = 0;
 	/* launch per-lcore init on every lcore */
@@ -1112,9 +1132,11 @@ main(int argc, char **argv)
 		}
 	}
 
-	ret = reset_classif_info();
-	if (ret)
-		return ret;
+	if (!strcmp(split_port_driver_name, "ol_dpaa")) {
+		ret = reset_classif_info();
+		if (ret)
+			return ret;
+	}
 	print_stats();
 
 	RTE_ETH_FOREACH_DEV(portid) {
