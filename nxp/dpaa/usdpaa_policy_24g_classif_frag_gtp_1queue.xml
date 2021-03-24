@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright 2021 NXP
+-->
+
+<netpcd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="xmlProject/pcd.xsd" name="example"
+	description="Bridging configuration">
+
+<!--    xxxxxxxxxxxxxxxxxxxxxxxx Distributions xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+
+	<vsp name="shared_mac_pool" base="0"/>
+	<vsp name="dpdk_mac3_flows" base="1"/>
+	<vsp name="dpdk_mac4_flows" base="1"/>
+	<vsp name="dpdk_mac5_flows" base="1"/>
+	<vsp name="dpdk_mac6_flows" base="1"/>
+	<vsp name="dpdk_mac9_flows" base="1"/>
+	<vsp name="dpdk_mac10_flows" base="1"/>
+
+	<!-- dpdk_mac3_flow distribution and classification -->
+	<classification name="dpdk_mac3_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac3_flows" />
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac3_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac3"/>
+	</classification>
+
+	<classification name="dpdk_mac3_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac3_flows" />
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac3_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac3"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac3_dist">
+		<vsp name="dpdk_mac3_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0x700" count="1"/>
+		<action type="classification" name="dpdk_mac3_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac3_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<vsp name="dpdk_mac3_flows"/>
+			<data>0x868</data>
+			<queue base="0x700" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac3"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac3_dist">
+		<vsp name="dpdk_mac3_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0x700" count="1"/>
+		<action type="classification" name="dpdk_mac3_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac3">
+		<vsp name="dpdk_mac10_flows" />
+		<queue base="0x700" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac3">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x55"/>
+	</distribution>
+
+	<!-- dpdk_mac4_flow distribution and classification -->
+	<classification name="dpdk_mac4_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac4_flows" />
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac4_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac4"/>
+	</classification>
+
+	<classification name="dpdk_mac4_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac4_flows" />
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac4_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac4"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac4_dist">
+		<vsp name="dpdk_mac4_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0x800" count="1"/>
+		<action type="classification" name="dpdk_mac4_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac4_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<vsp name="dpdk_mac4_flows"/>
+			<data>0x868</data>
+			<queue base="0x800" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac4"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac4_dist">
+		<vsp name="dpdk_mac4_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0x800" count="1"/>
+		<action type="classification" name="dpdk_mac4_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac4">
+		<vsp name="dpdk_mac10_flows" />
+		<queue base="0x800" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac4">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x57"/>
+	</distribution>
+
+	<!-- dpdk_mac5_flow distribution and classification -->
+	<classification name="dpdk_mac5_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac5_flows" />
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac5_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac5"/>
+	</classification>
+
+	<classification name="dpdk_mac5_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac5_flows" />
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac5_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac5"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac5_dist">
+		<vsp name="dpdk_mac5_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0x900" count="1"/>
+		<action type="classification" name="dpdk_mac5_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac5_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<vsp name="dpdk_mac5_flows"/>
+			<data>0x868</data>
+			<queue base="0x900" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac5"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac5_dist">
+		<vsp name="dpdk_mac5_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0x900" count="1"/>
+		<action type="classification" name="dpdk_mac5_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac5">
+		<vsp name="dpdk_mac5_flows" />
+		<queue base="0x900" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac5">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x59"/>
+	</distribution>
+
+	<!-- dpdk_mac6_flow distribution and classification -->
+	<classification name="dpdk_mac6_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac6_flows" />
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac6_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac6"/>
+	</classification>
+
+	<classification name="dpdk_mac6_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac6_flows" />
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac6_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac6"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac6_dist">
+		<vsp name="dpdk_mac6_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0xa00" count="1"/>
+		<action type="classification" name="dpdk_mac6_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac6_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<vsp name="dpdk_mac6_flows"/>
+			<data>0x868</data>
+			<queue base="0xa00" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac6"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac6_dist">
+		<vsp name="dpdk_mac6_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0xa00" count="1"/>
+		<action type="classification" name="dpdk_mac6_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac6">
+		<vsp name="dpdk_mac6_flows" />
+		<queue base="0xa00" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac6">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x5b"/>
+	</distribution>
+
+	<!-- dpdk_mac9_flow distribution and classification -->
+	<classification name="dpdk_mac9_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac9_flows"/>
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac9_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac9"/>
+	</classification>
+
+	<classification name="dpdk_mac9_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac9_flows"/>
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac9_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac9"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac9_dist">
+		<vsp name="dpdk_mac9_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0xd00" count="1"/>
+		<action type="classification" name="dpdk_mac9_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac9_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac9_flows"/>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<data>0x868</data>
+			<queue base="0xd00" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac9"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac9_dist">
+		<vsp name="dpdk_mac9_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0xd00" count="1"/>
+		<action type="classification" name="dpdk_mac9_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac9">
+		<vsp name="dpdk_mac9_flows" />
+		<queue base="0xd00" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac9">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x5d"/>
+	</distribution>
+
+	<!-- dpdk_mac10_flow distribution and classification -->
+	<classification name="dpdk_mac10_mf_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.mf"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac10_flows" />
+			<!-- If mf is 0, check for next condition-->
+			<!-- If mf is non zero(one), send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="classification" name="dpdk_mac10_foffset_classif"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac10"/>
+	</classification>
+
+	<classification name="dpdk_mac10_foffset_classif" masks="yes">
+		<key>
+			<fieldref name ="ipv4.foffset"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac10_flows" />
+			<!-- If foffset is 0, check for next condition-->
+			<!-- If foffset is non zero, send packet to default queue(userspace queue)-->
+			<data>0x0</data>
+			<action type="distribution" name="dpdk_gtp_mac10_dist"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_dpdk_queue_mac10"/>
+	</classification>
+
+	<distribution name="dpdk_frag_gtp_mac10_dist">
+		<vsp name="dpdk_mac10_flows" />
+		<protocols>
+			<protocolref name="ipv4"/>
+		</protocols>
+		<queue base="0xe00" count="1"/>
+		<action type="classification" name="dpdk_mac10_mf_classif" />
+	</distribution>
+
+	<classification name="dpdk_mac10_gtp_classif" masks="yes">
+		<key>
+			<fieldref name ="udp.dport"/>
+		</key>
+		<entry>
+			<!-- If udp.dport is 2152(0x868), send packet to userspace queue-->
+			<vsp name="dpdk_mac10_flows"/>
+			<data>0x868</data>
+			<queue base="0xe00" count="1"/>
+		</entry>
+		<!-- If udp.dport is not 2152, send packet to default queue(kernel queue)-->
+		<action condition="on-miss" type="distribution" name="default_kernel_queue_mac10"/>
+	</classification>
+
+	<distribution name="dpdk_gtp_mac10_dist">
+		<vsp name="dpdk_mac10_flows" />
+		<protocols>
+			<protocolref name="udp"/>
+		</protocols>
+		<queue base="0xe00" count="1"/>
+		<action type="classification" name="dpdk_mac10_gtp_classif" />
+	</distribution>
+
+	<distribution name="default_dpdk_queue_mac10">
+		<vsp name="dpdk_mac10_flows" />
+		<queue base="0xe00" count="1"/>
+	</distribution>
+
+	<distribution name="default_kernel_queue_mac10">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x5f"/>
+	</distribution>
+
+<!--    xxxxxxxxxxxxxxxxxxxxxxxxxx Policies xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+
+	<policy name="fm_policy_3">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac3_dist"/>
+			<distributionref name="default_dpdk_queue_mac3"/>
+			<distributionref name="default_kernel_queue_mac3"/>
+		</dist_order>
+	</policy>
+
+	<policy name="fm_policy_4">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac4_dist"/>
+			<distributionref name="default_dpdk_queue_mac4"/>
+			<distributionref name="default_kernel_queue_mac4"/>
+		</dist_order>
+	</policy>
+
+	<policy name="fm_policy_5">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac5_dist"/>
+			<distributionref name="default_dpdk_queue_mac5"/>
+			<distributionref name="default_kernel_queue_mac5"/>
+		</dist_order>
+	</policy>
+
+	<policy name="fm_policy_6">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac6_dist"/>
+			<distributionref name="default_dpdk_queue_mac6"/>
+			<distributionref name="default_kernel_queue_mac6"/>
+		</dist_order>
+	</policy>
+
+	<policy name="fm_policy_9">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac9_dist"/>
+			<distributionref name="default_dpdk_queue_mac9"/>
+			<distributionref name="default_kernel_queue_mac9"/>
+		</dist_order>
+	</policy>
+
+	<policy name="fm_policy_10">
+		<dist_order>
+			<distributionref name="dpdk_frag_gtp_mac10_dist"/>
+			<distributionref name="default_dpdk_queue_mac10"/>
+			<distributionref name="default_kernel_queue_mac10"/>
+		</dist_order>
+	</policy>
+</netpcd>
