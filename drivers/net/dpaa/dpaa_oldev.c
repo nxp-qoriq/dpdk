@@ -370,6 +370,7 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	struct ask_ctrl_dpdk_fq_info_s fq_info;
 	int ret;
 	const char *bh_port_name;
+	struct rte_pktmbuf_pool_private *mbp_priv;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -378,26 +379,34 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	if (dpaa_intf->bp_info == NULL || rxq == NULL)
 		return 0;
 
+	mbp_priv = (struct rte_pktmbuf_pool_private *)rte_mempool_get_priv(dpaa_intf->bp_info->mp);
 	fq_info.tx_fq_id = txq->fqid;
 	fq_info.rx_fq_id = rxq->fqid;
-	fq_info.buff_size = dpaa_intf->bp_info->size;
+	fq_info.buff_size = mbp_priv->mbuf_data_room_size;
 	fq_info.bp_id = dpaa_intf->bp_info->bpid;
 
-#define PRIVATE_DATA_SIZE 80
-#define DATA_ALIGNMENT 64
-#define MAX_EXTRA_SIZE 96
-#define PARSE_RESULT_REQUIRED true
-#define TIME_STAMP_REQUIRED true
-#define HASH_RESULT_REQUIRED false
-#define PCD_INFO_REQUIRED false
+/* Private area reserved by driver.
+ * Aligned with "struct annotations_t". Parse results will be written from
+ * the 17th byte by the HW.
+ */
+#define DPAA_OL_PARSERSLT_START_OFFSET 16
+#define DPAA_OL_DATA_ALIGNMENT 64
+/* Change this value to increase the data offset.
+ * final value will be aligned by DPAA_OL_DATA_ALIGNMENT
+ */
+#define DPAA_OL_MAX_EXTRA_SIZE 0
+#define DPAA_OL_PARSE_RESULT_REQUIRED true
+#define DPAA_OL_TIME_STAMP_REQUIRED false
+#define DPAA_OL_HASH_RESULT_REQUIRED false
+#define DPAA_OL_PCD_INFO_REQUIRED false
 
-	fq_info.privDataSize = PRIVATE_DATA_SIZE;
-	fq_info.passPrsResult = PARSE_RESULT_REQUIRED;
-	fq_info.passTimeStamp = TIME_STAMP_REQUIRED;
-	fq_info.passHashResult = HASH_RESULT_REQUIRED;
-	fq_info.passAllOtherPCDInfo = PCD_INFO_REQUIRED;
-	fq_info.dataAlign = DATA_ALIGNMENT;
-	fq_info.manipExtraSpace = MAX_EXTRA_SIZE;
+	fq_info.privDataSize = DPAA_OL_PARSERSLT_START_OFFSET;
+	fq_info.passPrsResult = DPAA_OL_PARSE_RESULT_REQUIRED;
+	fq_info.passTimeStamp = DPAA_OL_TIME_STAMP_REQUIRED;
+	fq_info.passHashResult = DPAA_OL_HASH_RESULT_REQUIRED;
+	fq_info.passAllOtherPCDInfo = DPAA_OL_PCD_INFO_REQUIRED;
+	fq_info.dataAlign = DPAA_OL_DATA_ALIGNMENT;
+	fq_info.manipExtraSpace = DPAA_OL_MAX_EXTRA_SIZE;
 
 	bh_port_name = getenv("BH_PORT_NAME");
 	if (bh_port_name == NULL) {
