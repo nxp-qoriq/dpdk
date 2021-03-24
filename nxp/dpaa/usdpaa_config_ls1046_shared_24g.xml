@@ -18,11 +18,17 @@ In DPDK the ports are detected in order specified in the linux DTS file
 So here we need to specify ports in the order they are present in the linux DTS
 Also, the DPDK port 'X' should have policy as fm_policy_'X'
 -->
+<!--
+Enable only 1 MAC at a time and rest will not be configured when using
+'usdpaa_policy_24g_classif_frag_gtp_1queue.xml' fmc policy file.
+TODO: Add support of multiple mac.
+
 		<port type="MAC" number="3" policy="fm_policy_3"/>
 		<port type="MAC" number="4" policy="fm_policy_4"/>
 		<port type="MAC" number="5" policy="fm_policy_5"/>
 		<port type="MAC" number="6" policy="fm_policy_6"/>
 		<port type="MAC" number="9" policy="fm_policy_9"/>
+-->
 		<port type="MAC" number="10" policy="fm_policy_10"/>
 	</engine>
     </config>
