@@ -2,27 +2,28 @@
 Introduction to pkt_split_app application
 -----------------------------------------
 
-This DPDK application uses two or three ports, two of which are OL port and Tap
+This DPDK application uses two or three ports, two of which are split port and Tap
 interface. Third port is PCI port, which is optional to use.
+Split port can be OL or eth port.
 
 An OL port is a pair of Frame queues which will be used as Tx and Rx frame
 queues. ASK module will send the packets on the Rx FQ using the classification
 information provided. The application will send the packets back to ASK module
 using Tx FQ.
 
-In case of two ports, packets which are received from OL port with the provided
-UDP destination port will be sent back on same OL port. Source/Destination
+In case of two ports, packets which are received from split port with the provided
+UDP destination port will be sent back on same split port. Source/Destination
 IP address and Source/Destination Port will be swapped for these packets. Other
 packets will be send to kernel by sending them to TAP interface.
 Packet coming from TAP interface will be forwarded back on TAP interface without
 any change.
 
 
-In case of three ports, packets which are received from OL port with the
+In case of three ports, packets which are received from split port with the
 provided UDP destination port will be sent back on PCI port. Source/Destination
 IP address and Source/Destination port of the packets will NOT BE swapped. Other
 packets will be send to kernel by sending them to TAP interface.
-Similarly, Packets coming from PCI port will be forwarded on OL port.
+Similarly, Packets coming from PCI port will be forwarded on split port.
 Source/Destination IP address and Source/Destination port of the packets will
 NOT BE swapped.
 Packet coming from TAP interface will be forwarded on PCI interface without any
@@ -36,7 +37,7 @@ For two ports and UDP destination port = 2152(GTP packet):
            |      |                                  |      |
            |     \|/                                 |     \|/
            ---------         Non GTP Packets         ---------
-          |   OL    |------------------------------>|   TAP   |
+          |  SPLIT  |------------------------------>|   TAP   |
           |  PORT   |                               |Interface|
            ---------                                 ---------
 
@@ -52,7 +53,7 @@ For three ports and UDP destination port = 2152(GTP packet):
          |                        |                             |
         \|/                       |                             |
       ---------  All Packets  ---------  Non GTP Packets    ---------
-     |  PCI    |------------>|    OL   |------------------>|   TAP   |
+     |  PCI    |------------>|  SPLIT  |------------------>|   TAP   |
      |  PORT   |             |   PORT  |                   |Interface|
       ---------               ---------                     ---------
 
@@ -75,10 +76,48 @@ Compilation of pkt_split_app application:
 Location of pkt_split_app binary: examples/pkt_split_app/build/pkt_split_app
 
 
+-------------------------------------------------------------------
+Steps to run pkt_split_app on LS1046ARDB when split port is eth port
+-------------------------------------------------------------------
 
-----------------------------------------
-Steps to run pkt_split_app on LS1046ARDB
-----------------------------------------
+1. fmc -x
+2. ifconfig fm1-mac10 <valid IP address>
+3. mount -t hugetlbfs hugetlbfs /dev/hugepages
+4. echo 512 > /proc/sys/vm/nr_hugepages
+5. fmc -c usdpaa_config_ls1046_shared_24g.xml -p usdpaa_policy_24g_classif_frag_gtp_1queue.xml -a
+6. Bind PCI device with DPDK driver
+
+   To print the available PCI devices, use:
+   $ lspci
+   $ dpdk-devbind --status
+
+   Run these commands only if you want to use PCI port:
+   $ dpdk-devbind -u 0001:01:00.0
+   $ dpdk-devbind --bind=uio_pci_generic 0001:01:00.0
+   $ dpdk-devbind --status
+
+   Note: If above commands fail because of "python: no such file" error,
+         Please try "ln -s /usr/bin/python3 /usr/bin/python"
+7. Run the pkt_split_app application with three ports(Use PCI port):
+   $ ./pkt_split_app -c 0xe -n 1 --vdev=net_tap0 -- -p 0xc1 -s 6 -m 8000
+
+   This command will use one eth port, one PCI port and one Tap interface. Tap
+   interface's mtu is 8000. Here split port id is 6.
+   First port will be PCI port, second port will be eth port and third port will
+   be Tap interface.
+
+8. Run the pkt_split_app application with two ports(Don't use PCI port):
+   $ ./pkt_split_app -c 0xe -n 1 --vdev=net_tap0 -- -p 0x60 -s 5 -m 8000
+
+   This command will use one eth port and one Tap interface. Tap
+   interface's mtu is 8000. Here split port id is 5
+   first port will be eth port and second port will be Tap interface.
+
+   Note: number of split port id should not be more than one.
+
+-------------------------------------------------------------------
+Steps to run pkt_split_app on LS1046ARDB when split port is OL port
+-------------------------------------------------------------------
 
 Flash the LS1046ARDB board with ASK images and fman microcode.
 After booting up the board, run the following commands:
