@@ -94,21 +94,18 @@ struct ask_ctrl_dpdk_fq_info_s {
 					 */
 };
 
-struct dpdk_uplink_cls_info_s {
-	struct		rte_pmd_dpaa_ip_addr_s addrs[MAX_NUM_IP_ADDRS];
-	uint16_t	gtp_udp_port;	/* DPDK app listens on this GTP port */
-	uint8_t		gtp_proto_id;	/* DPDK app listens on UDP protocol */
-	uint8_t		num_addresses;
-};
-
 #define ASK_CTRL_GET_OFFLINE_CHANNEL_INFO \
 	_IOWR(CDX_IOC_MAGIC, 8, struct ask_ctrl_offline_channel)
 #define ASK_CTRL_SET_DPDK_INFO \
 	_IOWR(CDX_IOC_MAGIC, 9, struct ask_ctrl_dpdk_fq_info_s)
 #define ASK_CTRL_SET_CLASSIF_INFO \
-	_IOWR(CDX_IOC_MAGIC, 10, struct dpdk_uplink_cls_info_s)
+	_IOWR(CDX_IOC_MAGIC, 10, struct rte_pmd_dpaa_uplink_cls_info_s)
 #define ASK_CTRL_RESET_CLASSIF_INFO \
-	_IOWR(CDX_IOC_MAGIC, 11, struct dpdk_uplink_cls_info_s)
+	_IOWR(CDX_IOC_MAGIC, 11, struct rte_pmd_dpaa_uplink_cls_info_s)
+#define ASK_CTRL_SET_LGW_INFO \
+	_IOWR(CDX_IOC_MAGIC, 12, struct rte_pmd_dpaa_lgw_info_s)
+#define ASK_CTRL_RESET_LGW_INFO \
+	_IOWR(CDX_IOC_MAGIC, 13, struct rte_pmd_dpaa_lgw_info_s)
 
 
 static int check_fd(void)
@@ -171,52 +168,6 @@ static int ask_set_fq_info(struct ask_ctrl_dpdk_fq_info_s *fq_info)
 	return ret;
 }
 
-static int ask_set_classif_info(struct dpdk_uplink_cls_info_s *classif_info)
-{
-	struct in_addr dest_addr;
-	int i, ret = check_fd();
-	if (ret)
-		return ret;
-
-	ret = ioctl(fd, ASK_CTRL_SET_CLASSIF_INFO, classif_info);
-	if (!ret) {
-		DPAA_PMD_DEBUG("Set classification info successful");
-		DPAA_PMD_DEBUG("UDP dest port: %d",
-			       classif_info->gtp_udp_port);
-		DPAA_PMD_DEBUG("Protocol ID: %d",
-			       classif_info->gtp_proto_id);
-		DPAA_PMD_DEBUG("No of IP address: %d",
-			       classif_info->num_addresses);
-		for (i = 0; i < classif_info->num_addresses; i++) {
-			dest_addr.s_addr = classif_info->addrs[i].ip_addr[0];
-			DPAA_PMD_DEBUG("IP Address %i: %s", i + 1,
-				       inet_ntoa(dest_addr));
-		}
-	} else {
-		DPAA_PMD_ERR("Set classification info ioctl failed with errno: %s",
-			     strerror(errno));
-	}
-
-	return ret;
-}
-
-static int ask_reset_classif_info(struct dpdk_uplink_cls_info_s classif_info)
-{
-	int ret = check_fd();
-	if (ret)
-		return ret;
-
-	ret = ioctl(fd, ASK_CTRL_RESET_CLASSIF_INFO, &classif_info);
-	if (ret) {
-		DPAA_PMD_ERR("Reset classification info ioctl failed with errno: %s",
-			     strerror(errno));
-	} else {
-		DPAA_PMD_DEBUG("Reset classification info successful");
-	}
-
-	return ret;
-}
-
 static int
 dpaa_ol_dev_configure(__rte_unused struct rte_eth_dev *dev)
 {
@@ -247,46 +198,103 @@ static int dpaa_ol_dev_info(struct rte_eth_dev *dev,
 	return 0;
 }
 
-int rte_pmd_dpaa_ol_set_classif_info(uint16_t udp_port, uint8_t proto_id,
-			     uint8_t num_addresses,
-			     struct rte_pmd_dpaa_ip_addr_s ip_addr_list[])
+int rte_pmd_dpaa_ol_set_classif_info(
+			struct rte_pmd_dpaa_uplink_cls_info_s *classif_info)
 {
-	struct dpdk_uplink_cls_info_s classif_info;
-	int i, ret;
+	struct in_addr dest_addr;
+	int i, ret = check_fd();
+	if (ret)
+		return ret;
 
-	classif_info.gtp_udp_port = udp_port;
-	classif_info.gtp_proto_id = proto_id;
-	classif_info.num_addresses = num_addresses;
-	for (i = 0; i < num_addresses; i++) {
-		classif_info.addrs[i].ip_addr_type =
-				ip_addr_list[i].ip_addr_type;
-		classif_info.addrs[i].ip_addr[0] = ip_addr_list[i].ip_addr[0];
-		classif_info.addrs[i].ip_addr[1] = ip_addr_list[i].ip_addr[1];
-		classif_info.addrs[i].ip_addr[2] = ip_addr_list[i].ip_addr[2];
-		classif_info.addrs[i].ip_addr[3] = ip_addr_list[i].ip_addr[3];
+	if (classif_info == NULL) {
+		DPAA_PMD_ERR("No classification data available\n");
+		return -1;
 	}
 
-	ret = ask_set_classif_info(&classif_info);
-	if (ret)
-		DPAA_PMD_ERR("Set classification info failed with ret: %d",
-			     ret);
+	ret = ioctl(fd, ASK_CTRL_SET_CLASSIF_INFO, classif_info);
+	if (!ret) {
+		DPAA_PMD_DEBUG("Set classification info successful");
+		DPAA_PMD_DEBUG("UDP dest port: %d",
+			       classif_info->gtp_udp_port);
+		DPAA_PMD_DEBUG("Protocol ID: %d",
+			       classif_info->gtp_proto_id);
+		DPAA_PMD_DEBUG("No of IP address: %d",
+			       classif_info->num_addresses);
+		for (i = 0; i < classif_info->num_addresses; i++) {
+			dest_addr.s_addr = classif_info->addrs[i].ip_addr[0];
+			DPAA_PMD_DEBUG("IP Address %i: %s", i + 1,
+				       inet_ntoa(dest_addr));
+		}
+	} else {
+		DPAA_PMD_ERR("Set classification info ioctl failed with errno: %s",
+			     strerror(errno));
+	}
 
 	return ret;
 }
 
 int rte_pmd_dpaa_ol_reset_classif_info(void)
 {
-	struct dpdk_uplink_cls_info_s classif_info;
-	int ret;
+	struct rte_pmd_dpaa_uplink_cls_info_s classif_info;
+	int ret = 0;
+
+	memset(&classif_info, 0, sizeof(classif_info));
+	ret = check_fd();
+	if (ret)
+		return ret;
+
+	ret = ioctl(fd, ASK_CTRL_RESET_CLASSIF_INFO, &classif_info);
+	if (ret) {
+		DPAA_PMD_ERR("Reset classification info ioctl failed with errno: %s",
+			     strerror(errno));
+	} else {
+		DPAA_PMD_DEBUG("Reset classification info successful");
+	}
+
+	return ret;
+}
+
+int rte_pmd_dpaa_ol_set_lgw_info(
+			struct rte_pmd_dpaa_lgw_info_s *lgw_info)
+{
+	int ret = check_fd();
+	if (ret)
+		return ret;
+
+	if (lgw_info == NULL) {
+		DPAA_PMD_ERR("No LGW data available\n");
+		return -1;
+	}
+	ret = ioctl(fd, ASK_CTRL_SET_LGW_INFO, lgw_info);
+	if (!ret) {
+		DPAA_PMD_DEBUG("Set LGW info successful\n");
+	} else {
+		DPAA_PMD_ERR("Set LGW info ioctl failed with errno: %s",
+			     strerror(errno));
+	}
+
+	return ret;
+}
+
+int rte_pmd_dpaa_ol_reset_lgw_info(void)
+{
+	struct rte_pmd_dpaa_lgw_info_s lgw_info;
+	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
 
-	memset(&classif_info, 0, sizeof(classif_info));
-
-	ret = ask_reset_classif_info(classif_info);
+	memset(&lgw_info, 0, sizeof(lgw_info));
+	ret = check_fd();
 	if (ret)
-		DPAA_PMD_ERR("Clear classification info failed with ret: %d",
-			     ret);
+		return ret;
+
+	ret = ioctl(fd, ASK_CTRL_RESET_LGW_INFO, &lgw_info);
+	if (ret) {
+		DPAA_PMD_ERR("Reset LGW info ioctl failed with errno: %s",
+			     strerror(errno));
+	} else {
+		DPAA_PMD_DEBUG("Reset LGW info successful");
+	}
 
 	return ret;
 }

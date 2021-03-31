@@ -63,6 +63,7 @@ static int nb_ports_available;
 #define PKT_UNKNOWN 2
 
 static int max_burst_size = MAX_PKT_BURST;
+char *data_file;
 
 /*
  * Configurable number of RX/TX ring descriptors
@@ -83,6 +84,9 @@ static uint32_t tap_mtu = RTE_ETHER_MTU;
 static uint32_t l2fwd_dst_ports[RTE_MAX_ETHPORTS];
 
 static unsigned int l2fwd_rx_queue_per_lcore = 1;
+
+/* LGW traffic */
+struct rte_pmd_dpaa_lgw_info_s lgw_subnets;
 
 struct mbuf_table {
 	uint32_t len;
@@ -195,6 +199,53 @@ print_stats(void)
 	fflush(stdout);
 }
 
+static bool is_lgw(struct rte_mbuf *m, uint8_t ip_type)
+{
+	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_ipv6_hdr *ipv6_hdr;
+	int i = 0, j = 0;
+
+	if (ip_type == PKT_IPV4) {
+		ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
+				sizeof(struct rte_ether_hdr));
+		for (i = 0; i < lgw_subnets.num_subnets; i++) {
+			if ((rte_be_to_cpu_32(ipv4_hdr->dst_addr) >> (32 - lgw_subnets.subnets[i].mask)) ==
+			    (lgw_subnets.subnets[i].subnet[0] >> (32 - lgw_subnets.subnets[i].mask))) {
+				return true;
+			}
+		}
+	} else if (ip_type == PKT_IPV6) {
+		ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
+				sizeof(struct rte_ether_hdr));
+		for (i = 0; i < lgw_subnets.num_subnets; i++) {
+			uint8_t mask = lgw_subnets.subnets[i].mask;
+
+			for (j = 0; j < 4; j++) {
+				uint32_t temp_addr;
+
+				memcpy(&temp_addr, &ipv6_hdr->dst_addr[j * 4], 4);
+				if (mask > 32) {
+					mask -= 32;
+					if ((rte_be_to_cpu_32(temp_addr) !=
+					    (lgw_subnets.subnets[i].subnet[j]))) {
+						break;
+					}
+				} else {
+					if ((rte_be_to_cpu_32(temp_addr) >> (32 - mask)) !=
+					    (lgw_subnets.subnets[i].subnet[j] >> (32 - mask)))
+						return false;
+					else
+						return true;
+				}
+			}
+			if (j == 4)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 {
 	struct rte_udp_hdr *udp;
@@ -205,7 +256,8 @@ static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 	if (ip_type == PKT_IPV4) {
 		ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
 				sizeof(struct rte_ether_hdr));
-		if (ipv4_hdr->next_proto_id == IPPROTO_UDP) {
+		if (ipv4_hdr->next_proto_id == IPPROTO_UDP ||
+			ipv4_hdr->next_proto_id == IPPROTO_TCP) {
 			udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
 				      sizeof(struct rte_ether_hdr) +
 				      sizeof(struct rte_ipv4_hdr));
@@ -215,7 +267,8 @@ static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 	} else if (ip_type == PKT_IPV6) {
 		ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
 				sizeof(struct rte_ether_hdr));
-		if (ipv6_hdr->proto == IPPROTO_UDP) {
+		if (ipv6_hdr->proto == IPPROTO_UDP ||
+			ipv6_hdr->proto == IPPROTO_TCP) {
 			udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
 				      sizeof(struct rte_ether_hdr) +
 				      sizeof(struct rte_ipv6_hdr));
@@ -235,10 +288,10 @@ static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 
 
 static void
-l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
-		     bool is_split_port_packet, uint8_t ip_type)
+l2fwd_simple_forward(struct rte_mbuf *m,
+		     bool is_split_port_packet, uint8_t ip_type,
+		     unsigned int dst_port)
 {
-	unsigned int dst_port;
 	int sent;
 	struct rte_ipv4_hdr *ipv4_hdr;
 	struct rte_ipv6_hdr *ipv6_hdr;
@@ -246,46 +299,39 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned int portid,
 	rte_be32_t temp;
 	uint8_t temp_ipv6[16];
 
-	if (is_split_port_packet && !is_gtp_packet(m, ip_type))
-		dst_port = tap_interface_port;
-	else
-		dst_port = l2fwd_dst_ports[portid];
-
-	if (nb_ports_available == 2) {
-		if (is_split_port_packet) {
-			if (ip_type == PKT_IPV4) {
-				ipv4_hdr = rte_pktmbuf_mtod_offset(m,
-					struct rte_ipv4_hdr *,
-					sizeof(struct rte_ether_hdr));
-				temp = ipv4_hdr->src_addr;
-				ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
-				ipv4_hdr->dst_addr = temp;
-				if (ipv4_hdr->next_proto_id == IPPROTO_UDP) {
-					udp_hdr = rte_pktmbuf_mtod_offset(m,
-						struct rte_udp_hdr *,
-						sizeof(struct rte_ether_hdr) +
-						sizeof(struct rte_ipv4_hdr));
-					temp = udp_hdr->dst_port;
-					udp_hdr->dst_port = udp_hdr->src_port;
-					udp_hdr->src_port = temp;
-				}
-			} else if (ip_type == PKT_IPV6) {
-				ipv6_hdr = rte_pktmbuf_mtod_offset(m,
+	if (nb_ports_available == 2 && is_split_port_packet) {
+		if (ip_type == PKT_IPV4) {
+			ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv4_hdr *,
+				sizeof(struct rte_ether_hdr));
+			temp = ipv4_hdr->src_addr;
+			ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
+			ipv4_hdr->dst_addr = temp;
+			if (ipv4_hdr->next_proto_id == IPPROTO_UDP) {
+				udp_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_udp_hdr *,
+					sizeof(struct rte_ether_hdr) +
+					sizeof(struct rte_ipv4_hdr));
+				temp = udp_hdr->dst_port;
+				udp_hdr->dst_port = udp_hdr->src_port;
+				udp_hdr->src_port = temp;
+			}
+		} else if (ip_type == PKT_IPV6) {
+			ipv6_hdr = rte_pktmbuf_mtod_offset(m,
 					struct rte_ipv6_hdr *,
-					sizeof(struct rte_ether_hdr));
-				ipv6_hdr->proto = ipv6_hdr->proto;
-				memcpy(&temp_ipv6, &ipv6_hdr->src_addr, 16);
-				memcpy(&ipv6_hdr->src_addr, &ipv6_hdr->dst_addr, 16);
-				memcpy(&ipv6_hdr->dst_addr, &temp_ipv6, 16);
-				if (ipv6_hdr->proto == IPPROTO_UDP) {
-					udp_hdr = rte_pktmbuf_mtod_offset(m,
-						struct rte_udp_hdr *,
-						sizeof(struct rte_ether_hdr) +
-						sizeof(struct rte_ipv6_hdr));
-					temp = udp_hdr->dst_port;
-					udp_hdr->dst_port = udp_hdr->src_port;
-					udp_hdr->src_port = temp;
-				}
+				sizeof(struct rte_ether_hdr));
+			ipv6_hdr->proto = ipv6_hdr->proto;
+			memcpy(&temp_ipv6, &ipv6_hdr->src_addr, 16);
+			memcpy(&ipv6_hdr->src_addr, &ipv6_hdr->dst_addr, 16);
+			memcpy(&ipv6_hdr->dst_addr, &temp_ipv6, 16);
+			if (ipv6_hdr->proto == IPPROTO_UDP) {
+				udp_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_udp_hdr *,
+					sizeof(struct rte_ether_hdr) +
+					sizeof(struct rte_ipv6_hdr));
+				temp = udp_hdr->dst_port;
+				udp_hdr->dst_port = udp_hdr->src_port;
+				udp_hdr->src_port = temp;
 			}
 		}
 	}
@@ -304,6 +350,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 	struct rte_ip_frag_death_row *dr;
 	struct rx_queue *rxq;
 	uint8_t ip_type; /* 0 = ipv4, 1 = ipv6, 2 = unknown */
+	unsigned int dst_port;
 
 	rxq = &qconf->rx_queue_list[queue];
 	eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -312,6 +359,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 	if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
 		struct rte_ipv4_hdr *ip_hdr;
 
+		ip_type = PKT_IPV4;
 		ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 
 		/* if it is a fragmented packet, then try to reassemble. */
@@ -342,14 +390,21 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 
 			/* update offloading flags */
 			m->ol_flags |= (PKT_TX_IPV4 | PKT_TX_IP_CKSUM);
+			if (is_gtp_packet(m, ip_type) || is_lgw(m, ip_type))
+				dst_port = l2fwd_dst_ports[portid];
+			else
+				dst_port = tap_interface_port;
+		} else {
+				dst_port = l2fwd_dst_ports[portid];
 		}
+
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4);
-		ip_type = PKT_IPV4;
 	} else if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6)) {
 		/* if packet is IPv6 */
 		struct ipv6_extension_fragment *frag_hdr;
 		struct rte_ipv6_hdr *ip_hdr;
 
+		ip_type = PKT_IPV6;
 		ip_hdr = (struct rte_ipv6_hdr *)(eth_hdr + 1);
 
 		frag_hdr = rte_ipv6_frag_get_ipv6_fragment_header(ip_hdr);
@@ -375,21 +430,28 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 					struct rte_ether_hdr *);
 				ip_hdr = (struct rte_ipv6_hdr *)(eth_hdr + 1);
 			}
+			if (is_gtp_packet(m, ip_type) || is_lgw(m, ip_type))
+				dst_port = l2fwd_dst_ports[portid];
+			else
+				dst_port = tap_interface_port;
+		} else {
+				dst_port = l2fwd_dst_ports[portid];
 		}
 
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV6);
-		ip_type = PKT_IPV6;
 	} else {
+		dst_port = tap_interface_port;
 		ip_type = PKT_UNKNOWN;
 	}
 
-	l2fwd_simple_forward(m, portid, true, ip_type);
+	l2fwd_simple_forward(m, true, ip_type, dst_port);
 }
 
 /* main processing loop */
 static void
 l2fwd_main_loop(void)
 {
+	unsigned int dst_port;
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
 	unsigned int lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
@@ -496,8 +558,11 @@ l2fwd_main_loop(void)
 				for (j = 0; j < nb_rx; j++) {
 					rte_prefetch0(rte_pktmbuf_mtod(
 						      pkts_burst[j], void *));
+					dst_port = l2fwd_dst_ports[portid];
 					l2fwd_simple_forward(pkts_burst[j],
-							     portid, false, PKT_UNKNOWN);
+							     false,
+							     PKT_UNKNOWN,
+							     dst_port);
 				}
 			}
 		}
@@ -520,7 +585,9 @@ l2fwd_usage(const char *prgname)
 	       "  -T PERIOD: statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
 	       "  -b NUM: burst size for receive packet (default is 32)\n"
 	       "  -m MTU: mtu for tap interface(s) (default is 1500)\n"
-	       "  -s PORTID: split port id. Use this option when Ethernet port is split port.\n",
+	       "  -s PORTID: split port id. Use this option when Ethernet port is split port.\n"
+	       "  -f user data file: Absolute path of user data file. default file name is data.input\n"
+	       "                     Valid only when using OL port as split port\n",
 	       prgname);
 }
 
@@ -563,6 +630,7 @@ static const char short_options[] =
 	"b:"  /* burst size */
 	"m:"  /* mtu of tap interface(s) */
 	"s:"  /* split port id */
+	"f:"  /* user data filename*/
 	;
 
 enum {
@@ -601,6 +669,16 @@ l2fwd_parse_args(int argc, char **argv)
 				l2fwd_usage(prgname);
 				return -1;
 			}
+			break;
+
+		case 'f':
+			data_file = malloc(strlen(optarg) + 1);
+			if (data_file == NULL) {
+				printf("Failed to allocate memory for data file\n");
+				return -1;
+			}
+			snprintf(data_file, strlen(optarg) + 1, "%s", optarg);
+			printf("Data file name = %s\n", data_file);
 			break;
 
 		/* timer period */
@@ -741,28 +819,36 @@ signal_handler(int signum)
 	}
 }
 
-#define CLASSIF_INFO_FILENAME   "classif_info.input"
+#define USER_DATA_FILENAME   "data.input"
 
 static int
-set_classif_info(void)
+get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
+	      struct rte_pmd_dpaa_lgw_info_s *lgw_info)
 {
 	size_t len = 0;
 	FILE *fp = NULL;
 	char *line = NULL;
 	char space[1] = " ";
 	char *token;
-	uint16_t udp_port = 0;
-	uint8_t protocol_id = 0;
-	uint8_t num_addresses = 0;
-	struct rte_pmd_dpaa_ip_addr_s ip_addr_list[MAX_NUM_IP_ADDRS];
 	int ret;
 	struct in6_addr result;
 
-	fp = fopen(CLASSIF_INFO_FILENAME, "r");
-	if (fp == NULL) {
-		printf("File %s does not exist\n", CLASSIF_INFO_FILENAME);
-		return -1;
+	if (data_file == NULL) {
+		fp = fopen(USER_DATA_FILENAME, "r");
+		if (fp == NULL) {
+			printf("File %s does not exist\n", USER_DATA_FILENAME);
+			return -1;
+		}
+	} else {
+		fp = fopen(data_file, "r");
+		if (fp == NULL) {
+			printf("File %s does not exist\n", data_file);
+			return -1;
+		}
 	}
+
+	if (cls_info == NULL)
+		goto subnet_parse;
 
 	while (getline(&line, &len, fp) != -1) {
 		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
@@ -775,12 +861,12 @@ set_classif_info(void)
 			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
 				token = strtok(NULL, space);
 				if (!token || i > 4) {
-					num_addresses = i;
+					cls_info->num_addresses = i;
 					break;
 				}
-				ip_addr_list[i].ip_addr_type =
+				cls_info->addrs[i].ip_addr_type =
 						DPA_ISC_IPV4_ADDR_TYPE;
-				ip_addr_list[i].ip_addr[0] =
+				cls_info->addrs[i].ip_addr[0] =
 						ntohl(inet_addr(token));
 			}
 			continue;
@@ -790,18 +876,19 @@ set_classif_info(void)
 			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
 				token = strtok(NULL, " \n");
 				if (!token || i > 4) {
-					num_addresses = i;
+					cls_info->num_addresses = i;
 					break;
 				}
+				memset(&result, 0, sizeof(struct in6_addr));
 				ret = inet_pton(AF_INET6, token, &result);
 				if (ret == 1) {
-					ip_addr_list[i].ip_addr_type =
+					cls_info->addrs[i].ip_addr_type =
 						DPA_ISC_IPV6_ADDR_TYPE;
-					memcpy(&ip_addr_list[i].ip_addr[0], &result.s6_addr, 16);
-					ip_addr_list[i].ip_addr[0] = htonl(ip_addr_list[i].ip_addr[0]);
-					ip_addr_list[i].ip_addr[1] = htonl(ip_addr_list[i].ip_addr[1]);
-					ip_addr_list[i].ip_addr[2] = htonl(ip_addr_list[i].ip_addr[2]);
-					ip_addr_list[i].ip_addr[3] = htonl(ip_addr_list[i].ip_addr[3]);
+					memcpy(&cls_info->addrs[i].ip_addr[0], &result.s6_addr, 16);
+					cls_info->addrs[i].ip_addr[0] = htonl(cls_info->addrs[i].ip_addr[0]);
+					cls_info->addrs[i].ip_addr[1] = htonl(cls_info->addrs[i].ip_addr[1]);
+					cls_info->addrs[i].ip_addr[2] = htonl(cls_info->addrs[i].ip_addr[2]);
+					cls_info->addrs[i].ip_addr[3] = htonl(cls_info->addrs[i].ip_addr[3]);
 				} else {
 					printf("IPv6 address parsing failed\n");
 				}
@@ -811,28 +898,148 @@ set_classif_info(void)
 
 		if (!strcmp(token, "DEST_PORT")) {
 			token = strtok(NULL, space);
-			udp_port = (uint16_t)atoi(token);
+			cls_info->gtp_udp_port = (uint16_t)atoi(token);
 			continue;
 		}
 
 		if (!strcmp(token, "PROTOCOL_ID")) {
 			token = strtok(NULL, space);
-			protocol_id = (uint8_t)atoi(token);
+			cls_info->gtp_proto_id = (uint8_t)atoi(token);
 			continue;
 		}
 	}
 
-	ret = rte_pmd_dpaa_ol_set_classif_info(udp_port,
-				protocol_id, num_addresses, ip_addr_list);
+subnet_parse:
+	if (lgw_info == NULL) {
+		fclose(fp);
+		return 0;
+	}
+
+	while (getline(&line, &len, fp) != -1) {
+		char *end_str;
+
+		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
+		    line[0] == '\r')
+			continue;
+
+		token = strtok_r(line, space, &end_str);
+
+		if (!strcmp(token, "LGW_IPV4")) {
+			char *end_token;
+			char *subnet_token;
+
+			for (int i = 0; i <= MAX_NUM_SUBNETS; i++) {
+				token = strtok_r(NULL, space, &end_str);
+				if (!token || i > 3) {
+					lgw_info->num_subnets = i;
+					break;
+				}
+				subnet_token = strtok_r(token, "/", &end_token);
+				if (subnet_token != NULL) {
+					lgw_info->subnets[i].subnet_type =
+							DPA_ISC_IPV4_SUBNET_TYPE;
+					lgw_info->subnets[i].subnet[0] =
+							ntohl(inet_addr(subnet_token));
+					subnet_token = strtok_r(NULL, "/", &end_token);
+					if (subnet_token != NULL) {
+						lgw_info->subnets[i].mask =
+							(uint8_t)atoi(subnet_token);
+					} else {
+						lgw_info->subnets[i].mask = 32;
+					}
+				}
+			}
+			continue;
+		}
+
+		if (!strcmp(token, "LGW_IPV6")) {
+			char *end_token;
+			char *subnet_token;
+
+			for (int i = 0; i <= MAX_NUM_SUBNETS; i++) {
+				token = strtok_r(NULL, " \n", &end_str);
+				if (!token || i > 3) {
+					lgw_info->num_subnets = i;
+					break;
+				}
+				subnet_token = strtok_r(token, "/", &end_token);
+				if (subnet_token != NULL) {
+					memset(&result, 0, sizeof(struct in6_addr));
+					ret = inet_pton(AF_INET6, subnet_token, &result);
+					if (ret == 1) {
+						lgw_info->subnets[i].subnet_type =
+							DPA_ISC_IPV6_SUBNET_TYPE;
+						memcpy(&lgw_info->subnets[i].subnet[0], &result.s6_addr, 16);
+						lgw_info->subnets[i].subnet[0] = htonl(lgw_info->subnets[i].subnet[0]);
+						lgw_info->subnets[i].subnet[1] = htonl(lgw_info->subnets[i].subnet[1]);
+						lgw_info->subnets[i].subnet[2] = htonl(lgw_info->subnets[i].subnet[2]);
+						lgw_info->subnets[i].subnet[3] = htonl(lgw_info->subnets[i].subnet[3]);
+
+						subnet_token = strtok_r(NULL, "/", &end_token);
+						if (subnet_token != NULL) {
+							lgw_info->subnets[i].mask =
+								(uint8_t)atoi(subnet_token);
+						} else {
+							lgw_info->subnets[i].mask = 128;
+						}
+					} else {
+						printf("IPv6 address parsing failed\n");
+					}
+				}
+			}
+			continue;
+		}
+	}
+
+	fclose(fp);
+	return 0;
+}
+
+static int
+set_classif_info(void)
+{
+	struct rte_pmd_dpaa_uplink_cls_info_s cls_info;
+	int ret;
+
+	ret = get_user_data(&cls_info, NULL);
+	if (ret) {
+		rte_exit(EXIT_FAILURE, "Failed to paarse user data\n");
+		return ret;
+	}
+
+	ret = rte_pmd_dpaa_ol_set_classif_info(&cls_info);
 	if (ret) {
 		rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
 		return ret;
 	}
 
-	printf("****************************************************\n");
-	printf("UDP destination port: %d\n", udp_port);
-	printf("Protocol ID: %d\n", protocol_id);
-	printf("Number of IP addresses: %d\n", num_addresses);
+	printf("######### Classification Info: #####################\n");
+	printf("UDP destination port: %d\n", cls_info.gtp_udp_port);
+	printf("Protocol ID: %d\n", cls_info.gtp_proto_id);
+	printf("Number of IP addresses: %d\n", cls_info.num_addresses);
+	for (int i = 0; i <= cls_info.num_addresses; i++) {
+		if (cls_info.addrs[i].ip_addr_type == DPA_ISC_IPV4_ADDR_TYPE) {
+			printf("\tIPv4 address: %d.%d.%d.%d\n",
+				(cls_info.addrs[i].ip_addr[0] >> 24) & 0xFF,
+				(cls_info.addrs[i].ip_addr[0] >> 16) & 0xFF,
+				(cls_info.addrs[i].ip_addr[0] >> 8) & 0xFF,
+				(cls_info.addrs[i].ip_addr[0]) & 0xFF);
+		} else if (cls_info.addrs[i].ip_addr_type == DPA_ISC_IPV6_ADDR_TYPE) {
+			uint8_t temp_addr[16];
+
+			memcpy(&temp_addr, &cls_info.addrs[i].ip_addr[0], 16);
+			printf("\tIPv6 address: %02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+				"%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+				(int)temp_addr[3], (int)temp_addr[2],
+				(int)temp_addr[1], (int)temp_addr[0],
+				(int)temp_addr[7], (int)temp_addr[6],
+				(int)temp_addr[5], (int)temp_addr[4],
+				(int)temp_addr[11], (int)temp_addr[10],
+				(int)temp_addr[9], (int)temp_addr[8],
+				(int)temp_addr[15], (int)temp_addr[14],
+				(int)temp_addr[13], (int)temp_addr[12]);
+		}
+	}
 	printf("****************************************************\n");
 
 	return ret;
@@ -846,6 +1053,71 @@ reset_classif_info(void)
 	ret = rte_pmd_dpaa_ol_reset_classif_info();
 	if (ret)
 		rte_exit(EXIT_FAILURE, "Failed to reset classification info\n");
+
+	return ret;
+}
+
+static int
+set_lgw_info(void)
+{
+	struct rte_pmd_dpaa_lgw_info_s lgw_info;
+	int ret;
+
+	ret = get_user_data(NULL, &lgw_info);
+	if (ret) {
+		rte_exit(EXIT_FAILURE, "Failed to paarse user data\n");
+		return ret;
+	}
+
+	ret = rte_pmd_dpaa_ol_set_lgw_info(&lgw_info);
+	if (ret) {
+		rte_exit(EXIT_FAILURE, "Failed to set LGW info\n");
+		return ret;
+	}
+
+	printf("######### LGW Info: ###############################\n");
+	printf("Number of subnets: %d\n", lgw_info.num_subnets);
+	for (int i = 0; i <= lgw_info.num_subnets; i++) {
+		if (lgw_info.subnets[i].subnet_type == DPA_ISC_IPV4_SUBNET_TYPE) {
+			printf("\tIPv4 address: %d.%d.%d.%d/%d\n",
+				(lgw_info.subnets[i].subnet[0] >> 24) & 0xFF,
+				(lgw_info.subnets[i].subnet[0] >> 16) & 0xFF,
+				(lgw_info.subnets[i].subnet[0] >> 8) & 0xFF,
+				(lgw_info.subnets[i].subnet[0]) & 0xFF,
+				lgw_info.subnets[i].mask);
+		} else if (lgw_info.subnets[i].subnet_type == DPA_ISC_IPV6_SUBNET_TYPE) {
+			uint8_t temp_addr[16];
+
+			memcpy(&temp_addr, &lgw_info.subnets[i].subnet[0], 16);
+			printf("\tIPv6 address: %02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+				"%02x%02x:%02x%02x:%02x%02x:%02x%02x/%d\n",
+				(int)temp_addr[3], (int)temp_addr[2],
+				(int)temp_addr[1], (int)temp_addr[0],
+				(int)temp_addr[7], (int)temp_addr[6],
+				(int)temp_addr[5], (int)temp_addr[4],
+				(int)temp_addr[11], (int)temp_addr[10],
+				(int)temp_addr[9], (int)temp_addr[8],
+				(int)temp_addr[15], (int)temp_addr[14],
+				(int)temp_addr[13], (int)temp_addr[12],
+				lgw_info.subnets[i].mask);
+		}
+	}
+	printf("****************************************************\n");
+
+	/* save the LGW traffic subnets for floe matching */
+	memcpy(&lgw_subnets, &lgw_info, sizeof(struct rte_pmd_dpaa_lgw_info_s));
+
+	return ret;
+}
+
+static int
+reset_lgw_info(void)
+{
+	int ret;
+
+	ret = rte_pmd_dpaa_ol_reset_lgw_info();
+	if (ret)
+		rte_exit(EXIT_FAILURE, "Failed to reset LGW info\n");
 
 	return ret;
 }
@@ -972,8 +1244,10 @@ main(int argc, char **argv)
 				"Error during getting device (port %u) info: %s\n",
 				portid, strerror(-ret));
 
-		if (!strcmp(dev_info.driver_name, "net_tap"))
+		if (!strcmp(dev_info.driver_name, "net_tap")) {
 			tap_interface_port = portid;
+			continue;
+		}
 
 		if (split_port == -1) {
 			if (!strcmp(dev_info.driver_name, "ol_dpaa")) {
@@ -1005,9 +1279,33 @@ main(int argc, char **argv)
 				continue;
 			if (portid != split_port &&
 			    portid != tap_interface_port) {
+				static struct rte_ether_addr l2fwd_ports_eth_addr;
+
+				ret = rte_eth_macaddr_get(portid,
+						&l2fwd_ports_eth_addr);
+				if (ret < 0)
+					rte_exit(EXIT_FAILURE,
+					"Cannot get MAC address: err=%d, port=%u\n",
+					ret, portid);
+
 				l2fwd_dst_ports[portid] = split_port;
 				l2fwd_dst_ports[split_port] = portid;
 				l2fwd_dst_ports[tap_interface_port] = portid;
+				printf("####################################################\n");
+				printf("PCI/Demo port ID = %d\n", portid);
+				printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+						portid,
+						l2fwd_ports_eth_addr.addr_bytes[0],
+						l2fwd_ports_eth_addr.addr_bytes[1],
+						l2fwd_ports_eth_addr.addr_bytes[2],
+						l2fwd_ports_eth_addr.addr_bytes[3],
+						l2fwd_ports_eth_addr.addr_bytes[4],
+						l2fwd_ports_eth_addr.addr_bytes[5]);
+
+				printf("****************************************************\n");
+				printf("Tap port ID = %d\nSplit port ID = %d\n",
+					tap_interface_port, split_port);
+				printf("****************************************************\n");
 			}
 		}
 	}
@@ -1120,6 +1418,9 @@ main(int argc, char **argv)
 		ret = set_classif_info();
 		if (ret)
 			return ret;
+		ret = set_lgw_info();
+		if (ret)
+			printf("WARN: LGW config. set failed\n");
 	}
 
 	ret = 0;
@@ -1136,6 +1437,10 @@ main(int argc, char **argv)
 		ret = reset_classif_info();
 		if (ret)
 			return ret;
+
+		ret = reset_lgw_info();
+		if (ret)
+			printf("WARN: LGW config. reset failed\n");
 	}
 	print_stats();
 
@@ -1147,6 +1452,9 @@ main(int argc, char **argv)
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}
+	if (data_file)
+		free(data_file);
+
 	printf("Bye...\n");
 
 	return ret;

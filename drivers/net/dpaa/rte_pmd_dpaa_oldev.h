@@ -8,18 +8,46 @@
 #define DPA_ISC_IPV4_ADDR_TYPE  0x04
 #define DPA_ISC_IPV6_ADDR_TYPE  0x06
 #define MAX_NUM_IP_ADDRS 5
+#define DPA_ISC_IPV4_SUBNET_TYPE  0x04
+#define DPA_ISC_IPV6_SUBNET_TYPE  0x06
+#define MAX_NUM_SUBNETS 4
 
-struct rte_pmd_dpaa_ip_addr_s {
+struct ip_addr_s {
 	uint8_t		ip_addr_type;
 	uint32_t	ip_addr[4];
 };
 
+struct lgw_subnet_s {
+	uint32_t subnet[4];
+	uint8_t mask;
+	uint8_t subnet_type;
+	uint8_t pad[2];
+} __attribute__((packed));
+
+struct rte_pmd_dpaa_uplink_cls_info_s {
+	struct		ip_addr_s addrs[MAX_NUM_IP_ADDRS];
+	uint16_t	gtp_udp_port;
+	uint8_t		gtp_proto_id;
+	uint8_t		num_addresses;
+};
+
+struct rte_pmd_dpaa_lgw_info_s {
+	struct lgw_subnet_s subnets[MAX_NUM_SUBNETS];
+	uint8_t  	num_subnets;
+	uint8_t		pad[3];
+} __attribute__((packed));
+
 __rte_experimental
-int rte_pmd_dpaa_ol_set_classif_info(uint16_t udp_port, uint8_t proto_id,
-			     uint8_t num_addresses,
-			     struct rte_pmd_dpaa_ip_addr_s ip_addr_list[]);
+int rte_pmd_dpaa_ol_set_classif_info(
+			struct rte_pmd_dpaa_uplink_cls_info_s *cls_info);
 
 __rte_experimental
 int rte_pmd_dpaa_ol_reset_classif_info(void);
+
+__rte_experimental
+int rte_pmd_dpaa_ol_set_lgw_info(struct rte_pmd_dpaa_lgw_info_s *lgw_info);
+
+__rte_experimental
+int rte_pmd_dpaa_ol_reset_lgw_info(void);
 
 #endif

@@ -1,0 +1,15 @@
+# Classification information
+# IP Address list(Max 5)
+#IPV6 fe80:0000:0000:0000:0204:9fff:fe06:5112
+IPV4 1.1.1.1 11.11.11.11
+
+# UDP destination port
+DEST_PORT 2152
+
+# Protocol ID to be received by dpdk(UDP=17)
+PROTOCOL_ID 17
+
+# LGW subnets list
+# List of subnets
+# LGW_IPV6 fdd4:365d:3a74:be0d:0000:0000:0000:0000/64
+LGW_IPV4 172.16.0.0/16 192.168.0.0/16
