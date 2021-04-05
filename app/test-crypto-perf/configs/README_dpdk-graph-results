@@ -1,0 +1,73 @@
+Overview
+------------------------------------------------------------------------------------------------------------------------------------------------------
+The python script introduced here runs the crypto performance test application for various test cases, and graphs the results.
+Test cases are defined in config JSON files, this is where parameters are specified for each test. 
+The results of each test case are graphed and saved in PDFs (one PDF for each test suite graph type, with all test cases).
+The graphs output include various grouped bar charts for throughput tests, and histogram and boxplot graphs are used for latency tests.
+Documentation is added to outline the configuration and usage for the script.
+
+Usage:
+A JSON config file must be specified when running the script,
+"./dpdk-graph-crypto-perf <config_file>"
+Alternatively we can pass path to app by
+"-f <rel_path>/<build_dir>/app/dpdk-test-crypto-perf"
+All device test suites are run by default.
+Alternatively we can specify by adding arguments,
+"-t latency" - to run latency test suite only
+"-t throughput latency"
+	• to run both throughput and latency test suites
+A directory can be specified for all output files, or the script directory is used by default.
+"-o <output_dir>"
+To see the output from the dpdk-test-crypto-perf app,
+use the verbose option "-v".
+
+Run fmc and dynamic_dpl.sh for DPAA1 and DPAA2 respectively before running the python script. 
+
+Dependencies
+================================== 
+Before running the python script the following packages must be installed:
+
+Plotly v4.9+
+Pandas
+Kaleido 
+Img2pdf
+
+Installing Plotly
+--------------------------
+sudo pip install plotly
+
+Installing Pandas
+--------------------------
+sudo pip install panda
+
+Installing Img2pdf
+--------------------------
+sudo pip install img2pdf
+
+Installing Kaleido
+--------------------------
+Use Kaleido to export plotly.py figures as static images
+Versions 4.9 and above of the Plotly Python library will automatically use kaleido for static image export when kaleido is installed. 
+
+$ pip install -U kaleido
+
+The kaleido package can also be installed from https://github.com/plotly/Kaleido/releases/tag/v0.2.1 manually.
+
+The changes required in json file can be done by referring to the crypto_perf_test.sh file.
+
+Note:
+
+	1. Kaleido supports an arm linux package with platform tag manylinux2014_aarch64.whl. This requires pip >= 19.3 for installation, so updating pip using the following command is recommended if you have an older version.
+	
+	pip install --upgrade pip 
+	
+   2.  If the following error is detected:
+
+	ValueError:
+	The orca executable is required in order to export figures as static images, but the executable that was found at '/usr/bin/orca'
+	
+	Then there is a problem with the installation of Kaleido package as it is a replacement for Orca, and for Plotly v4.9+ , the default is to use Kaleido if it is found, and only resorts to Orca otherwise. The following command can be used to install the package properly.
+
+	 sudo pip install kaleido --no-cache-dir
+	
+

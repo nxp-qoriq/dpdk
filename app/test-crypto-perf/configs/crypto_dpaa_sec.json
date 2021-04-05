@@ -1,0 +1,49 @@
+"throughput": {
+                "default": {
+                        "eal": {
+                                "l": "1,2"
+                        },
+                        "app": {
+                                "csv-friendly": true,
+                                "buffer-sz": "64,128,256",
+                                "burst-sz": "32",
+                                "ptest": "throughput",
+                                "devtype": "crypto_dpaa_sec"
+                        }
+                },
+                "AES-GCM-128 aead-op encrypt": {
+                         "aead-algo": "aes-gcm",
+                         "aead-key-sz": "16",
+                         "aead-iv-sz": "12",
+                         "aead-op": "encrypt",
+                         "aead-aad-sz": "16",
+                         "digest-sz": "16",
+                         "optype": "aead",
+                         "total-ops": "100000"
+                 }
+        },
+
+        "latency": {
+                "default": {
+                        "eal": {
+                                "l": "1,2"
+                        },
+                        "app": {
+                                "csv-friendly": true,
+                                "buffer-sz": "64,128,256",
+                                "burst-sz": "16",
+                                "ptest": "latency",
+                                "devtype": "crypto_dpaa_sec"
+                        }
+                },
+                "AES-GCM-256 aead-op encrypt": {
+                        "aead-algo": "aes-gcm",
+                         "aead-key-sz": "16",
+                         "aead-iv-sz": "12",
+                         "aead-op": "encrypt",
+                         "aead-aad-sz": "16",
+                         "digest-sz": "16",
+                         "optype": "aead",
+                         "total-ops": "100"
+                }
+        }
