@@ -14217,6 +14217,7 @@ static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
 	.unit_test_cases = {
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_cipheronly_dpaa2_sec_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_authonly_dpaa2_sec_all),
+		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_chain_dpaa2_sec_all),
 		TEST_CASES_END()
 	}
 };
