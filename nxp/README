@@ -1075,6 +1075,8 @@ DPAA2:
 				the payload.
 
 10. DPAA2_STRICT_ORDERING_ENABLE  Enable strict ordering when using ordered queues.
+
+11. DPAA2_SEC_ENABLE_DP_DUMP	Enable useful debug prints on sec errors.
 ================================================================================
 
 ================================================================================

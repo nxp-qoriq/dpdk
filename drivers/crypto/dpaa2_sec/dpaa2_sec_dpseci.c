@@ -28,6 +28,7 @@
 #include <fsl_dpopr.h>
 #include <fsl_dpseci.h>
 #include <fsl_mc_sys.h>
+#include <rte_hexdump.h>
 
 #include "dpaa2_sec_priv.h"
 #include "dpaa2_sec_event.h"
@@ -58,6 +59,7 @@
 #define SEC_FLC_DHR_INBOUND	0
 
 static uint8_t cryptodev_driver_id;
+bool dpaa2_sec_dp_dump;
 
 #ifdef RTE_LIB_SECURITY
 static inline int
@@ -1789,6 +1791,83 @@ skip_tx:
 	return num_tx;
 }
 
+static void
+dpaa2_sec_dump(struct rte_crypto_op *op)
+{
+	int i;
+	dpaa2_sec_session *sess = NULL;
+	struct ctxt_priv *priv;
+	uint8_t bufsize;
+	struct rte_crypto_sym_op *sym_op;
+
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION)
+		sess = (dpaa2_sec_session *)get_sym_session_private_data(
+			op->sym->session, cryptodev_driver_id);
+#ifdef RTE_LIBRTE_SECURITY
+	else if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
+		sess = (dpaa2_sec_session *)get_sec_session_private_data(
+			op->sym->sec_session);
+#endif
+
+	if (sess == NULL)
+		goto mbuf_dump;
+
+	priv = (struct ctxt_priv *)sess->ctxt;
+	printf("\n****************************************\n"
+		"session params:\n\tContext type:\t%d\n\tDirection:\t%s\n"
+		"\tCipher alg:\t%d\n\tAuth alg:\t%d\n\tAead alg:\t%d\n"
+		"\tCipher key len:\t%ld\n", sess->ctxt_type,
+		(sess->dir == DIR_ENC) ? "DIR_ENC" : "DIR_DEC",
+		sess->cipher_alg, sess->auth_alg, sess->aead_alg,
+		sess->cipher_key.length);
+		rte_hexdump(stdout, "cipher key", sess->cipher_key.data,
+				sess->cipher_key.length);
+		rte_hexdump(stdout, "auth key", sess->auth_key.data,
+				sess->auth_key.length);
+	printf("\tAuth key len:\t%ld\n\tIV len:\t\t%d\n\tIV offset:\t%d\n"
+		"\tdigest length:\t%d\n\tstatus:\t\t%d\n\taead auth only"
+		" len:\t%d\n\taead cipher text:\t%d\n",
+		sess->auth_key.length, sess->iv.length, sess->iv.offset,
+		sess->digest_length, sess->status,
+		sess->ext_params.aead_ctxt.auth_only_len,
+		sess->ext_params.aead_ctxt.auth_cipher_text);
+#ifdef RTE_LIBRTE_SECURITY
+	printf("PDCP session params:\n"
+		"\tDomain:\t\t%d\n\tBearer:\t\t%d\n\tpkt_dir:\t%d\n\thfn_ovd:"
+		"\t%d\n\tsn_size:\t%d\n\thfn_ovd_offset:\t%d\n\thfn:\t\t%d\n"
+		"\thfn_threshold:\t0x%x\n", sess->pdcp.domain,
+		sess->pdcp.bearer, sess->pdcp.pkt_dir, sess->pdcp.hfn_ovd,
+		sess->pdcp.sn_size, sess->pdcp.hfn_ovd_offset, sess->pdcp.hfn,
+		sess->pdcp.hfn_threshold);
+
+#endif
+	bufsize = (uint8_t)priv->flc_desc[0].flc.word1_sdl;
+	printf("Descriptor Dump:\n");
+	for (i = 0; i < bufsize; i++)
+		printf("\tDESC[%d]:0x%x\n", i, priv->flc_desc[0].desc[i]);
+
+	printf("\n");
+mbuf_dump:
+	sym_op = op->sym;
+	if (sym_op->m_src) {
+		printf("Source mbuf:\n");
+		rte_pktmbuf_dump(stdout, sym_op->m_src, 64);
+	}
+	if (sym_op->m_dst) {
+		printf("Destination mbuf:\n");
+		rte_pktmbuf_dump(stdout, sym_op->m_dst, 64);
+	}
+
+	printf("Session address = %p\ncipher offset: %d, length: %d\n"
+		"auth offset: %d, length:  %d\n aead offset: %d, length: %d\n"
+		, sym_op->session,
+		sym_op->cipher.data.offset, sym_op->cipher.data.length,
+		sym_op->auth.data.offset, sym_op->auth.data.length,
+		sym_op->aead.data.offset, sym_op->aead.data.length);
+	printf("\n");
+
+}
+
 static uint16_t
 dpaa2_sec_dequeue_burst(void *qp, struct rte_crypto_op **ops,
 			uint16_t nb_ops)
@@ -1870,8 +1949,12 @@ dpaa2_sec_dequeue_burst(void *qp, struct rte_crypto_op **ops,
 
 		if (unlikely(fd->simple.frc)) {
 			/* TODO Parse SEC errors */
-			DPAA2_SEC_ERR("SEC returned Error - %x",
-				      fd->simple.frc);
+			DPAA2_SEC_DP_ERR("SEC returned Error - %x",
+					 fd->simple.frc);
+			if (dpaa2_sec_dp_dump)
+				dpaa2_sec_dump(ops[num_rx]);
+
+			dpaa2_qp->rx_vq.err_pkts += 1;
 			ops[num_rx]->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		} else {
 			ops[num_rx]->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
@@ -1883,7 +1966,8 @@ dpaa2_sec_dequeue_burst(void *qp, struct rte_crypto_op **ops,
 
 	dpaa2_qp->rx_vq.rx_pkts += num_rx;
 
-	DPAA2_SEC_DP_DEBUG("SEC Received %d Packets\n", num_rx);
+	DPAA2_SEC_DP_DEBUG("SEC RX pkts %d err pkts %ld\n", num_rx,
+				dpaa2_qp->rx_vq.err_pkts);
 	/*Return the total number of packets received to DPAA2 app*/
 	return num_rx;
 }
@@ -4228,6 +4312,9 @@ dpaa2_sec_dev_init(struct rte_cryptodev *cryptodev)
 		DPAA2_SEC_ERR("Mempool (%s) creation failed", str);
 		goto init_error;
 	}
+
+	if (getenv("DPAA2_SEC_ENABLE_DP_DUMP"))
+		dpaa2_sec_dp_dump = true;
 
 	DPAA2_SEC_INFO("driver %s: created", cryptodev->data->name);
 	return 0;
