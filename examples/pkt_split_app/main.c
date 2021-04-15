@@ -149,7 +149,8 @@ static uint64_t timer_period = 10; /* default period is 10 seconds */
 /* Configure how many packets ahead to prefetch, when reading packets */
 #define PREFETCH_OFFSET 3
 
-#define GTPU_DST_PORT	2152
+uint16_t gtp_udp_port[MAX_NUM_PORTS];
+uint8_t num_ports;
 
 /* Print out statistics on packets dropped */
 static void
@@ -280,8 +281,10 @@ static bool is_gtp_packet(struct rte_mbuf *m, uint8_t ip_type)
 	}
 
 	dst_port = rte_be_to_cpu_16(udp->dst_port);
-	if (dst_port == GTPU_DST_PORT)
-		return true;
+	for (int i = 0; i < num_ports; i++) {
+		if (dst_port ==  gtp_udp_port[i])
+			return true;
+	}
 
 	return false;
 }
@@ -897,8 +900,14 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 		}
 
 		if (!strcmp(token, "DEST_PORT")) {
-			token = strtok(NULL, space);
-			cls_info->gtp_udp_port = (uint16_t)atoi(token);
+			for (int i = 0; i <= MAX_NUM_PORTS; i++) {
+				token = strtok(NULL, space);
+				if (!token || i >= MAX_NUM_PORTS) {
+					cls_info->num_ports = i;
+					break;
+				}
+				cls_info->gtp_udp_port[i] = (uint16_t)atoi(token);
+			}
 			continue;
 		}
 
@@ -1012,9 +1021,14 @@ set_classif_info(void)
 		rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
 		return ret;
 	}
-
 	printf("######### Classification Info: #####################\n");
-	printf("UDP destination port: %d\n", cls_info.gtp_udp_port);
+	printf("number of destination ports = %d\n", cls_info.num_ports);
+	num_ports = cls_info.num_ports;
+	printf("port numbers:\n");
+	for (int i = 0; i < cls_info.num_ports; i++) {
+		printf("\t%d\n", cls_info.gtp_udp_port[i]);
+		gtp_udp_port[i] = cls_info.gtp_udp_port[i];
+	}
 	printf("Protocol ID: %d\n", cls_info.gtp_proto_id);
 	printf("Number of IP addresses: %d\n", cls_info.num_addresses);
 	for (int i = 0; i <= cls_info.num_addresses; i++) {

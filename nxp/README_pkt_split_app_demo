@@ -3,8 +3,9 @@ Introduction to pkt_split_app application
 -----------------------------------------
 
 This DPDK application uses two or three ports, two of which are split port and Tap
-interface. Third port is PCI port, which is optional to use.
-Split port can be OL or eth port.
+interface. Third port is PCI/Demo port, which is optional to use.
+Split port can be OL (with FMAN micro-code) or ethernet port (without FMAN
+micro code).
 
 An OL port is a pair of Frame queues which will be used as Tx and Rx frame
 queues. ASK module will send the packets on the Rx FQ using the classification
@@ -53,7 +54,7 @@ For three ports and UDP destination port = 2152(GTP packet):
          |                        |                             |
         \|/                       |                             |
       ---------  All Packets  ---------  Non GTP Packets    ---------
-     |  PCI    |------------>|  SPLIT  |------------------>|   TAP   |
+     |PCI/Demo |------------>|  SPLIT  |------------------>|   TAP   |
      |  PORT   |             |   PORT  |                   |Interface|
       ---------               ---------                     ---------
 
@@ -78,6 +79,7 @@ Location of pkt_split_app binary: examples/pkt_split_app/build/pkt_split_app
 
 -------------------------------------------------------------------
 Steps to run pkt_split_app on LS1046ARDB when split port is eth port
+(Without ASK's FMAN micro code)
 -------------------------------------------------------------------
 
 1. fmc -x
@@ -117,6 +119,7 @@ Steps to run pkt_split_app on LS1046ARDB when split port is eth port
 
 -------------------------------------------------------------------
 Steps to run pkt_split_app on LS1046ARDB when split port is OL port
+(With ASK's FMAN micro code)
 -------------------------------------------------------------------
 
 Flash the LS1046ARDB board with ASK images and fman microcode.
@@ -155,39 +158,33 @@ After booting up the board, run the following commands:
 
    eg: to use eth0 as backhaul port, run "export BH_PORT_NAME=eth0"
 
-6. Make sure the classification comfiguration file exists and have proper
+6. Make sure user data comfiguration file exists and have proper
    values. Refer to the "Configure classification information" section for
    details.
 
 NOTE: ARP should be resolved before sending the traffic.
 
 7. Run the pkt_split_app application with three ports(Use PCI port):
-   $ ./pkt_split_app -c 0xe -n 1 --vdev=net_tap0 -- -p 0x7 -m 8000
-
-   This command will use one OL port, one PCI port and one Tap interface. Tap
-   interface's mtu is 8000.
-   First port will be PCI port, second port will be OL port and third port will
-   be Tap interface.
+   $ ./pkt_split_app -c 0xe -n 1 --vdev=net_tap0 -- -p 0x7
 
 8. Run the pkt_split_app application with two ports(Don't use PCI port):
-   $ ./pkt_split_app -c 0x6 -n 1 --vdev=net_tap0 -- -p 0x3 -m 8000
+   $ ./pkt_split_app -c 0x6 -n 1 --vdev=net_tap0 -- -p 0x3
 
-   This command will use one OL port and one Tap interface. Tap
-   interface's mtu is 8000.
-   first port will be OL port and second port will be Tap interface.
+   Please check application logs to identify the ports and their IDs.
 
 
 ------------------------------------
 Configure classification information
 ------------------------------------
 
-File named classif_info.input is used to configure the classification for
-pkt_split_app. This file should be present in the directory from where we are
-running the application. There are five entries in this file. All the entries
-are mandatory.
+Default file named data.input is used to configure the classification and
+LGW traffic information for pkt_split_app. This file should be present in
+the directory from where we are running the application. Optionally, user
+can specify the filename by giving "-f" option in application cmdline.
+There are five entries in this file. All the entries are mandatory.
 Blank lines and the lines starting with '#' will be ignored.
 
-Entries in classif_info.input file:
+Classification entries in data.input file:
 
   1. IPV4 <Space separated list of IPv4 addresses>
      or
@@ -200,8 +197,24 @@ Entries in classif_info.input file:
 
      Note: IPv6 address format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx
 
-  2. DEST_PORT <UDP destination port number>
-     e.g.: "DEST_PORT 2152"
+  2. DEST_PORT <Space separated list of destination port number>
+     e.g.: "DEST_PORT 2152 2123"
+
+	Maximum 2 port numbers can be used. Use 2152 and 2123 for
+	GTP-U and GTP-C traffic.
 
   3. PROTOCOL_ID <IP protocol number>
      e.g.: "PROTOCOL_ID 17"
+
+LGW traffic information in file:
+
+  1. LGW_IPV4 <Space separated list of IPv4 subnets>
+     or
+     LGW_IPV6 <Space separated list of IPv6 subnets>
+
+     Minimum one and maximum four IP subnets can be used.
+     e.g.:
+       "LGW_IPV4 172.16.0.0/16 10.0.0.0/8"
+       "LGW_IPV6 2001:0db8:85a3:0000:0000:0000:0000:0000/64"
+
+     Note: LGW_IPv6 subnet format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx/xx

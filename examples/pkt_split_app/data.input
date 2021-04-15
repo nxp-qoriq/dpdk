@@ -4,7 +4,7 @@
 IPV4 1.1.1.1 11.11.11.11
 
 # UDP destination port
-DEST_PORT 2152
+DEST_PORT 2152 2123
 
 # Protocol ID to be received by dpdk(UDP=17)
 PROTOCOL_ID 17

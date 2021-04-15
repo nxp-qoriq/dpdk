@@ -214,8 +214,10 @@ int rte_pmd_dpaa_ol_set_classif_info(
 	ret = ioctl(fd, ASK_CTRL_SET_CLASSIF_INFO, classif_info);
 	if (!ret) {
 		DPAA_PMD_DEBUG("Set classification info successful");
-		DPAA_PMD_DEBUG("UDP dest port: %d",
-			       classif_info->gtp_udp_port);
+		for (i = 0; i < classif_info->num_ports; i++) {
+			DPAA_PMD_DEBUG("UDP dest port: %d\n",
+				       classif_info->gtp_udp_port[i]);
+		}
 		DPAA_PMD_DEBUG("Protocol ID: %d",
 			       classif_info->gtp_proto_id);
 		DPAA_PMD_DEBUG("No of IP address: %d",

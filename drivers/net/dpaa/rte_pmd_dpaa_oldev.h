@@ -8,6 +8,8 @@
 #define DPA_ISC_IPV4_ADDR_TYPE  0x04
 #define DPA_ISC_IPV6_ADDR_TYPE  0x06
 #define MAX_NUM_IP_ADDRS 5
+#define MAX_NUM_PORTS 2
+
 #define DPA_ISC_IPV4_SUBNET_TYPE  0x04
 #define DPA_ISC_IPV6_SUBNET_TYPE  0x06
 #define MAX_NUM_SUBNETS 4
@@ -26,9 +28,10 @@ struct lgw_subnet_s {
 
 struct rte_pmd_dpaa_uplink_cls_info_s {
 	struct		ip_addr_s addrs[MAX_NUM_IP_ADDRS];
-	uint16_t	gtp_udp_port;
-	uint8_t		gtp_proto_id;
+	uint16_t	gtp_udp_port[MAX_NUM_PORTS]; /* DPDK app listens on this GTP ports */
+	uint8_t		gtp_proto_id; /* DPDK app listens on UDP protocol */
 	uint8_t		num_addresses;
+	uint8_t		num_ports;
 };
 
 struct rte_pmd_dpaa_lgw_info_s {
