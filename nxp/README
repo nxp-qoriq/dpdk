@@ -1095,6 +1095,44 @@ DPAA2:
 3. fslmc.dpni.<x>,drv_tx_conf=1		Enable Tx confirmation mode for a given interface
 ================================================================================
 
+==========================================================================
+Execution steps to run Virtio_user as Exceptional Path
+==========================================================================
+
+The below commands assume 2 ports - where port 0 is the DPAA interface and port 1 is the tap interface, such that the traffic from DPAA interface is forwarded to tap interface and vice-versa.
+
+Sending traffic from physical interface to tap interface
+--------------------------------------------------------------------------------------
+
+        1. Run testpmd
+                ./dpdk-testpmd -l 2-3 -n 1 --vdev=virtio_user0,path=/dev/vhost-net,queues=2,queue_size=1024 -- -i --txq=2 --rxq=2 --txd=1024 --rxd=1024
+        2. Start testpmd
+                testpmd> port start all
+                testpmd> start
+        3. Enable tap interface on kernel
+                ifconfig tap0 up
+        4. Send traffic with mac address of tap interface from spirent (i.e. on port 0 of Board)
+        5. Check the traffic on tap interface using the following kernel command
+                tcpdump -i tap0
+
+Sending traffic from tap interface to physical interface
+--------------------------------------------------------------------------------------
+
+        1. Run testpmd
+                ./dpdk-testpmd -l 2-3 -n 1 --vdev=virtio_user0,path=/dev/vhost-net,queues=2,queue_size=1024 -- -i --txq=2 --rxq=2 --txd=1024 --rxd=1024
+        2. Start testpmd
+                testpmd> port start all
+                testpmd> start
+        3. On kernel:
+			a. Configure IP address and enable tap interface
+				ifconfig tap0 <ip_address0> up
+			b. Set static ARP to send ping packets
+				arp -s <ip_address1> <mac_address_of_physical_port>
+			c. ping <ip_address1>
+        4. Check and validate packets received on spirent
+
+==================================================================================================
+
 Minimum NXP LSDK version supported: LSDK2004 (https://lsdk.github.io/)
 DPDK base version used: Release 20.11
 More info on DPDK :  www.dpdk.org
