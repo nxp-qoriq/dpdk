@@ -46,6 +46,9 @@
 #include "test_cryptodev_security_pdcp_sdap_test_vectors.h"
 #include "test_cryptodev_security_pdcp_test_func.h"
 #include "test_cryptodev_security_docsis_test_vectors.h"
+#ifdef RTE_LIBRTE_SECURITY_IPSEC_LOOKASIDE_TEST
+#include "test_cryptodev_security_ipsec_test_vectors.h"
+#endif
 
 #define SDAP_DISABLED	0
 #define SDAP_ENABLED	1
@@ -5982,7 +5985,8 @@ test_ipsec_lookaside_protocol_encrypt_aes_sha1(uint8_t oop)
 
 	/* Create security session */
 	ut_params->sec_session = rte_security_session_create(ctx,
-				&sess_conf, ts_params->session_mpool);
+				&sess_conf, ts_params->session_mpool,
+				ts_params->session_priv_mpool);
 
 	/* Generate crypto op data structure */
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool,
@@ -6082,7 +6086,8 @@ test_ipsec_lookaside_protocol_decrypt_aes_sha1(uint8_t oop)
 
 	/* Create security session */
 	ut_params->sec_session = rte_security_session_create(ctx,
-				&sess_conf, ts_params->session_mpool);
+				&sess_conf, ts_params->session_mpool,
+				ts_params->session_priv_mpool);
 
 	/* Generate crypto op data structure */
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool,
@@ -6186,7 +6191,8 @@ test_ipsec_lookaside_protocol_encrypt_aes_null(uint8_t oop)
 
 	/* Create security session */
 	ut_params->sec_session = rte_security_session_create(ctx,
-				&sess_conf, ts_params->session_mpool);
+				&sess_conf, ts_params->session_mpool,
+				ts_params->session_priv_mpool);
 
 	/* Generate crypto op data structure */
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool,
