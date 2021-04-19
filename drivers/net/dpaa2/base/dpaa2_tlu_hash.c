@@ -68,13 +68,6 @@ static unsigned int fast_stage(unsigned int input)
 	return pbox_out;
 }
 
-static unsigned int hash32(unsigned int x)
-{
-	for (int i = 0; i < 4; i++)
-		x = stage(x);
-	return x;
-}
-
 static unsigned int fast_hash32(unsigned int x)
 {
 	for (int i = 0; i < 4; i++)
