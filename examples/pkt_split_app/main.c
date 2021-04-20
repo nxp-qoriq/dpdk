@@ -831,7 +831,6 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 	size_t len = 0;
 	FILE *fp = NULL;
 	char *line = NULL;
-	char space[1] = " ";
 	char *token;
 	int ret;
 	struct in6_addr result;
@@ -858,11 +857,11 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 		    line[0] == '\r')
 			continue;
 
-		token = strtok(line, space);
+		token = strtok(line, " \n");
 
 		if (!strcmp(token, "IPV4")) {
 			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
-				token = strtok(NULL, space);
+				token = strtok(NULL, " \n");
 				if (!token || i > 4) {
 					cls_info->num_addresses = i;
 					break;
@@ -901,7 +900,7 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 
 		if (!strcmp(token, "DEST_PORT")) {
 			for (int i = 0; i <= MAX_NUM_PORTS; i++) {
-				token = strtok(NULL, space);
+				token = strtok(NULL, " \n");
 				if (!token || i >= MAX_NUM_PORTS) {
 					cls_info->num_ports = i;
 					break;
@@ -912,7 +911,7 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 		}
 
 		if (!strcmp(token, "PROTOCOL_ID")) {
-			token = strtok(NULL, space);
+			token = strtok(NULL, " \n");
 			cls_info->gtp_proto_id = (uint8_t)atoi(token);
 			continue;
 		}
@@ -931,14 +930,14 @@ subnet_parse:
 		    line[0] == '\r')
 			continue;
 
-		token = strtok_r(line, space, &end_str);
+		token = strtok_r(line, " \n", &end_str);
 
 		if (!strcmp(token, "LGW_IPV4")) {
 			char *end_token;
 			char *subnet_token;
 
 			for (int i = 0; i <= MAX_NUM_SUBNETS; i++) {
-				token = strtok_r(NULL, space, &end_str);
+				token = strtok_r(NULL, " \n", &end_str);
 				if (!token || i > 3) {
 					lgw_info->num_subnets = i;
 					break;
