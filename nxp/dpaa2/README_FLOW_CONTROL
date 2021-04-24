@@ -54,6 +54,16 @@ Note: Please first read nxp/README.
   #Check both flows should be received on expected queue(RXQ4)
      testpmd> stop
 
+  #Check flow switch by hardware (restart testpmd)
+     ./testpmd  --lcores='0,1,2,3,4@0' --master-lcore 0 -n 1 -- -i --nb-cores=4 --portmask=0x1 --nb-ports=1 --forward-mode=io --rxq=8 --txq=8
+  #Create flow with port forwarding action
+     testpmd> flow create 0 group 0 priority 1 ingress pattern ipv4 src is 10.10.10.10 / end actions port_id id 1 / end
+     testpmd> start
+  #Inject IPV4 packets with 10.10.10.10 source address.
+  #Check the performance achieves line rate.
+     testpmd> stop
+  #Check the RX-packets counter on port0 and TX-packets counter on port1.
+  #Traffic is forwarded but does not go to any RXQ, which means the packets are redirected to TXQ of port1 by hardware.
 
 2.Flow control on multiple TCs
   #Create dpni with 8 TCs
