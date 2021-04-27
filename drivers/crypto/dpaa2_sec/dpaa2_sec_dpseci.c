@@ -58,8 +58,15 @@
 #define SEC_FLC_DHR_OUTBOUND	-114
 #define SEC_FLC_DHR_INBOUND	0
 
+/* DPAA2_SEC_DP_DUMP levels */
+enum dpaa2_sec_dump_levels {
+	DPAA2_SEC_DP_NO_DUMP,
+	DPAA2_SEC_DP_ERR_DUMP,
+	DPAA2_SEC_DP_FULL_DUMP
+};
+
 static uint8_t cryptodev_driver_id;
-bool dpaa2_sec_dp_dump;
+uint8_t dpaa2_sec_dp_dump = DPAA2_SEC_DP_ERR_DUMP;
 
 #ifdef RTE_LIB_SECURITY
 static inline int
@@ -1949,10 +1956,12 @@ dpaa2_sec_dequeue_burst(void *qp, struct rte_crypto_op **ops,
 
 		if (unlikely(fd->simple.frc)) {
 			/* TODO Parse SEC errors */
-			DPAA2_SEC_DP_ERR("SEC returned Error - %x",
-					 fd->simple.frc);
-			if (dpaa2_sec_dp_dump)
-				dpaa2_sec_dump(ops[num_rx]);
+			if (dpaa2_sec_dp_dump > DPAA2_SEC_DP_NO_DUMP) {
+				DPAA2_SEC_DP_ERR("SEC returned Error - %x\n",
+						 fd->simple.frc);
+				if (dpaa2_sec_dp_dump > DPAA2_SEC_DP_ERR_DUMP)
+					dpaa2_sec_dump(ops[num_rx]);
+			}
 
 			dpaa2_qp->rx_vq.err_pkts += 1;
 			ops[num_rx]->status = RTE_CRYPTO_OP_STATUS_ERROR;
@@ -4313,8 +4322,15 @@ dpaa2_sec_dev_init(struct rte_cryptodev *cryptodev)
 		goto init_error;
 	}
 
-	if (getenv("DPAA2_SEC_ENABLE_DP_DUMP"))
-		dpaa2_sec_dp_dump = true;
+	if (getenv("DPAA2_SEC_DP_DUMP_LEVEL")) {
+		dpaa2_sec_dp_dump =
+			atoi(getenv("DPAA2_SEC_DP_DUMP_LEVEL"));
+		if (dpaa2_sec_dp_dump > DPAA2_SEC_DP_FULL_DUMP) {
+			printf("WARN: DPAA2_SEC_DP_DUMP_LEVEL is not "
+			       "supported, changing to FULL error prints\n");
+			dpaa2_sec_dp_dump = DPAA2_SEC_DP_FULL_DUMP;
+		}
+	}
 
 	DPAA2_SEC_INFO("driver %s: created", cryptodev->data->name);
 	return 0;

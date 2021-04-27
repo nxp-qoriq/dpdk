@@ -1076,7 +1076,12 @@ DPAA2:
 
 10. DPAA2_STRICT_ORDERING_ENABLE  Enable strict ordering when using ordered queues.
 
-11. DPAA2_SEC_ENABLE_DP_DUMP	Enable useful debug prints on sec errors.
+11. DPAA2_SEC_DP_DUMP_LEVEL	SEC datapath debug messages dump level.
+				0 - No dump.
+				1 - dump only sec error.
+				2 - dump sec error along with useful debugging
+				    information.
+				By default, 1 is configured.
 ================================================================================
 
 ================================================================================
