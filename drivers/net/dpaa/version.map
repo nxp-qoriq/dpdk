@@ -6,6 +6,15 @@ DPDK_21 {
 	local: *;
 };
 
+EXPERIMENTAL {
+	global:
+
+	rte_pmd_dpaa_ol_reset_classif_info;
+	rte_pmd_dpaa_ol_reset_lgw_info;
+	rte_pmd_dpaa_ol_set_classif_info;
+	rte_pmd_dpaa_ol_set_lgw_info;
+};
+
 INTERNAL {
 	global:
 

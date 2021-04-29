@@ -310,11 +310,13 @@ static int dpaa_ol_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void dpaa_ol_dev_stop(struct rte_eth_dev *dev)
+static int dpaa_ol_dev_stop(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
 
 	dev->tx_pkt_burst = dpaa_eth_tx_drop_all;
+
+	return 0;
 }
 
 static int dpaa_ol_dev_close(__rte_unused struct rte_eth_dev *dev)
@@ -446,7 +448,7 @@ static int dpaa_ol_link_update(struct rte_eth_dev *dev,
 	PMD_INIT_FUNC_TRACE();
 
 	link->link_status = dpaa_intf->valid;
-	link->link_speed = ETH_SPEED_NUM_1G;
+	link->link_speed = ETH_SPEED_NUM_NONE;
 	link->link_duplex = ETH_LINK_FULL_DUPLEX;
 	link->link_autoneg = ETH_LINK_AUTONEG;
 

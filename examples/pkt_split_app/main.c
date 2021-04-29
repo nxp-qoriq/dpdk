@@ -782,14 +782,22 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf(
+				if (link.link_status) {
+					if (link.link_speed ==
+							ETH_SPEED_NUM_NONE) {
+						printf("Port%d Link Up\n",
+								portid);
+					} else {
+						printf(
 					"Port%d Link Up. Speed %u Mbps - %s\n",
 						portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+					(link.link_duplex ==
+					 ETH_LINK_FULL_DUPLEX) ?
 					("full-duplex") : ("half-duplex"));
-				else
+					}
+				} else {
 					printf("Port %d Link Down\n", portid);
+				}
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
