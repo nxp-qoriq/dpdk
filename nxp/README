@@ -230,7 +230,7 @@ arm64-build/examples directory.
 
     a) Build the KNI example. This requires the KNI module to be compiled.
 
-      $ meson arm64-build --cross-file config/arm/arm64_dpaa_linux_gcc -Dexamples=kni --reconfigure
+      $ meson arm64-build --cross-file config/arm/arm64_dpaa_linux_gcc -Denable_kmods=true -Dkernel_dir=<absolute path to the kernel sources> -Dexamples=kni
 
     b) Build all applications
 
