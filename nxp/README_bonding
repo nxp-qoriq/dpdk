@@ -85,6 +85,41 @@ testpmd> stop
 testpmd> quit
 
 
+Below are the steps to test Mode 4 LACP (Link Aggregation Control Protocol): (ONLY FOR DPAA2)
+
+SETUP:
+===========================================================================================
+
+In the below commands three ports of 2 boards are connected back to back to initiate the LACP flow.
+
+	1. Set the environment variable:
+		export DPAA2_FLOW_CONTROL_MISS_FLOW=0
+	2. Execute the dpdk-testpmd file:
+		./dpdk-testpmd -c f -n 1 -- -i --rxq=2 --txq=2
+	3. Set rxonly packet forwarding mode on board 1 using:
+		testpmd> set fwd rxonly
+	4. Set txonly packet forwarding mode on board 2 using:
+		testpmd> set fwd txonly
+	5. Execute the below commands on both the boards.
+
+In the following test port 0,1 and 2 act as slaves to the bonded port 3.
+
+Test case 4: Mode 4: (LACP) Test
+-------------------------------------------------------------
+testpmd> create bonded device 4 0
+testpmd> add bonding slave 0 3
+testpmd> add bonding slave 1 3
+testpmd> add bonding slave 2 3
+testpmd> set bonding lacp dedicated_queues 3 enable
+testpmd> set allmulti all on
+testpmd> set promisc all on
+testpmd> port start all
+testpmd> start
+testpmd> show port stats all
+testpmd> stop
+testpmd> quit
+
+
 Note:
 These are some of the testpmd runtime functions that can be helpful.
 
