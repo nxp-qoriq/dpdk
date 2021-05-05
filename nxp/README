@@ -1131,7 +1131,36 @@ Sending traffic from tap interface to physical interface
 			c. ping <ip_address1>
         4. Check and validate packets received on spirent
 
-==================================================================================================
+
+Running DPDK Applications Without Root Privileges
+===================================================
+
+On root user:
+--------------------
+
+1. Edit /etc/security/limits.conf file with the following to adjust the resource limits needed to ensure normal DPDK operation. Reboot the board after saving the changes.
+
+       #<domain>       <type>          <item>          <value>
+       username        soft            memlock         unlimited
+       username        hard            memlock         unlimited
+       username        hard            nofile          4096
+       username        hard            locks           unlimited
+
+2. source /usr/local/dpdk/dpaa2/dynamic_dpl.sh dpmac.1 dpmac.2
+3. The following permissions should be adjusted:
+	chmod -R 777 /run/user
+	chmod -R 777 /dev/hugepages
+	chmod -R 777 /dev/vfio
+
+On non-root user:
+-------------------
+
+1. export DPRC=dprc.2
+2. Execute the following command to run the 'l2fwd' example application:
+       ./dpdk-l2fwd -c 0x3 -n 1 -- -p 0x3 -q 1
+
+
+======================================================================================================================================================
 
 Minimum NXP LSDK version supported: LSDK2004 (https://lsdk.github.io/)
 DPDK base version used: Release 20.11
