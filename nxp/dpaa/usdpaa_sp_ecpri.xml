@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright 2021 NXP
+-->
+
+<netpdl name="eCPRI" description="Recognize and mark eCPRI transport header">
+
+<protocol name="ecpri" longname="eCPRI Protocol" prevproto="ethernet">
+    <format>
+        <fields>
+            <field type="bit" name="rev" longname="Protocol revision" mask="0xf0" size="1"/>
+            <field type="bit" name="rsvd" longname="Reserved" mask="0x0e" size="1"/>
+            <field type="bit" name="c" longname="concatenation indicator" mask="0x01" size="1"/>
+            <field type="fixed" name="type" longname="eCPRI message type" size="1"/>
+            <field type="fixed" name="size" longname="eCPRI payload size" size="2"/>
+            <field type="fixed" name="id" longname="real time control data / IQ data transfer message series identifier" size="2"/>
+            <field type="fixed" name="seq" longname="message identifier" size="2"/>
+        </fields>
+    </format>
+    <execute-code>
+        <before>
+            <if expr="ethernet.type != 0xaefe">
+                <if-true>
+                    <!-- Confirms Ethernet layer and exits-->
+                    <action type="exit" confirm="yes" nextproto="return"/>
+                </if-true>
+            </if>
+        </before>
+        <after>
+            <assign-variable name="$shimoffset_1" value="$nxtHdrOffset"/>
+            <assign-variable name="$nxtHdrOffset" value="$nxtHdrOffset + $headerSize + ecpri.size"/>
+            <action type="exit" confirmcustom="shim1" nextproto="end_parse"/>
+        </after>
+    </execute-code>
+</protocol>
+
+</netpdl>

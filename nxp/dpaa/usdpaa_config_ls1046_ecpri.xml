@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright 2021 NXP
+-->
+
+<cfgdata>
+
+<!-- xxxxxxxxxxxxxxxxxxxxxxxx configurations xxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+<config>
+    <engine name="fm0">
+        <port type="MAC" number="9" policy="hash_ecpri_type_policy9"/>
+    </engine>
+</config>
+
+</cfgdata>

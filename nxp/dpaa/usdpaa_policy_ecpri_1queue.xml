@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright 2021 NXP
+-->
+
+<netpcd>
+
+<!-- xxxxxxxxxxxxxxxxxxxxxxxxxxxxx VSPs xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+<vsp name="kernel_vsp" base="0"/>
+<vsp name="dpdk_vsp" base="1"/>
+
+<!-- xxxxxxxxxxxxxxxxxxxxxxx classifications xxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+<classification name="hash_ecpri_type_class9" max="2" masks="yes" statistics="none" shared="no">
+    <key>
+        <fieldref name="ecpri.type" size="0" offset ="0" />
+    </key>
+    <entry>
+        <vsp name="dpdk_vsp"/>
+        <data>0x00</data>
+        <mask>0xff</mask>
+        <queue base="0xd00"/>
+    </entry>
+    <entry>
+        <vsp name="dpdk_vsp"/>
+        <data>0x02</data>
+        <mask>0xff</mask>
+        <queue base="0xd01"/>
+    </entry>
+    <action condition="on-miss" type="distribution" name="default_dist9" statistics="disable"/>
+</classification>
+
+
+<!-- xxxxxxxxxxxxxxxxxxxxxxxx Distributions xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+<distribution name="hash_ecpri_type_dist9">
+    <protocols>
+        <protocolref name="ethernet"/>
+        <protocolref name="ecpri"/>
+    </protocols>
+    <vsp name="dpdk_vsp"/>
+    <queue base="0xd00" count="2"/>
+    <action type="classification" name="hash_ecpri_type_class9"/>
+</distribution>
+
+<distribution name="default_dist9">
+    <vsp name="kernel_vsp"/>
+    <queue base="0x5d" count="1"/>
+</distribution>
+
+
+<!-- xxxxxxxxxxxxxxxxxxxxxxxxxx Policies xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+<policy name="hash_ecpri_type_policy9">
+    <dist_order>
+        <distributionref name="hash_ecpri_type_dist9"/>
+        <distributionref name="default_dist9"/>
+    </dist_order>
+</policy>
+
+</netpcd>
