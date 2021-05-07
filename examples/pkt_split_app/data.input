@@ -1,7 +1,18 @@
 # Classification information
-# IP Address list(Max 5)
-#IPV6 fe80:0000:0000:0000:0204:9fff:fe06:5112
-IPV4 1.1.1.1 11.11.11.11
+# IP Address
+#IPV6_INNER fe80:0000:0000:0000:0204:9fff:fe06:5112
+#IPV6_STATIC 1111:0000:0000:0000:0204:9fff:fe06:5112
+IPV4_INNER 1.1.1.1
+IPV4_STATIC 172.18.2.5
+
+# SEC DISABLE (optional), by default it is enabled.
+SEC_DISABLE 1
+
+# Application traffic listen modes
+# 0 both static and inner IP mode
+# 1 only static IP mode
+# 2 only inner IP mode
+LISTEN_MODE 0
 
 # UDP destination port
 DEST_PORT 2152 2123

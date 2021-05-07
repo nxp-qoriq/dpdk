@@ -181,30 +181,43 @@ Default file named data.input is used to configure the classification and
 LGW traffic information for pkt_split_app. This file should be present in
 the directory from where we are running the application. Optionally, user
 can specify the filename by giving "-f" option in application cmdline.
-There are five entries in this file. All the entries are mandatory.
 Blank lines and the lines starting with '#' will be ignored.
 
 Classification entries in data.input file:
 
-  1. IPV4 <Space separated list of IPv4 addresses>
+  1. IPV4_INNER <inner IPv4 address>
      or
-     IPV6 <Space separated list of IPv6 addresses>
+     IPV6_INNER <inner IPv6 addresses>
 
-     Minimum one and maximum five IP addresses can be used.
      e.g.:
-       "IPV4 1.1.1.1 11.11.11.11"
-       "IPV6 fe80:0000:0000:0000:0204:9fff:fe06:5112 2001:0db8:85a3:0000:0000:8a2e:0370:7335"
+       "IPV4_INNER 1.1.1.1"
+       "IPV6_INNER fe80:0000:0000:0000:0204:9fff:fe06:5112"
 
-     Note: IPv6 address format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx
+  2. IPV4_STATIC <static IPv4 address>
+     or
+     IPV6_STATIC <static IPv6 addresses>
 
-  2. DEST_PORT <Space separated list of destination port number>
+     e.g.:
+       "IPV4_STATIC 172.1.1.1"
+       "IPV6_STATIC 1111:0000:0000:0000:0204:9fff:fe06:5112"
+
+
+  3. DEST_PORT <Space separated list of destination port number>
      e.g.: "DEST_PORT 2152 2123"
 
 	Maximum 2 port numbers can be used. Use 2152 and 2123 for
 	GTP-U and GTP-C traffic.
 
-  3. PROTOCOL_ID <IP protocol number>
+  4. PROTOCOL_ID <IP protocol number>
      e.g.: "PROTOCOL_ID 17"
+
+  5. SEC_DISABLE <Disable IPsec. Value must be 1. By default, IPsec is enabled>
+     e.g.: "SEC_DISABLE 1"
+
+  6. LISTEN_MODE <Application traffic listen modes, acceptable values 0, 1, 2>
+     0 -  Application is listening on both inner IP and static IP addresses.
+     1 -  Application is listening on only static IP address.
+     2 -  Application is listening on only inner IP address.
 
 LGW traffic information in file:
 
@@ -217,4 +230,4 @@ LGW traffic information in file:
        "LGW_IPV4 172.16.0.0/16 10.0.0.0/8"
        "LGW_IPV6 2001:0db8:85a3:0000:0000:0000:0000:0000/64"
 
-     Note: LGW_IPv6 subnet format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx/xx
+Note: IPv6 address format must be: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx

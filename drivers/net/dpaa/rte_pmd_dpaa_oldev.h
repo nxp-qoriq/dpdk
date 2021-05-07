@@ -7,17 +7,49 @@
 
 #define DPA_ISC_IPV4_ADDR_TYPE  0x04
 #define DPA_ISC_IPV6_ADDR_TYPE  0x06
-#define MAX_NUM_IP_ADDRS 5
 #define MAX_NUM_PORTS 2
 
 #define DPA_ISC_IPV4_SUBNET_TYPE  0x04
 #define DPA_ISC_IPV6_SUBNET_TYPE  0x06
 #define MAX_NUM_SUBNETS 4
 
+/* following macros used for flags field */
+/* this macro should be set when addr pair consisting valid
+ * inner IP address
+ */
+#define DPDK_CLASSIF_INNER_IP 0x1
+
+/* this macro should be set when addr pair consisting static
+ * IP address
+ */
+#define DPDK_CLASSIF_STATIC_IP 0x2
+
+/* macro to indicate telecom application is listening on only
+ * static IP address
+ */
+#define DPDK_TELECOM_LISTEN_ON_ONLY_STATICIP 0x4
+
+/* macro to indicate that telecom application is listening on
+ * both static and inner IP addresses
+ */
+#define DPDK_TELECOM_LISTEN_ON_BOTH_STATIC_INNER_IP 0x8
+
+/* macro to indicate that telecom application is listening on
+ * only inner IP address
+ */
+#define DPDK_TELECOM_LISTEN_ON_ONLY_INNERIP 0x10
+
+
 struct ip_addr_s {
-	uint8_t		ip_addr_type;
 	uint32_t	ip_addr[4];
 };
+
+struct ip_pair_s {
+	struct ip_addr_s static_ip, inner_ip;
+	uint8_t flags;
+	uint8_t addr_type;
+	uint8_t pad[2];
+} __attribute__((packed));
 
 struct lgw_subnet_s {
 	uint32_t subnet[4];
@@ -27,11 +59,12 @@ struct lgw_subnet_s {
 } __attribute__((packed));
 
 struct rte_pmd_dpaa_uplink_cls_info_s {
-	struct		ip_addr_s addrs[MAX_NUM_IP_ADDRS];
+	struct ip_pair_s	addr_pair;
 	uint16_t	gtp_udp_port[MAX_NUM_PORTS]; /* DPDK app listens on this GTP ports */
 	uint8_t		gtp_proto_id; /* DPDK app listens on UDP protocol */
-	uint8_t		num_addresses;
 	uint8_t		num_ports;
+	uint8_t		sec_enabled;
+	uint8_t		pad;
 };
 
 struct rte_pmd_dpaa_lgw_info_s {

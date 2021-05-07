@@ -834,6 +834,32 @@ signal_handler(int signum)
 	}
 }
 
+static int
+validate_cls_info(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info)
+{
+	if (!(cls_info->addr_pair.flags &
+			(DPDK_TELECOM_LISTEN_ON_ONLY_STATICIP |
+			 DPDK_TELECOM_LISTEN_ON_BOTH_STATIC_INNER_IP |
+			 DPDK_TELECOM_LISTEN_ON_ONLY_INNERIP))) {
+		printf("Application Traffic Listen mode is not available\n");
+		return -1;
+	}
+	if (!(cls_info->addr_pair.flags & DPDK_CLASSIF_INNER_IP)) {
+		printf("Inner IP is missing\n");
+		return -1;
+	}
+	if ((cls_info->addr_pair.flags &
+			(DPDK_TELECOM_LISTEN_ON_ONLY_STATICIP |
+			 DPDK_TELECOM_LISTEN_ON_BOTH_STATIC_INNER_IP)) &&
+			(!(cls_info->addr_pair.flags & DPDK_CLASSIF_STATIC_IP))) {
+		printf("Static IP is missing\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+
 #define USER_DATA_FILENAME   "data.input"
 
 static int
@@ -864,6 +890,8 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 	if (cls_info == NULL)
 		goto subnet_parse;
 
+	/* enabling sec by default */
+	cls_info->sec_enabled = 1;
 	while (getline(&line, &len, fp) != -1) {
 		if (line[0] == '#' || line[0] == '/' || line[0] == '\n' ||
 		    line[0] == '\r')
@@ -871,44 +899,64 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 
 		token = strtok(line, " \n");
 
-		if (!strcmp(token, "IPV4")) {
-			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
-				token = strtok(NULL, " \n");
-				if (!token || i > 4) {
-					cls_info->num_addresses = i;
-					break;
-				}
-				cls_info->addrs[i].ip_addr_type =
-						DPA_ISC_IPV4_ADDR_TYPE;
-				cls_info->addrs[i].ip_addr[0] =
-						ntohl(inet_addr(token));
+		if (!strcmp(token, "IPV4_INNER")) {
+			token = strtok(NULL, " \n");
+			cls_info->addr_pair.addr_type =
+					DPA_ISC_IPV4_ADDR_TYPE;
+			cls_info->addr_pair.inner_ip.ip_addr[0] =
+					ntohl(inet_addr(token));
+			cls_info->addr_pair.flags |= DPDK_CLASSIF_INNER_IP;
+			continue;
+		}
+
+		if (!strcmp(token, "IPV6_INNER")) {
+			token = strtok(NULL, " \n");
+			memset(&result, 0, sizeof(struct in6_addr));
+			ret = inet_pton(AF_INET6, token, &result);
+			if (ret == 1) {
+				cls_info->addr_pair.addr_type =
+					DPA_ISC_IPV6_ADDR_TYPE;
+				cls_info->addr_pair.flags |= DPDK_CLASSIF_INNER_IP;
+				memcpy(&cls_info->addr_pair.inner_ip.ip_addr[0], &result.s6_addr, 16);
+				cls_info->addr_pair.inner_ip.ip_addr[0] = htonl(cls_info->addr_pair.inner_ip.ip_addr[0]);
+				cls_info->addr_pair.inner_ip.ip_addr[1] = htonl(cls_info->addr_pair.inner_ip.ip_addr[1]);
+				cls_info->addr_pair.inner_ip.ip_addr[2] = htonl(cls_info->addr_pair.inner_ip.ip_addr[2]);
+				cls_info->addr_pair.inner_ip.ip_addr[3] = htonl(cls_info->addr_pair.inner_ip.ip_addr[3]);
+			} else {
+				printf("IPv6 inner IP parsing failed\n");
 			}
 			continue;
 		}
 
-		if (!strcmp(token, "IPV6")) {
-			for (int i = 0; i <= MAX_NUM_IP_ADDRS; i++) {
-				token = strtok(NULL, " \n");
-				if (!token || i > 4) {
-					cls_info->num_addresses = i;
-					break;
-				}
-				memset(&result, 0, sizeof(struct in6_addr));
-				ret = inet_pton(AF_INET6, token, &result);
-				if (ret == 1) {
-					cls_info->addrs[i].ip_addr_type =
-						DPA_ISC_IPV6_ADDR_TYPE;
-					memcpy(&cls_info->addrs[i].ip_addr[0], &result.s6_addr, 16);
-					cls_info->addrs[i].ip_addr[0] = htonl(cls_info->addrs[i].ip_addr[0]);
-					cls_info->addrs[i].ip_addr[1] = htonl(cls_info->addrs[i].ip_addr[1]);
-					cls_info->addrs[i].ip_addr[2] = htonl(cls_info->addrs[i].ip_addr[2]);
-					cls_info->addrs[i].ip_addr[3] = htonl(cls_info->addrs[i].ip_addr[3]);
-				} else {
-					printf("IPv6 address parsing failed\n");
-				}
+		if (!strcmp(token, "IPV4_STATIC")) {
+			token = strtok(NULL, " \n");
+			cls_info->addr_pair.addr_type =
+					DPA_ISC_IPV4_ADDR_TYPE;
+			cls_info->addr_pair.static_ip.ip_addr[0] =
+					ntohl(inet_addr(token));
+			cls_info->addr_pair.flags |= DPDK_CLASSIF_STATIC_IP;
+			continue;
+		}
+
+		if (!strcmp(token, "IPV6_STATIC")) {
+			token = strtok(NULL, " \n");
+			memset(&result, 0, sizeof(struct in6_addr));
+			ret = inet_pton(AF_INET6, token, &result);
+			if (ret == 1) {
+				cls_info->addr_pair.addr_type =
+					DPA_ISC_IPV6_ADDR_TYPE;
+				cls_info->addr_pair.flags |= DPDK_CLASSIF_STATIC_IP;
+				memcpy(&cls_info->addr_pair.static_ip.ip_addr[0], &result.s6_addr, 16);
+				cls_info->addr_pair.static_ip.ip_addr[0] = htonl(cls_info->addr_pair.static_ip.ip_addr[0]);
+				cls_info->addr_pair.static_ip.ip_addr[1] = htonl(cls_info->addr_pair.static_ip.ip_addr[1]);
+				cls_info->addr_pair.static_ip.ip_addr[2] = htonl(cls_info->addr_pair.static_ip.ip_addr[2]);
+				cls_info->addr_pair.static_ip.ip_addr[3] = htonl(cls_info->addr_pair.static_ip.ip_addr[3]);
+			} else {
+				printf("IPv6 static IP parsing failed\n");
 			}
 			continue;
 		}
+
 
 		if (!strcmp(token, "DEST_PORT")) {
 			for (int i = 0; i <= MAX_NUM_PORTS; i++) {
@@ -927,7 +975,36 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 			cls_info->gtp_proto_id = (uint8_t)atoi(token);
 			continue;
 		}
+
+		if (!strcmp(token, "LISTEN_MODE")) {
+			int value;
+
+			token = strtok(NULL, " \n");
+			value = (uint8_t)atoi(token);
+			if (value == 1)
+				cls_info->addr_pair.flags |= DPDK_TELECOM_LISTEN_ON_ONLY_STATICIP;
+			else if (value == 2)
+				cls_info->addr_pair.flags |= DPDK_TELECOM_LISTEN_ON_ONLY_INNERIP;
+			else
+				cls_info->addr_pair.flags |= DPDK_TELECOM_LISTEN_ON_BOTH_STATIC_INNER_IP;
+
+			continue;
+		}
+
+		if (!strcmp(token, "SEC_DISABLE")) {
+			int value;
+
+			token = strtok(NULL, " \n");
+			value = (uint8_t)atoi(token);
+			if (value == 1)
+				cls_info->sec_enabled = 0;
+
+			continue;
+		}
 	}
+
+	if (validate_cls_info(cls_info))
+		return -1;
 
 subnet_parse:
 	if (lgw_info == NULL) {
@@ -1021,6 +1098,7 @@ set_classif_info(void)
 	struct rte_pmd_dpaa_uplink_cls_info_s cls_info;
 	int ret;
 
+	memset(&cls_info, 0, sizeof(struct rte_pmd_dpaa_uplink_cls_info_s));
 	ret = get_user_data(&cls_info, NULL);
 	if (ret) {
 		rte_exit(EXIT_FAILURE, "Failed to paarse user data\n");
@@ -1032,6 +1110,7 @@ set_classif_info(void)
 		rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
 		return ret;
 	}
+
 	printf("######### Classification Info: #####################\n");
 	printf("number of destination ports = %d\n", cls_info.num_ports);
 	num_ports = cls_info.num_ports;
@@ -1041,19 +1120,18 @@ set_classif_info(void)
 		gtp_udp_port[i] = cls_info.gtp_udp_port[i];
 	}
 	printf("Protocol ID: %d\n", cls_info.gtp_proto_id);
-	printf("Number of IP addresses: %d\n", cls_info.num_addresses);
-	for (int i = 0; i <= cls_info.num_addresses; i++) {
-		if (cls_info.addrs[i].ip_addr_type == DPA_ISC_IPV4_ADDR_TYPE) {
-			printf("\tIPv4 address: %d.%d.%d.%d\n",
-				(cls_info.addrs[i].ip_addr[0] >> 24) & 0xFF,
-				(cls_info.addrs[i].ip_addr[0] >> 16) & 0xFF,
-				(cls_info.addrs[i].ip_addr[0] >> 8) & 0xFF,
-				(cls_info.addrs[i].ip_addr[0]) & 0xFF);
-		} else if (cls_info.addrs[i].ip_addr_type == DPA_ISC_IPV6_ADDR_TYPE) {
+	if (cls_info.addr_pair.flags & DPDK_CLASSIF_INNER_IP) {
+		if (cls_info.addr_pair.addr_type == DPA_ISC_IPV4_ADDR_TYPE) {
+			printf("\tIPv4 Inner IP address: %d.%d.%d.%d\n",
+				(cls_info.addr_pair.inner_ip.ip_addr[0] >> 24) & 0xFF,
+				(cls_info.addr_pair.inner_ip.ip_addr[0] >> 16) & 0xFF,
+				(cls_info.addr_pair.inner_ip.ip_addr[0] >> 8) & 0xFF,
+				(cls_info.addr_pair.inner_ip.ip_addr[0]) & 0xFF);
+		} else if (cls_info.addr_pair.addr_type == DPA_ISC_IPV6_ADDR_TYPE) {
 			uint8_t temp_addr[16];
 
-			memcpy(&temp_addr, &cls_info.addrs[i].ip_addr[0], 16);
-			printf("\tIPv6 address: %02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+			memcpy(&temp_addr, &cls_info.addr_pair.inner_ip.ip_addr[0], 16);
+			printf("\tIPv6 Inner IP address: %02x%02x:%02x%02x:%02x%02x:%02x%02x:"
 				"%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
 				(int)temp_addr[3], (int)temp_addr[2],
 				(int)temp_addr[1], (int)temp_addr[0],
@@ -1065,6 +1143,32 @@ set_classif_info(void)
 				(int)temp_addr[13], (int)temp_addr[12]);
 		}
 	}
+	if (cls_info.addr_pair.flags & DPDK_CLASSIF_STATIC_IP) {
+		if (cls_info.addr_pair.addr_type == DPA_ISC_IPV4_ADDR_TYPE) {
+			printf("\tIPv4 static IP address: %d.%d.%d.%d\n",
+				(cls_info.addr_pair.static_ip.ip_addr[0] >> 24) & 0xFF,
+				(cls_info.addr_pair.static_ip.ip_addr[0] >> 16) & 0xFF,
+				(cls_info.addr_pair.static_ip.ip_addr[0] >> 8) & 0xFF,
+				(cls_info.addr_pair.static_ip.ip_addr[0]) & 0xFF);
+		} else if (cls_info.addr_pair.addr_type == DPA_ISC_IPV6_ADDR_TYPE) {
+			uint8_t temp_addr[16];
+
+			memcpy(&temp_addr, &cls_info.addr_pair.static_ip.ip_addr[0], 16);
+			printf("\tIPv6 static IP address: %02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+				"%02x%02x:%02x%02x:%02x%02x:%02x%02x\n",
+				(int)temp_addr[3], (int)temp_addr[2],
+				(int)temp_addr[1], (int)temp_addr[0],
+				(int)temp_addr[7], (int)temp_addr[6],
+				(int)temp_addr[5], (int)temp_addr[4],
+				(int)temp_addr[11], (int)temp_addr[10],
+				(int)temp_addr[9], (int)temp_addr[8],
+				(int)temp_addr[15], (int)temp_addr[14],
+				(int)temp_addr[13], (int)temp_addr[12]);
+		}
+	}
+
+	printf("IP flags = 0x%x\n", cls_info.addr_pair.flags);
+	printf("Sec enabled = %d\n", cls_info.sec_enabled);
 	printf("****************************************************\n");
 
 	return ret;
