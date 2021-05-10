@@ -23,6 +23,8 @@
 #define ASK_PATH		"/dev/cdx_ctrl"
 #define CDX_IOC_MAGIC		0xbe
 
+#define MAX_BH_PORT_NAME_LEN	12
+
 static int fd = -1;
 static pthread_mutex_t fd_init_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -44,9 +46,8 @@ struct ask_ctrl_dpdk_fq_info_s {
 					 * pool
 					 */
 	uint8_t bp_id;			/* DPDK buffer pool id */
-	uint8_t bh_port_name[12];	/* BH port interface name , for testing
-					 * purpose
-					 */
+	/* BH port interface name , for testing purpose */
+	uint8_t bh_port_name[MAX_BH_PORT_NAME_LEN];
 	/* below fields are taken from structure t_FmBufferPrefixContent, These
 	 * fields are required for VSP creation on DPDK buffer pool ID. These
 	 * fields should be set based on expected parameters from FMAN
@@ -415,6 +416,10 @@ int dpaa_ol_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	bh_port_name = getenv("BH_PORT_NAME");
 	if (bh_port_name == NULL) {
 		DPAA_PMD_ERR("BH_PORT_NAME not defined");
+		return -1;
+	} else if (strlen(bh_port_name) > (MAX_BH_PORT_NAME_LEN - 1)) {
+		DPAA_PMD_ERR("BH_PORT_NAME length bigger than expected.(Expected length: %d)",
+			     MAX_BH_PORT_NAME_LEN - 1);
 		return -1;
 	}
 
