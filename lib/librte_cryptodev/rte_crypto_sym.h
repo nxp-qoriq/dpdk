@@ -37,6 +37,8 @@ struct rte_crypto_vec {
 	rte_iova_t iova;
 	/** length of the data buffer */
 	uint32_t len;
+	/** total buffer length*/
+	uint32_t tot_len;
 };
 
 /**
@@ -949,12 +951,14 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 	seglen = mb->data_len - ofs;
 	if (len <= seglen) {
 		vec[0].len = len;
+		vec[0].tot_len = mb->buf_len;
 		return 1;
 	}
 
 	/* data spread across segments */
 	vec[0].len = seglen;
 	left = len - seglen;
+	vec[0].tot_len = mb->buf_len;
 	for (i = 1, nseg = mb->next; nseg != NULL; nseg = nseg->next, i++) {
 
 		vec[i].base = rte_pktmbuf_mtod(nseg, void *);
@@ -971,6 +975,7 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 		/* use whole segment */
 		vec[i].len = seglen;
 		left -= seglen;
+		vec[i].tot_len = mb->buf_len;
 	}
 
 	RTE_ASSERT(left == 0);
