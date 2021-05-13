@@ -6118,6 +6118,9 @@ test_ipsec_lookaside_protocol_decrypt_aes_sha1(uint8_t oop)
 			.direction = RTE_SECURITY_IPSEC_SA_DIR_INGRESS,
 			.proto = RTE_SECURITY_IPSEC_SA_PROTO_ESP,
 			.mode = RTE_SECURITY_IPSEC_SA_MODE_TUNNEL,
+			.tunnel = {
+				.type = RTE_SECURITY_IPSEC_TUNNEL_IPV4,
+			},
 		} },
 		.crypto_xform = &ut_params->auth_xform
 	};
