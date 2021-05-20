@@ -67,6 +67,8 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	uint8_t key_size = 0;
 	int ret;
 	static int i;
+	int num_rules = 1;
+	uint64_t *masks = NULL, *keys = NULL;
 
 	/* Find the DPDMUX from dpdmux_id in our list */
 	dpdmux_dev = get_dpdmux_from_id(dpdmux_id);
@@ -112,6 +114,86 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			sizeof(uint8_t));
 		memcpy(mask_iova, pattern[0]->mask, sizeof(uint8_t));
 		key_size = sizeof(uint8_t);
+	}
+	break;
+
+	case RTE_FLOW_ITEM_TYPE_IP_FRAG_UDP_AND_GTP:
+	{
+		/* The bit 50 and bit 87 in Parse Results signal the
+		 * presence of an IP fragmented frame and GTP frame
+		 * respectively. The following rule extracts the octet
+		 * from 0xA containing bit 50 and from 0xE containing
+		 * bit 87 from Parse Results. The arrays mask and key
+		 * contain the cases for which the rules are created
+		 * in this switch case ie. GTP traffic, and IP fragmented
+		 * UDP traffic filled in this particular order in the arrays.
+		 */
+
+		uint64_t mask[] = {0x0001000000000000, 0x2000FF0000000000};
+		uint64_t key[] = {0x0001000000000000, 0x2000110000000000};
+		int j = 0;
+
+		keys = rte_malloc(NULL, sizeof(uint64_t), 0);
+		masks = rte_malloc(NULL, sizeof(uint64_t), 0);
+
+		if (!keys)
+			printf("Memory allocation failure for keys\n");
+
+		if (!masks)
+			printf("Memory allocation failure for masks\n");
+
+		num_rules = 2;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0A;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0E;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_HDR;
+		kg_cfg.extracts[j].extract.from_hdr.type = DPKG_FULL_FIELD;
+		kg_cfg.extracts[j].extract.from_hdr.prot = NET_PROT_IP;
+		kg_cfg.extracts[j].extract.from_hdr.field = NH_FLD_IP_PROTO;
+		j++;
+
+		kg_cfg.num_extracts = j;
+		masks = mask;
+		keys = key;
+		key_size = sizeof(uint8_t) * 3;
+	}
+	break;
+
+	case RTE_FLOW_ITEM_TYPE_IP_FRAG_PROTO:
+	{
+		uint8_t key_val = 0x20;
+		uint8_t mask_val = 0x20;
+		int j = 0;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_HDR;
+		kg_cfg.extracts[j].extract.from_hdr.prot = NET_PROT_IP;
+		kg_cfg.extracts[j].extract.from_hdr.type = DPKG_FULL_FIELD;
+		kg_cfg.extracts[j].extract.from_hdr.field = NH_FLD_IP_PROTO;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0A;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.num_extracts = j;
+		const struct rte_flow_item_ipv4 *spec;
+
+		spec = (const struct rte_flow_item_ipv4 *)pattern[0]->spec;
+		memcpy(key_iova, (const void *)(&spec->hdr.next_proto_id),
+			sizeof(uint8_t));
+		memcpy(mask_iova, pattern[0]->mask, sizeof(uint8_t));
+		memcpy((char *)key_iova + 1, &key_val, sizeof(uint8_t));
+		memcpy((char *)mask_iova + 1, &mask_val, sizeof(uint8_t));
+		key_size = sizeof(uint8_t) + sizeof(uint8_t);
 	}
 	break;
 
@@ -198,13 +280,6 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			goto creation_error;
 		}
 	}
-	/* As now our key extract parameters are set, let us configure
-	 * the rule.
-	 */
-	flow->rule.key_iova = (uint64_t)(DPAA2_VADDR_TO_IOVA(key_iova));
-	flow->rule.mask_iova = (uint64_t)(DPAA2_VADDR_TO_IOVA(mask_iova));
-	flow->rule.key_size = key_size;
-	flow->rule.entry_index = i++;
 
 	vf_conf = (const struct rte_flow_action_vf *)(actions[0]->conf);
 	if (vf_conf->id == 0 || vf_conf->id > dpdmux_dev->num_ifs) {
@@ -213,13 +288,35 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	}
 	dpdmux_action.dest_if = vf_conf->id;
 
-	ret = dpdmux_add_custom_cls_entry(&dpdmux_dev->dpdmux, CMD_PRI_LOW,
-					  dpdmux_dev->token, &flow->rule,
-					  &dpdmux_action);
-	if (ret) {
-		DPAA2_PMD_ERR("dpdmux_add_custom_cls_entry failed: err(%d)",
-			      ret);
-		goto creation_error;
+	/* As now our key extract parameters are set, let us configure
+	 * the rule.
+	 */
+
+	for (int j = 0; j < num_rules; j++) {
+		if (keys) {
+			rte_be64_t key_val, mask_val;
+
+			key_val = rte_bswap64(keys[j]);
+			mask_val = rte_bswap64(masks[j]);
+			memcpy(key_iova, &key_val, sizeof(rte_be64_t));
+			memcpy(mask_iova, &mask_val, sizeof(rte_be64_t));
+		}
+		flow->rule.key_iova =
+			(uint64_t)(DPAA2_VADDR_TO_IOVA(key_iova));
+		flow->rule.mask_iova =
+			(uint64_t)(DPAA2_VADDR_TO_IOVA(mask_iova));
+		flow->rule.key_size = key_size;
+		flow->rule.entry_index = i++;
+
+		ret = dpdmux_add_custom_cls_entry(&dpdmux_dev->dpdmux,
+					CMD_PRI_LOW, dpdmux_dev->token,
+					&flow->rule, &dpdmux_action);
+
+		if (ret) {
+			DPAA2_PMD_ERR("dpdmux_add_custom_cls_entry failed:err(%d)"
+							, ret);
+			goto creation_error;
+		}
 	}
 
 	return flow;
