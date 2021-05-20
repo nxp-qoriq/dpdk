@@ -84,9 +84,11 @@ uint8_t enable_flow;
 enum traffic_split_type_t {
 	TRAFFIC_SPLIT_NONE,
 	TRAFFIC_SPLIT_ETHTYPE,
-	TRAFFIC_SPLIT_PROTO,
+	TRAFFIC_SPLIT_IP_PROTO,
 	TRAFFIC_SPLIT_UDP_DST_PORT,
-	TRAFFIC_SPLIT_MAX_NUM,
+	TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP,
+	TRAFFIC_SPLIT_IP_FRAG_PROTO,
+	TRAFFIC_SPLIT_MAX_NUM
 };
 
 static uint32_t traffic_split_val; /**< Split traffic based on this value */
@@ -1523,7 +1525,7 @@ configure_split_traffic_config(void)
 		pattern[0].spec = &eth_item;
 		pattern[0].mask = &mask;
 		break;
-	case TRAFFIC_SPLIT_PROTO:
+	case TRAFFIC_SPLIT_IP_PROTO:
 		ip_item.hdr.next_proto_id = traffic_split_val;
 		mask = 0xff;
 		pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -1533,8 +1535,18 @@ configure_split_traffic_config(void)
 	case TRAFFIC_SPLIT_UDP_DST_PORT:
 		udp_item.hdr.dst_port = traffic_split_val;
 		mask = 0xffff;
-		pattern[0].type = RTE_FLOW_ITEM_TYPE_UDP;
 		pattern[0].spec = &udp_item;
+		pattern[0].mask = &mask;
+		pattern[0].type = RTE_FLOW_ITEM_TYPE_UDP;
+		break;
+	case TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP:
+		pattern[0].type = RTE_FLOW_ITEM_TYPE_IP_FRAG_UDP_AND_GTP;
+		break;
+	case TRAFFIC_SPLIT_IP_FRAG_PROTO:
+		ip_item.hdr.next_proto_id = traffic_split_val;
+		mask = 0xff;
+		pattern[0].type = RTE_FLOW_ITEM_TYPE_IP_FRAG_PROTO;
+		pattern[0].spec = &ip_item;
 		pattern[0].mask = &mask;
 		break;
 	default:
