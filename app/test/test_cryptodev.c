@@ -6217,19 +6217,32 @@ test_ipsec_lookaside_protocol_encrypt_aes_null(uint8_t oop)
 	struct crypto_unittest_params *ut_params = &unittest_params;
 	uint8_t *plaintext;
 	int ret = TEST_SUCCESS;
+	struct rte_cryptodev_info dev_info;
+	uint64_t feat_flags;
 
 	/* Generate test mbuf data */
 	ut_params->ibuf = rte_pktmbuf_alloc(ts_params->mbuf_pool);
 	plaintext = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf, 64);
 	memcpy(plaintext, ipsec_plaintext_encrypt_64B, 64);
 
+	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
+	feat_flags = dev_info.feature_flags;
+
 	/* Out of place support */
 	if (oop) {
+		if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
+			return -ENOTSUP;
 		/*
 		 * For out-op-place we need to alloc another mbuf
 		 */
 		ut_params->obuf = rte_pktmbuf_alloc(ts_params->mbuf_pool);
 		rte_pktmbuf_append(ut_params->obuf, 136);
+	} else {
+		if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
+			(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
+			printf("Device doesn't support RAW data-path APIs.\n");
+			return -ENOTSUP;
+		}
 	}
 
 	/* Set crypto type as IPSEC */
@@ -6304,9 +6317,17 @@ test_ipsec_lookaside_protocol_encrypt_aes_null(uint8_t oop)
 	if (oop)
 		ut_params->op->sym->m_dst = ut_params->obuf;
 
+	/* filling lengths */
+	ut_params->op->sym->cipher.data.length = ut_params->op->sym->m_src->pkt_len;
+	ut_params->op->sym->auth.data.length = ut_params->op->sym->m_src->pkt_len;
+	if (global_api_test_type == CRYPTODEV_RAW_API_TEST) {
+		process_sym_raw_dp_op(ts_params->valid_devs[0], 0,
+			ut_params->op, 1, 1, 0, 0);
+	} else {
+		ut_params->op = process_crypto_request(ts_params->valid_devs[0], ut_params->op);
+	}
 	/* Process crypto operation */
-	if (process_crypto_request(ts_params->valid_devs[0], ut_params->op)
-		== NULL) {
+	if (ut_params->op == NULL) {
 		printf("TestCase %s()-line %d failed %s: ",
 			__func__, __LINE__,
 			"failed to process sym crypto op\n");
@@ -8415,6 +8436,11 @@ test_pdcp_proto_SGL(int i, int oop,
 	struct rte_security_ctx *ctx = (struct rte_security_ctx *)
 				rte_cryptodev_get_sec_ctx(
 				ts_params->valid_devs[0]);
+	struct rte_cryptodev_info dev_info;
+	uint64_t feat_flags;
+
+	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
+	feat_flags = dev_info.feature_flags;
 
 	/* Verify the capabilities */
 	struct rte_security_capability_idx sec_cap_idx;
@@ -8599,8 +8625,16 @@ test_pdcp_proto_SGL(int i, int oop,
 		ut_params->op->sym->m_dst = ut_params->obuf;
 
 	/* Process crypto operation */
-	if (process_crypto_request(ts_params->valid_devs[0], ut_params->op)
-		== NULL) {
+	if (global_api_test_type == CRYPTODEV_RAW_API_TEST) {
+		/* filling lengths */
+		ut_params->op->sym->cipher.data.length = ut_params->op->sym->m_src->pkt_len;
+		ut_params->op->sym->auth.data.length = ut_params->op->sym->m_src->pkt_len;
+		process_sym_raw_dp_op(ts_params->valid_devs[0], 0,
+			ut_params->op, 1, 1, 0, 0);
+	} else {
+		ut_params->op = process_crypto_request(ts_params->valid_devs[0], ut_params->op);
+	}
+	if (ut_params->op == NULL) {
 		printf("TestCase %s()-%d line %d failed %s: ",
 			__func__, i, __LINE__,
 			"failed to process sym crypto op");
@@ -14218,6 +14252,166 @@ static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_cipheronly_dpaa2_sec_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_authonly_dpaa2_sec_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_chain_dpaa2_sec_all),
+#ifdef RTE_LIBRTE_SECURITY
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_cplane_encap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_cplane_decap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_uplane_encap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_uplane_decap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_SDAP_PROTO_encap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_SDAP_PROTO_decap_all),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_short_mac),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_SGL_in_place_32B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_SGL_oop_32B_128B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_SGL_oop_32B_40B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_PDCP_PROTO_SGL_oop_128B_32B),
+
+#ifdef RTE_LIBRTE_SECURITY_IPSEC_LOOKASIDE_TEST
+		/** IPSEC_Lookaside Protocol Encrypt Decrypt */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_IPSEC_LOOKASIDE_PROTOCOL_encrypt_aes_sha1_64B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_IPSEC_LOOKASIDE_PROTOCOL_decrypt_aes_sha1_64B),
+
+		/** IPSEC Lookaside Protocol Encrypt Decrypt Out of place **/
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_IPSEC_LOOKASIDE_PROTOCOL_encrypt_aes_sha1_64B_oop),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_IPSEC_LOOKASIDE_PROTOCOL_decrypt_aes_sha1_64B_oop),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_IPSEC_LOOKASIDE_PROTOCOL_encrypt_aes_64B),
+#endif
+#endif
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_in_place_1500B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_400B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_1500B_2000B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_1seg),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_7),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_8),
+
+		/** AES GCM Authenticated Decryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_7),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_8),
+
+		/** AES GCM Authenticated Encryption 192 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_7),
+
+		/** AES GCM Authenticated Decryption 192 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_7),
+
+		/** AES GCM Authenticated Encryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_7),
+
+		/** AES GCM Authenticated Decryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_7),
+
+		/** Out of place tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_oop_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_oop_test_case_1),
+
 		TEST_CASES_END()
 	}
 };
