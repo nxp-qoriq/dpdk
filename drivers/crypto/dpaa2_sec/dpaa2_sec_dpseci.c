@@ -1816,7 +1816,7 @@ dpaa2_sec_dump(struct rte_crypto_op *op)
 	printf("\n****************************************\n"
 		"session params:\n\tContext type:\t%d\n\tDirection:\t%s\n"
 		"\tCipher alg:\t%d\n\tAuth alg:\t%d\n\tAead alg:\t%d\n"
-		"\tCipher key len:\t%ld\n", sess->ctxt_type,
+		"\tCipher key len:\t%zd\n", sess->ctxt_type,
 		(sess->dir == DIR_ENC) ? "DIR_ENC" : "DIR_DEC",
 		sess->cipher_alg, sess->auth_alg, sess->aead_alg,
 		sess->cipher_key.length);
@@ -1824,7 +1824,7 @@ dpaa2_sec_dump(struct rte_crypto_op *op)
 				sess->cipher_key.length);
 		rte_hexdump(stdout, "auth key", sess->auth_key.data,
 				sess->auth_key.length);
-	printf("\tAuth key len:\t%ld\n\tIV len:\t\t%d\n\tIV offset:\t%d\n"
+	printf("\tAuth key len:\t%zd\n\tIV len:\t\t%d\n\tIV offset:\t%d\n"
 		"\tdigest length:\t%d\n\tstatus:\t\t%d\n\taead auth only"
 		" len:\t%d\n\taead cipher text:\t%d\n",
 		sess->auth_key.length, sess->iv.length, sess->iv.offset,
@@ -1968,7 +1968,7 @@ dpaa2_sec_dequeue_burst(void *qp, struct rte_crypto_op **ops,
 
 	dpaa2_qp->rx_vq.rx_pkts += num_rx;
 
-	DPAA2_SEC_DP_DEBUG("SEC RX pkts %d err pkts %ld\n", num_rx,
+	DPAA2_SEC_DP_DEBUG("SEC RX pkts %d err pkts %" PRIu64 "\n", num_rx,
 				dpaa2_qp->rx_vq.err_pkts);
 	/*Return the total number of packets received to DPAA2 app*/
 	return num_rx;
