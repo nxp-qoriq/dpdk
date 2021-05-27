@@ -187,11 +187,11 @@ process_sym_raw_dp_op(uint8_t dev_id, uint16_t qp_id,
 {
 	struct rte_crypto_sym_op *sop = op->sym;
 	struct rte_crypto_op *ret_op = NULL;
-	struct rte_crypto_vec data_vec[UINT8_MAX];
+	struct rte_crypto_vec data_vec[UINT8_MAX], dest_data_vec[UINT8_MAX];
 	struct rte_crypto_va_iova_ptr cipher_iv, digest, aad_auth_iv;
 	union rte_crypto_sym_ofs ofs;
 	struct rte_crypto_sym_vec vec;
-	struct rte_crypto_sgl sgl;
+	struct rte_crypto_sgl sgl, dest_sgl;
 	uint32_t max_len;
 	union rte_cryptodev_session_ctx sess;
 	uint32_t count = 0;
@@ -327,6 +327,19 @@ process_sym_raw_dp_op(uint8_t dev_id, uint16_t qp_id,
 	}
 
 	sgl.num = n;
+	/* Out of place */
+	if (sop->m_dst != NULL) {
+		dest_sgl.vec = dest_data_vec;
+		vec.dest_sgl = &dest_sgl;
+		n = rte_crypto_mbuf_to_vec(sop->m_dst, 0, max_len,
+				dest_data_vec, RTE_DIM(dest_data_vec));
+		if (n < 0 || n > sop->m_dst->nb_segs) {
+			op->status = RTE_CRYPTO_OP_STATUS_ERROR;
+			goto exit;
+		}
+		dest_sgl.num = n;
+	} else
+		vec.dest_sgl = NULL;
 
 	if (rte_cryptodev_raw_enqueue_burst(ctx, &vec, ofs, (void **)&op,
 			&enqueue_status) < 1) {
@@ -10142,6 +10155,7 @@ test_authenticated_encryption_oop(const struct aead_test_data *tdata)
 	int retval;
 	uint8_t *ciphertext, *auth_tag;
 	uint16_t plaintext_pad_len;
+	struct rte_cryptodev_info dev_info;
 
 	/* Verify the capabilities */
 	struct rte_cryptodev_sym_capability_idx cap_idx;
@@ -10151,8 +10165,13 @@ test_authenticated_encryption_oop(const struct aead_test_data *tdata)
 			&cap_idx) == NULL)
 		return -ENOTSUP;
 
-	if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
+	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
+	uint64_t feat_flags = dev_info.feature_flags;
+	if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
+			(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
+		printf("Device doesn't support RAW data-path APIs.\n");
 		return -ENOTSUP;
+	}
 
 	/* not supported with CPU crypto */
 	if (gbl_action_type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO)
@@ -10188,7 +10207,11 @@ test_authenticated_encryption_oop(const struct aead_test_data *tdata)
 	ut_params->op->sym->m_dst = ut_params->obuf;
 
 	/* Process crypto operation */
-	TEST_ASSERT_NOT_NULL(process_crypto_request(ts_params->valid_devs[0],
+	if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
+		process_sym_raw_dp_op(ts_params->valid_devs[0], 0,
+			ut_params->op, 0, 0, 0, 0);
+	else
+		TEST_ASSERT_NOT_NULL(process_crypto_request(ts_params->valid_devs[0],
 			ut_params->op), "failed to process sym crypto op");
 
 	TEST_ASSERT_EQUAL(ut_params->op->status, RTE_CRYPTO_OP_STATUS_SUCCESS,
@@ -10234,6 +10257,10 @@ test_authenticated_decryption_oop(const struct aead_test_data *tdata)
 
 	int retval;
 	uint8_t *plaintext;
+	struct rte_cryptodev_info dev_info;
+
+	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
+	uint64_t feat_flags = dev_info.feature_flags;
 
 	/* Verify the capabilities */
 	struct rte_cryptodev_sym_capability_idx cap_idx;
@@ -10247,6 +10274,12 @@ test_authenticated_decryption_oop(const struct aead_test_data *tdata)
 	if (gbl_action_type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO ||
 			global_api_test_type == CRYPTODEV_RAW_API_TEST)
 		return -ENOTSUP;
+
+	if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
+			(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
+		printf("Device doesn't support RAW data-path APIs.\n");
+		return -ENOTSUP;
+	}
 
 	/* Create AEAD session */
 	retval = create_aead_session(ts_params->valid_devs[0],
@@ -10278,7 +10311,11 @@ test_authenticated_decryption_oop(const struct aead_test_data *tdata)
 	ut_params->op->sym->m_dst = ut_params->obuf;
 
 	/* Process crypto operation */
-	TEST_ASSERT_NOT_NULL(process_crypto_request(ts_params->valid_devs[0],
+	if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
+		process_sym_raw_dp_op(ts_params->valid_devs[0], 0,
+				ut_params->op, 0, 0, 0, 0);
+	else
+		TEST_ASSERT_NOT_NULL(process_crypto_request(ts_params->valid_devs[0],
 			ut_params->op), "failed to process sym crypto op");
 
 	TEST_ASSERT_EQUAL(ut_params->op->status, RTE_CRYPTO_OP_STATUS_SUCCESS,
@@ -12948,9 +12985,7 @@ test_authenticated_encryption_SGL(const struct aead_test_data *tdata,
 		unsigned int sgl_in = fragsz < tdata->plaintext.len;
 		unsigned int sgl_out = (fragsz_oop ? fragsz_oop : fragsz) <
 				tdata->plaintext.len;
-		/* Raw data path API does not support OOP */
-		if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
-			return -ENOTSUP;
+
 		if (sgl_in && !sgl_out) {
 			if (!(dev_info.feature_flags &
 					RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT))
@@ -14411,7 +14446,6 @@ static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
 			test_AES_GCM_authenticated_encryption_oop_test_case_1),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_AES_GCM_authenticated_decryption_oop_test_case_1),
-
 		TEST_CASES_END()
 	}
 };
