@@ -6243,8 +6243,6 @@ test_ipsec_lookaside_protocol_encrypt_aes_null(uint8_t oop)
 
 	/* Out of place support */
 	if (oop) {
-		if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
-			return -ENOTSUP;
 		/*
 		 * For out-op-place we need to alloc another mbuf
 		 */
@@ -14316,7 +14314,6 @@ static struct unit_test_suite dpaa2_raw_cryptodev_testsuite  = {
 			test_PDCP_PROTO_SGL_oop_32B_40B),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_PDCP_PROTO_SGL_oop_128B_32B),
-
 #ifdef RTE_LIBRTE_SECURITY_IPSEC_LOOKASIDE_TEST
 		/** IPSEC_Lookaside Protocol Encrypt Decrypt */
 		TEST_CASE_ST(ut_setup, ut_teardown,
