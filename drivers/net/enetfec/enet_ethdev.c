@@ -21,11 +21,11 @@
 #include "enet_regs.h"
 #include "enet_ethdev.h"
 #include "enet_pmd_logs.h"
+#include "enet_uio.h"
 
 #define ENETFEC_NAME_PMD	net_enetfec
 #define ENET_VDEV_GEM_ID_ARG	"intf"
 #define ENET_CDEV_INVALID_FD	-1
-#define DEVICE_FILE    "/dev/fec_dev"
 #define BD_SIZE 32
 
 #define BIT(nr)			(1 << (nr))
@@ -122,31 +122,6 @@ static const unsigned short offset_des_active_txq[] = {
 	ENET_TDAR_0, ENET_TDAR_1, ENET_TDAR_2
 };
 
-static void *
-create_mmap(uint64_t dbaseaddr_p, size_t len)
-{
-	int fd;
-	void *v_addr;
-
-	/* open the char device */
-	printf("Opening File:%s\n", DEVICE_FILE);
-	fd = open(DEVICE_FILE, O_RDWR);
-	if (fd < 0) {
-		perror("Open Failed");
-		exit(1);
-	}
-
-	v_addr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED,
-			fd, dbaseaddr_p);
-	if (v_addr == MAP_FAILED)
-		ENET_PMD_ERR("Failed %s\n", __func__);
-
-	printf("Closing File\n");
-	close(fd);
-
-	return v_addr;
-}
-
 static int
 enetfec_tx_queue_setup(struct rte_eth_dev *dev,
 			uint16_t queue_idx,
@@ -158,7 +133,6 @@ enetfec_tx_queue_setup(struct rte_eth_dev *dev,
 	unsigned int i;
 	struct bufdesc *bdp, *bd_base;
 	struct enetfec_priv_tx_q *txq;
-	uint64_t dbaseaddr_p_t;
 	unsigned int size;
 	unsigned int dsize = fep->bufdesc_ex ? sizeof(struct bufdesc_ex) :
 			sizeof(struct bufdesc);
@@ -179,13 +153,8 @@ enetfec_tx_queue_setup(struct rte_eth_dev *dev,
 	fep->total_tx_ring_size += txq->bd.ring_size;
 	fep->tx_queues[queue_idx] = txq;
 
-	dbaseaddr_p_t = rte_read32(fep->hw_baseaddr + ENET_TD_START(queue_idx));
-	fep->dma_baseaddr_t[queue_idx] = create_mmap(dbaseaddr_p_t,
-				(size_t)BD_LEN);
-	if (fep->dma_baseaddr_t[queue_idx] == MAP_FAILED) {
-		ENET_PMD_ERR("mmap failed\n");
-		goto err_alloc;
-	}
+	rte_write32(fep->bd_addr_p_t[queue_idx],
+		fep->hw_baseaddr_v + ENET_TD_START(queue_idx));
 
 	/* Set transmit descriptor base. */
 	txq = fep->tx_queues[queue_idx];
@@ -198,7 +167,7 @@ enetfec_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->bd.d_size = dsize;
 	txq->bd.d_size_log2 = dsize_log2;
 	txq->bd.active_reg_desc =
-			fep->hw_baseaddr + offset_des_active_txq[queue_idx];
+			fep->hw_baseaddr_v + offset_des_active_txq[queue_idx];
 	bd_base = (struct bufdesc *)(((void *)bd_base) + size);
 	txq->bd.last = (struct bufdesc *)(((void *)bd_base) - dsize);
 	bdp = txq->bd.base;
@@ -222,14 +191,6 @@ enetfec_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->dirty_tx = bdp;
 	dev->data->tx_queues[queue_idx] = fep->tx_queues[queue_idx];
 	return 0;
-
-err_alloc:
-	for (i = 0; i < nb_desc; i++) {
-		rte_pktmbuf_free(txq->tx_mbuf[i]);
-		txq->tx_mbuf[i] = NULL;
-	}
-	rte_free(txq);
-	return -1;
 }
 
 static int
@@ -246,7 +207,6 @@ enetfec_rx_queue_setup(struct rte_eth_dev *dev,
 	struct bufdesc  *bdp;
 	struct enetfec_priv_rx_q *rxq;
 	unsigned int size;
-	uint64_t dbaseaddr_p_r;
 	unsigned int dsize = fep->bufdesc_ex ? sizeof(struct bufdesc_ex) :
 			sizeof(struct bufdesc);
 	unsigned int dsize_log2 = fls64(dsize);
@@ -267,13 +227,10 @@ enetfec_rx_queue_setup(struct rte_eth_dev *dev,
 	fep->total_rx_ring_size += rxq->bd.ring_size;
 	fep->rx_queues[queue_idx] = rxq;
 
-	dbaseaddr_p_r = rte_read32(fep->hw_baseaddr + ENET_RD_START(queue_idx));
-	fep->dma_baseaddr_r[queue_idx] = create_mmap(dbaseaddr_p_r,
-				(size_t)BD_LEN);
-	if (fep->dma_baseaddr_r[queue_idx] == MAP_FAILED) {
-		ENET_PMD_ERR("mmap failed\n");
-		goto err_alloc;
-	}
+	rte_write32(fep->bd_addr_p_r[queue_idx],
+			fep->hw_baseaddr_v + ENET_RD_START(queue_idx));
+	rte_write32(PKT_MAX_BUF_SIZE,
+			fep->hw_baseaddr_v + ENET_MRB_SIZE(queue_idx));
 
 	/* Set receive descriptor base. */
 	rxq = fep->rx_queues[queue_idx];
@@ -286,7 +243,7 @@ enetfec_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->bd.d_size = dsize;
 	rxq->bd.d_size_log2 = dsize_log2;
 	rxq->bd.active_reg_desc =
-			fep->hw_baseaddr + offset_des_active_rxq[queue_idx];
+			fep->hw_baseaddr_v + offset_des_active_rxq[queue_idx];
 	bd_base = (struct bufdesc *)(((void *)bd_base) + size);
 	rxq->bd.last = (struct bufdesc *)(((void *)bd_base) - dsize);
 
@@ -321,6 +278,7 @@ enetfec_rx_queue_setup(struct rte_eth_dev *dev,
 				&bdp->bd_sc);
 		else
 			rte_write16(rte_cpu_to_le_16(0), &bdp->bd_sc);
+
 		bdp = enet_get_nextdesc(bdp, &rxq->bd);
 	}
 
@@ -354,10 +312,10 @@ enetfec_promiscuous_enable(__rte_unused struct rte_eth_dev *dev)
 	struct enetfec_private *fep = dev->data->dev_private;
 	uint32_t tmp;
 
-	tmp = rte_read32(fep->hw_baseaddr + ENET_RCR);
+	tmp = rte_read32(fep->hw_baseaddr_v + ENET_RCR);
 	tmp |= 0x8;
 	tmp &= ~0x2;
-	rte_write32(tmp, fep->hw_baseaddr + ENET_RCR);
+	rte_write32(tmp, fep->hw_baseaddr_v + ENET_RCR);
 
 	return 0;
 }
@@ -435,12 +393,12 @@ enetfec_multicast_enable(struct rte_eth_dev *dev)
 {
 	struct enetfec_private *fep = dev->data->dev_private;
 
-	rte_write32(0xffffffff, fep->hw_baseaddr + ENET_GAUR);
-	rte_write32(0xffffffff, fep->hw_baseaddr + ENET_GALR);
+	rte_write32(0xffffffff, fep->hw_baseaddr_v + ENET_GAUR);
+	rte_write32(0xffffffff, fep->hw_baseaddr_v + ENET_GALR);
 	dev->data->all_multicast = 1;
 
-	rte_write32(0x04400002, fep->hw_baseaddr + ENET_GAUR);
-	rte_write32(0x10800049, fep->hw_baseaddr + ENET_GALR);
+	rte_write32(0x04400002, fep->hw_baseaddr_v + ENET_GAUR);
+	rte_write32(0x10800049, fep->hw_baseaddr_v + ENET_GALR);
 
 	return 0;
 }
@@ -467,9 +425,9 @@ enetfec_restart(struct rte_eth_dev *dev)
 	 */
 	/*
 	 * if (fep->quirks & ENET_QUIRK_HAS_AVB) {
-	 *	rte_write32(0, fep->hw_baseaddr + ENET_ECR);
+	 *	rte_write32(0, fep->hw_baseaddr_v + ENET_ECR);
 	 * } else {
-	 *	rte_write32(1, fep->hw_baseaddr + ENET_ECR);
+	 *	rte_write32(1, fep->hw_baseaddr_v + ENET_ECR);
 	 *	rte_delay_us(10);
 	 * }
 	 */
@@ -480,25 +438,25 @@ enetfec_restart(struct rte_eth_dev *dev)
 	 */
 	memcpy(&temp_mac, addr.addr_bytes, ETH_ALEN);
 	rte_write32(rte_cpu_to_be_32(temp_mac[0]),
-		fep->hw_baseaddr + ENET_PALR);
+		fep->hw_baseaddr_v + ENET_PALR);
 	rte_write32(rte_cpu_to_be_32(temp_mac[1]),
-		fep->hw_baseaddr + ENET_PAUR);
+		fep->hw_baseaddr_v + ENET_PAUR);
 
 	/* Clear any outstanding interrupt. */
-	writel(0xffffffff, fep->hw_baseaddr + ENET_EIR);
+	writel(0xffffffff, fep->hw_baseaddr_v + ENET_EIR);
 
 	/* Enable MII mode */
 	if (fep->full_duplex == FULL_DUPLEX) {
 		/* FD enable */
-		rte_write32(0x04, fep->hw_baseaddr + ENET_TCR);
+		rte_write32(0x04, fep->hw_baseaddr_v + ENET_TCR);
 	} else {
 		/* No Rcv on Xmit */
 		rcntl |= 0x02;
-		rte_write32(0x0, fep->hw_baseaddr + ENET_TCR);
+		rte_write32(0x0, fep->hw_baseaddr_v + ENET_TCR);
 	}
 
 	if (fep->quirks & QUIRK_RACC) {
-		val = rte_read32(fep->hw_baseaddr + ENET_RACC);
+		val = rte_read32(fep->hw_baseaddr_v + ENET_RACC);
 		/* align IP header */
 		val |= ENET_RACC_SHIFT16;
 		if (fep->flag_csum & RX_FLAG_CSUM_EN)
@@ -506,9 +464,9 @@ enetfec_restart(struct rte_eth_dev *dev)
 			val |= ENET_RACC_OPTIONS;
 		else
 			val &= ~ENET_RACC_OPTIONS;
-		rte_write32(val, fep->hw_baseaddr + ENET_RACC);
+		rte_write32(val, fep->hw_baseaddr_v + ENET_RACC);
 		rte_write32(PKT_MAX_BUF_SIZE,
-			fep->hw_baseaddr + ENET_FRAME_TRL);
+			fep->hw_baseaddr_v + ENET_FRAME_TRL);
 	}
 
 	/*
@@ -532,30 +490,30 @@ enetfec_restart(struct rte_eth_dev *dev)
 
 		/* set FIFO threshold parameter to reduce overrun */
 		rte_write32(ENET_ENET_RSEM_V,
-				fep->hw_baseaddr + ENET_R_FIFO_SEM);
+				fep->hw_baseaddr_v + ENET_R_FIFO_SEM);
 		rte_write32(ENET_ENET_RSFL_V,
-				fep->hw_baseaddr + ENET_R_FIFO_SFL);
+				fep->hw_baseaddr_v + ENET_R_FIFO_SFL);
 		rte_write32(ENET_ENET_RAEM_V,
-				fep->hw_baseaddr + ENET_R_FIFO_AEM);
+				fep->hw_baseaddr_v + ENET_R_FIFO_AEM);
 		rte_write32(ENET_ENET_RAFL_V,
-				fep->hw_baseaddr + ENET_R_FIFO_AFL);
+				fep->hw_baseaddr_v + ENET_R_FIFO_AFL);
 
 		/* OPD */
-		rte_write32(ENET_ENET_OPD_V, fep->hw_baseaddr + ENET_OPD);
+		rte_write32(ENET_ENET_OPD_V, fep->hw_baseaddr_v + ENET_OPD);
 	} else {
 		rcntl &= ~ENET_ENET_FCE;
 	}
 
-	rte_write32(rcntl, fep->hw_baseaddr + ENET_RCR);
+	rte_write32(rcntl, fep->hw_baseaddr_v + ENET_RCR);
 
-	rte_write32(0, fep->hw_baseaddr + ENET_IAUR);
-	rte_write32(0, fep->hw_baseaddr + ENET_IALR);
+	rte_write32(0, fep->hw_baseaddr_v + ENET_IAUR);
+	rte_write32(0, fep->hw_baseaddr_v + ENET_IALR);
 
 	if (fep->quirks & QUIRK_HAS_ENET_MAC) {
 		/* enable ENET endian swap */
 		ecntl |= (1 << 8);
 		/* enable ENET store and forward mode */
-		rte_write32(1 << 8, fep->hw_baseaddr + ENET_TFWR);
+		rte_write32(1 << 8, fep->hw_baseaddr_v + ENET_TFWR);
 	}
 
 	if (fep->bufdesc_ex)
@@ -569,11 +527,11 @@ enetfec_restart(struct rte_eth_dev *dev)
 		ecntl |= ENET_RXC_DLY;
 
 	/* Enable the MIB statistic event counters */
-	rte_write32(0 << 31, fep->hw_baseaddr + ENET_MIBC);
+	rte_write32(0 << 31, fep->hw_baseaddr_v + ENET_MIBC);
 
 	ecntl |= 0x70000000;
 	/* And last, enable the transmit and receive processing */
-	rte_write32(ecntl, fep->hw_baseaddr + ENET_ECR);
+	rte_write32(ecntl, fep->hw_baseaddr_v + ENET_ECR);
 	rte_delay_us(10);
 }
 
@@ -619,9 +577,9 @@ enetfec_set_mac_address(struct rte_eth_dev *dev,
 
 	writel(addr->addr_bytes[3] | (addr->addr_bytes[2] << 8) |
 		(addr->addr_bytes[1] << 16) | (addr->addr_bytes[0] << 24),
-		fep->hw_baseaddr + ENET_PALR);
+		fep->hw_baseaddr_v + ENET_PALR);
 	writel((addr->addr_bytes[5] << 16) | (addr->addr_bytes[4] << 24),
-		fep->hw_baseaddr + ENET_PAUR);
+		fep->hw_baseaddr_v + ENET_PAUR);
 
 	rte_ether_addr_copy(addr, &dev->data->mac_addrs[0]);
 
@@ -676,11 +634,10 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 	struct rte_eth_dev *dev = NULL;
 	struct enetfec_private *fep;
 	const char *name;
-	uint32_t swapped, *addr;
-	const uint32_t *addr1;
-	int rc = -1, fd = -1;
-	const struct device_node *np;
+	int rc = -1;
 	struct rte_ether_addr macaddr;
+	int i;
+	unsigned int bdsize;
 
 	name = rte_vdev_device_name(vdev);
 	ENET_PMD_LOG(INFO, "Initializing pmd_fec for %s", name);
@@ -693,47 +650,29 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 	fep = dev->data->dev_private;
 	fep->dev = dev;
 
-	/* TODO: use DTB to read*/
+	/* TODO: use DTB to read */
 	fep->max_rx_queues = ENET_MAX_Q;
 	fep->max_tx_queues = ENET_MAX_Q;
 	fep->quirks = QUIRK_HAS_ENET_MAC | QUIRK_GBIT |	QUIRK_BUFDESC_EX
 		| QUIRK_CSUM | QUIRK_VLAN | QUIRK_ERR007885
 		| QUIRK_RACC | QUIRK_COALESCE | QUIRK_EEE;
 
-	/* Load the device-tree driver */
-	rc = of_init();
-	if (rc) {
-		ENET_PMD_ERR("of_init failed with ret: %d\n", rc);
-		goto err;
+	config_enetfec_uio(fep);
+
+	/* Get the BD size for distributing among six queues */
+	bdsize = (fep->bd_size) / 6;
+
+	for (i = 0; i < fep->max_tx_queues; i++) {
+		fep->dma_baseaddr_t[i] = fep->bd_addr_v;
+		fep->bd_addr_p_t[i] = fep->bd_addr_p;
+		fep->bd_addr_v = fep->bd_addr_v + bdsize;
+		fep->bd_addr_p = fep->bd_addr_p + bdsize;
 	}
-
-	/* Return value: the node found */
-	np = of_find_compatible_node(NULL, NULL, "fsl,imx8mm-fec");
-	if (!np) {
-		ENET_PMD_ERR("Invalid device node\n");
-		rc = -EINVAL;
-		goto err;
-	}
-
-	/* Return value: The first address of the read address data */
-	addr1 = of_get_address(np, 0, &fep->cbus_size, NULL);
-	if (!addr1) {
-		ENET_PMD_ERR("of_get_address cannot return qman address\n");
-		goto err;
-	}
-
-	swapped = rte_be_to_cpu_32(*addr1);
-	addr = &swapped;
-
-	/* mmap the hw base addr */
-	fd = open("/dev/mem", O_RDWR);
-	fep->hw_baseaddr = mmap(NULL, fep->cbus_size, PROT_READ | PROT_WRITE,
-				MAP_SHARED, fd, *addr);
-	close(fd);
-	if (fep->hw_baseaddr == MAP_FAILED) {
-		ENET_PMD_ERR("mmap failed\n");
-		rc = -EINVAL;
-		goto err;
+	for (i = 0; i < fep->max_rx_queues; i++) {
+		fep->dma_baseaddr_r[i] = fep->bd_addr_v;
+		fep->bd_addr_p_r[i] = fep->bd_addr_p;
+		fep->bd_addr_v = fep->bd_addr_v + bdsize;
+		fep->bd_addr_p = fep->bd_addr_p + bdsize;
 	}
 
 	/* Copy the station address into the dev structure, */
@@ -744,10 +683,10 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 		rc = -ENOMEM;
 		goto err;
 	}
+
 	/* TODO get mac address from device tree or get random addr.
 	 * Currently setting default as 1,1,1,1,1,1
 	 */
-
 	macaddr.addr_bytes[0] = 1;
 	macaddr.addr_bytes[1] = 1;
 	macaddr.addr_bytes[2] = 1;
@@ -793,7 +732,7 @@ pmd_enetfec_remove(struct rte_vdev_device *vdev)
 	rte_eth_dev_release_port(eth_dev);
 
 	ENET_PMD_INFO("Closing sw device\n");
-	munmap(fep->hw_baseaddr, fep->cbus_size);
+	munmap(fep->hw_baseaddr_v, fep->cbus_size);
 
 	return 0;
 }

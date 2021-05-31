@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020 NXP
+ * Copyright 2020-2021 NXP
  */
 
 #ifndef _ENET_LOGS_H_
@@ -9,7 +9,7 @@ extern int enetfec_logtype_pmd;
 
 /* PMD related logs */
 #define ENET_PMD_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, enetfec_logtype_pmd, "fec_net: %s()" \
+	rte_log(RTE_LOG_ ## level, enetfec_logtype_pmd, "\nfec_net: %s()" \
 		fmt "\n", __func__, ##args)
 
 #define PMD_INIT_FUNC_TRACE() ENET_PMD_LOG(DEBUG, " >>")

@@ -105,10 +105,17 @@ struct enetfec_private {
 	bool		rgmii_txc_delay;
 	bool		rgmii_rxc_delay;
 	int		link;
-	void		*hw_baseaddr;
+	void		*hw_baseaddr_v;
+	uint64_t	hw_baseaddr_p;
+	void		*bd_addr_v;
+	uint64_t	bd_addr_p;
+	uint64_t	bd_addr_p_r[ENET_MAX_Q];
+	uint64_t	bd_addr_p_t[ENET_MAX_Q];
 	void		*dma_baseaddr_r[ENET_MAX_Q];
 	void		*dma_baseaddr_t[ENET_MAX_Q];
 	uint64_t	cbus_size;
+	unsigned int	reg_size;
+	unsigned int	bd_size;
 	int		hw_ts_rx_en;
 	int		hw_ts_tx_en;
 };

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2020 NXP
+# Copyright 2021 NXP
 
 if not is_linux
 	build = false
@@ -9,7 +9,8 @@ endif
 deps += ['common_dpaax']
 
 sources = files('enet_ethdev.c',
-		'enet_rxtx.c')
+		'enet_rxtx.c',
+		'enet_uio.c')
 
 if cc.has_argument('-Wno-pointer-arith')
 	cflags += '-Wno-pointer-arith'
