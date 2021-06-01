@@ -121,4 +121,15 @@ rte_pmd_dpaa2_set_custom_hash(uint16_t port_id,
 __rte_experimental
 uint32_t
 rte_pmd_dpaa2_get_tlu_hash(uint8_t *key, int size);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Do thread specific initialization
+ */
+__rte_experimental
+void
+rte_pmd_dpaa2_thread_init(void);
+
 #endif /* _RTE_PMD_DPAA2_H */
