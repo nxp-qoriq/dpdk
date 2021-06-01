@@ -15003,8 +15003,30 @@ test_cryptodev_dpaa2_sec_raw_api(void)
 	return ret;
 }
 
+static int
+test_cryptodev_dpaa_sec_raw_api(void)
+{
+	int ret;
+
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "DPAA_SEC PMD must be loaded.\n");
+		return TEST_SKIPPED;
+	}
+
+	global_api_test_type = CRYPTODEV_RAW_API_TEST;
+	ret = unit_test_suite_runner(&cryptodev_testsuite);
+	global_api_test_type = CRYPTODEV_API_TEST;
+
+	return ret;
+}
+
 REGISTER_TEST_COMMAND(cryptodev_dpaa2_sec_raw_api_autotest,
 		test_cryptodev_dpaa2_sec_raw_api);
+REGISTER_TEST_COMMAND(cryptodev_dpaa_sec_raw_api_autotest,
+		test_cryptodev_dpaa_sec_raw_api);
 REGISTER_TEST_COMMAND(cryptodev_qat_raw_api_autotest,
 		test_cryptodev_qat_raw_api);
 REGISTER_TEST_COMMAND(cryptodev_qat_autotest, test_cryptodev_qat);
