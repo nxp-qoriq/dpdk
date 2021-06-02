@@ -202,6 +202,7 @@ dpaa2_distset_to_dpkg_profile_cfg(
 	int vlan_configured = 0;
 	int esp_configured = 0;
 	int ah_configured = 0;
+	int pppoe_configured = 0;
 
 	memset(kg_cfg, 0, sizeof(struct dpkg_profile_cfg));
 	while (req_dist_set) {
@@ -219,6 +220,20 @@ dpaa2_distset_to_dpkg_profile_cfg(
 					NET_PROT_ETH;
 				kg_cfg->extracts[i].extract.from_hdr.field =
 					NH_FLD_ETH_TYPE;
+				kg_cfg->extracts[i].type =
+					DPKG_EXTRACT_FROM_HDR;
+				kg_cfg->extracts[i].extract.from_hdr.type =
+					DPKG_FULL_FIELD;
+				i++;
+				break;
+
+			case ETH_RSS_PPPOE:
+				if (pppoe_configured)
+					break;
+				kg_cfg->extracts[i].extract.from_hdr.prot =
+					NET_PROT_PPPOE;
+				kg_cfg->extracts[i].extract.from_hdr.field =
+					NH_FLD_PPPOE_SID;
 				kg_cfg->extracts[i].type =
 					DPKG_EXTRACT_FROM_HDR;
 				kg_cfg->extracts[i].extract.from_hdr.type =
