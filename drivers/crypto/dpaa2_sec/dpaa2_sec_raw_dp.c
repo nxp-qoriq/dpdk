@@ -1019,8 +1019,7 @@ dpaa2_sec_configure_raw_dp_ctx(struct rte_cryptodev *dev, uint16_t qp_id,
 	RTE_SET_USED(qp_id);
 
 	if (!is_update) {
-		memset(raw_dp_ctx, 0, sizeof(*raw_dp_ctx) +
-				sizeof(dpaa2_sec_session));
+		memset(raw_dp_ctx, 0, sizeof(*raw_dp_ctx));
 		raw_dp_ctx->qp_data = dev->data->queue_pairs[qp_id];
 	}
 
