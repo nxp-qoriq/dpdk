@@ -10,7 +10,6 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/types.h>
-#include <sys/syscall.h>
 #include <sys/eventfd.h>
 
 #include <rte_byteorder.h>
@@ -394,10 +393,10 @@ int rte_dpaa_portal_init(void *arg)
 
 	DPAA_PER_LCORE_PORTAL->qman_idx = qman_get_portal_index();
 	DPAA_PER_LCORE_PORTAL->bman_idx = bman_get_portal_index();
-	DPAA_PER_LCORE_PORTAL->tid = syscall(SYS_gettid);
+	DPAA_PER_LCORE_PORTAL->tid = rte_gettid();
 
 	if (getenv("NXP_CHRT_PERF_MODE")) {
-		tid = syscall(SYS_gettid);
+		tid = rte_gettid();
 		snprintf(command, COMMAND_LEN, "chrt -p 90 %d", tid);
 		ret = system(command);
 		if (ret < 0)

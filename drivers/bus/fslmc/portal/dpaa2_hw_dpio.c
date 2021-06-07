@@ -18,7 +18,6 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
@@ -276,7 +275,7 @@ dpaa2_configure_stashing(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
 #endif
 
 	if (getenv("NXP_CHRT_PERF_MODE")) {
-		tid = syscall(SYS_gettid);
+		tid = rte_gettid();
 		snprintf(command, COMMAND_LEN, "chrt -p 90 %d", tid);
 		ret = system(command);
 		if (ret < 0)
@@ -319,8 +318,8 @@ static struct dpaa2_dpio_dev *dpaa2_get_qbman_swp(void)
 		return NULL;
 	}
 
-	DPAA2_BUS_DEBUG("New Portal %p (%d) affined thread - %lu",
-			dpio_dev, dpio_dev->index, syscall(SYS_gettid));
+	DPAA2_BUS_DEBUG("New Portal %p (%d) affined thread - %u",
+			dpio_dev, dpio_dev->index, rte_gettid());
 
 	/* Set the Stashing Destination */
 	cpu_id = dpaa2_get_core_id();
@@ -351,7 +350,7 @@ int
 dpaa2_affine_qbman_swp(void)
 {
 	struct dpaa2_dpio_dev *dpio_dev;
-	uint64_t tid = syscall(SYS_gettid);
+	uint64_t tid = rte_gettid();
 
 	/* Populate the dpaa2_io_portal structure */
 	if (!RTE_PER_LCORE(_dpaa2_io).dpio_dev) {
@@ -373,7 +372,7 @@ int
 dpaa2_affine_qbman_ethrx_swp(void)
 {
 	struct dpaa2_dpio_dev *dpio_dev;
-	uint64_t tid = syscall(SYS_gettid);
+	uint64_t tid = rte_gettid();
 
 	/* Populate the dpaa2_io_portal structure */
 	if (!RTE_PER_LCORE(_dpaa2_io).ethrx_dpio_dev) {
