@@ -70,6 +70,9 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	int num_rules = 1;
 	uint64_t *masks = NULL, *keys = NULL;
 
+	if (!pattern || !actions || !pattern[0] || !actions[0])
+		return NULL;
+
 	/* Find the DPDMUX from dpdmux_id in our list */
 	dpdmux_dev = get_dpdmux_from_id(dpdmux_id);
 	if (!dpdmux_dev) {
