@@ -467,6 +467,7 @@ dpaa_sec_prep_cdb(dpaa_sec_session *ses)
 		switch (ses->cipher_alg) {
 		case RTE_CRYPTO_CIPHER_AES_CBC:
 		case RTE_CRYPTO_CIPHER_3DES_CBC:
+		case RTE_CRYPTO_CIPHER_DES_CBC:
 		case RTE_CRYPTO_CIPHER_AES_CTR:
 		case RTE_CRYPTO_CIPHER_3DES_CTR:
 			shared_desc_len = cnstr_shdsc_blkcipher(
@@ -2068,6 +2069,10 @@ dpaa_sec_cipher_init(struct rte_cryptodev *dev __rte_unused,
 		session->cipher_key.alg = OP_ALG_ALGSEL_AES;
 		session->cipher_key.algmode = OP_ALG_AAI_CBC;
 		break;
+	case RTE_CRYPTO_CIPHER_DES_CBC:
+		session->cipher_key.alg = OP_ALG_ALGSEL_DES;
+		session->cipher_key.algmode = OP_ALG_AAI_CBC;
+		break;
 	case RTE_CRYPTO_CIPHER_3DES_CBC:
 		session->cipher_key.alg = OP_ALG_ALGSEL_3DES;
 		session->cipher_key.algmode = OP_ALG_AAI_CBC;
@@ -2267,6 +2272,10 @@ dpaa_sec_chain_init(struct rte_cryptodev *dev __rte_unused,
 	switch (cipher_xform->algo) {
 	case RTE_CRYPTO_CIPHER_AES_CBC:
 		session->cipher_key.alg = OP_ALG_ALGSEL_AES;
+		session->cipher_key.algmode = OP_ALG_AAI_CBC;
+		break;
+	case RTE_CRYPTO_CIPHER_DES_CBC:
+		session->cipher_key.alg = OP_ALG_ALGSEL_DES;
 		session->cipher_key.algmode = OP_ALG_AAI_CBC;
 		break;
 	case RTE_CRYPTO_CIPHER_3DES_CBC:
@@ -2718,6 +2727,10 @@ dpaa_sec_ipsec_proto_init(struct rte_crypto_cipher_xform *cipher_xform,
 		session->cipher_key.alg = OP_PCL_IPSEC_AES_CBC;
 		session->cipher_key.algmode = OP_ALG_AAI_CBC;
 		break;
+	case RTE_CRYPTO_CIPHER_DES_CBC:
+		session->cipher_key.alg = OP_PCL_IPSEC_DES;
+		session->cipher_key.algmode = OP_ALG_AAI_CBC;
+		break;
 	case RTE_CRYPTO_CIPHER_3DES_CBC:
 		session->cipher_key.alg = OP_PCL_IPSEC_3DES;
 		session->cipher_key.algmode = OP_ALG_AAI_CBC;
@@ -2870,9 +2883,19 @@ dpaa_sec_set_ipsec_session(__rte_unused struct rte_cryptodev *dev,
 		session->encap_pdb.spi = ipsec_xform->spi;
 
 #ifdef RTE_LIBRTE_SECURITY_IPSEC_LOOKASIDE_TEST
-		if (cipher_xform)
-			memcpy(session->encap_pdb.cbc.iv,
-				aes_cbc_iv, cipher_xform->iv.length);
+		if (cipher_xform) {
+			switch (cipher_xform->algo) {
+			/* DES/TDES SEC fetch IV from PDB.iv[8-15] */
+			case RTE_CRYPTO_CIPHER_3DES_CBC:
+			case RTE_CRYPTO_CIPHER_DES_CBC:
+				memcpy(encap_pdb.cbc.iv + 8,
+					aes_cbc_iv, cipher_xform->iv.length);
+				break;
+			default:
+				memcpy(encap_pdb.cbc.iv,
+					aes_cbc_iv, cipher_xform->iv.length);
+			}
+		}
 #endif
 	} else if (ipsec_xform->direction ==
 			RTE_SECURITY_IPSEC_SA_DIR_INGRESS) {
