@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2018-2020 NXP
+# Copyright 2018-2021 NXP
 
 # This script should be executed as root user.
 function validate_root_user() {
@@ -57,11 +57,19 @@ done
 # Core 0 (non-isolated cores). Once this is set, a RT application which
 # doesn't yield the CPU would stall it.
 
+ISOLCPUS=`cat /proc/cmdline | grep isolcpus`
+
 if [ -e "/proc/sys/kernel/sched_rt_runtime_us" ]
 then
-	# Reserve 0.4% CPU when core 0 is used for tasks running in non-rt priority
-	# This does not impact any CPU reservation when core 0 is not used
-	echo 996000 > /proc/sys/kernel/sched_rt_runtime_us
+	if [[ -z "$ISOLCPUS" ]]
+	then
+		# Reserve 0.4% CPU when core 0 is used for tasks running in non-rt priority
+		# This does not impact any CPU reservation when core 0 is not used
+		echo 996000 > /proc/sys/kernel/sched_rt_runtime_us
+	else
+		# Reserve complete CPU for DPDK when core 0 is not used
+		echo -1 > /proc/sys/kernel/sched_rt_runtime_us
+	fi
 	echo "WARN: Hereafter, don't execute RT tasks on Core 0"
 else
 	echo "Unable to reduce non-RT timeslice; Performance will be reduced"
