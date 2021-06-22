@@ -2916,11 +2916,11 @@ dpaa_sec_set_ipsec_session(__rte_unused struct rte_cryptodev *dev,
 			/* DES/TDES SEC fetch IV from PDB.iv[8-15] */
 			case RTE_CRYPTO_CIPHER_3DES_CBC:
 			case RTE_CRYPTO_CIPHER_DES_CBC:
-				memcpy(encap_pdb.cbc.iv + 8,
+				memcpy(session->encap_pdb.cbc.iv + 8,
 					aes_cbc_iv, cipher_xform->iv.length);
 				break;
 			default:
-				memcpy(encap_pdb.cbc.iv,
+				memcpy(session->encap_pdb.cbc.iv,
 					aes_cbc_iv, cipher_xform->iv.length);
 			}
 		}
