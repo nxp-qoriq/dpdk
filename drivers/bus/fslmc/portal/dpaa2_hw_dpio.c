@@ -18,7 +18,6 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
@@ -182,7 +181,7 @@ dpaa2_affine_dpio_intr_to_respective_core(int32_t dpio_id, int cpu_id)
 	fclose(file);
 }
 
-static int dpaa2_dpio_intr_init(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
+static int dpaa2_dpio_intr_init(struct dpaa2_dpio_dev *dpio_dev)
 {
 	struct epoll_event epoll_ev;
 	int eventfd, dpio_epoll_fd, ret;
@@ -218,8 +217,6 @@ static int dpaa2_dpio_intr_init(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
 		return -1;
 	}
 	dpio_dev->epoll_fd = dpio_epoll_fd;
-
-	dpaa2_affine_dpio_intr_to_respective_core(dpio_dev->hw_id, cpu_id);
 
 	return 0;
 }
@@ -269,25 +266,29 @@ dpaa2_configure_stashing(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
 	}
 
 #ifdef RTE_EVENT_DPAA2
-	if (dpaa2_dpio_intr_init(dpio_dev, cpu_id)) {
+	if (dpaa2_dpio_intr_init(dpio_dev)) {
 		DPAA2_BUS_ERR("Interrupt registration failed for dpio");
 		return -1;
 	}
 #endif
 
 	if (getenv("NXP_CHRT_PERF_MODE")) {
-		tid = syscall(SYS_gettid);
+		tid = rte_gettid();
 		snprintf(command, COMMAND_LEN, "chrt -p 90 %d", tid);
 		ret = system(command);
+		/* Above would only work when the CPU governors are configured
+		 * for performance mode; It is assumed that this is taken
+		 * care of by the application.
+		 */
 		if (ret < 0)
 			DPAA2_BUS_WARN("Failed to change thread priority");
 		else
 			DPAA2_BUS_DEBUG(" %s command is executed", command);
 
-		/* Above would only work when the CPU governors are configured
-		 * for performance mode; It is assumed that this is taken
-		 * care of by the application.
-		 */
+#ifdef RTE_LIBRTE_PMD_DPAA2_EVENTDEV
+		dpaa2_affine_dpio_intr_to_respective_core(dpio_dev->hw_id,
+							  cpu_id);
+#endif
 	}
 
 	return 0;
@@ -319,8 +320,8 @@ static struct dpaa2_dpio_dev *dpaa2_get_qbman_swp(void)
 		return NULL;
 	}
 
-	DPAA2_BUS_DEBUG("New Portal %p (%d) affined thread - %lu",
-			dpio_dev, dpio_dev->index, syscall(SYS_gettid));
+	DPAA2_BUS_DEBUG("New Portal %p (%d) affined thread - %u",
+			dpio_dev, dpio_dev->index, rte_gettid());
 
 	/* Set the Stashing Destination */
 	cpu_id = dpaa2_get_core_id();
@@ -351,7 +352,7 @@ int
 dpaa2_affine_qbman_swp(void)
 {
 	struct dpaa2_dpio_dev *dpio_dev;
-	uint64_t tid = syscall(SYS_gettid);
+	uint64_t tid = rte_gettid();
 
 	/* Populate the dpaa2_io_portal structure */
 	if (!RTE_PER_LCORE(_dpaa2_io).dpio_dev) {
@@ -373,7 +374,7 @@ int
 dpaa2_affine_qbman_ethrx_swp(void)
 {
 	struct dpaa2_dpio_dev *dpio_dev;
-	uint64_t tid = syscall(SYS_gettid);
+	uint64_t tid = rte_gettid();
 
 	/* Populate the dpaa2_io_portal structure */
 	if (!RTE_PER_LCORE(_dpaa2_io).ethrx_dpio_dev) {
