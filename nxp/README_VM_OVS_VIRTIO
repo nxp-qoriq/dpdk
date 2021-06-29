@@ -1,0 +1,120 @@
+Running DPDK applications in VM
+==================================
+
+This write-up describes the steps to run DPDK applications in VM on both DPAA1 and DPAA2 platforms.
+
+On board:
+--------------
+
+DPAA1:
+-------
+ifconfig enP2p1s0 <IP_ADDR_BRD>
+fmc -x
+fmc -c /usr/local/dpdk/dpaa/usdpaa_config_ls1046.xml -p /usr/local/dpdk/dpaa/usdpaa_policy_hash_ipv4_1queue.xml -a
+
+Configuring OVS:
+-----------------
+rm /usr/local/etc/openvswitch/conf.db
+mkdir -p /usr/local/etc/openvswitch
+mkdir -p /usr/local/var/run/openvswitch
+mkdir -p /var/log/openvswitch/
+
+./ovsdb-tool create /usr/local/etc/openvswitch/conf.db ./vswitch.ovsschema
+./ovsdb-server --remote=punix:/usr/local/var/run/openvswitch/db.sock --remote=db:Open_vSwitch,Open_vSwitch,manager_options --pidfile=/tmp/ovsdb-server.pid --detach --log-file=/var/log/openvswitch/ovs-vswitchd.log
+
+./ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true
+./ovs-vsctl --no-wait set Open_vSwitch . other_config:pmd-cpu-mask=0x2
+
+./ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-lcore-mask=1
+./ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-socket-mem="1024"
+./ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=1
+
+export DB_SOCK=/usr/local/var/run/openvswitch/db.sock
+
+./ovs-vswitchd unix:$DB_SOCK --pidfile --detach
+./ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev
+./ovs-vsctl add-port br0 dpdk0 -- set Interface dpdk0 type=dpdk  options:dpdk-devargs=fm1-mac9 options:n_rxq=1
+./ovs-vsctl add-port br0 vhost-user1 -- set Interface vhost-user1 type=dpdkvhostuser
+
+./ovs-ofctl del-flows br0
+./ovs-ofctl add-flow br0 -O OpenFlow13 table=0,in_port=1,actions=output:2
+./ovs-ofctl add-flow br0 -O OpenFlow13 table=0,in_port=2,actions=output:1
+./ovs-ofctl dump-flows br0
+
+
+Launching VM:
+---------------
+
+export VM_CORES=2
+export NUM_QUEUES=1
+export VHOST1_PATH=/usr/local/var/run/openvswitch/vhost-user1
+
+Link to rootfs_lsdk2108_ubuntu_lite_arm64.ext4.gz:
+----------------------------------------------------
+http://sun.ap.freescale.net/dash/lsdk2108/rootfs_lsdk2108_ubuntu_lite_arm64.ext4.gz
+
+Extract the rootfs:
+tar xvzf rootfs_lsdk2108_ubuntu_lite_arm64.ext4.gz
+
+/root/qemu/aarch64-softmmu/qemu-system-aarch64 -nographic -object memory-backend-file,id=mem,size=2048M,mem-path=/dev/hugepages,share=on -cpu host -machine type=virt -kernel /boot/Image -enable-kvm -serial tcp::4446,server,telnet -append 'root=/dev/vda rw console=ttyAMA0,115200 rootwait earlyprintk' -m 2048M -numa node,memdev=mem -chardev socket,id=char1,path=$VHOST1_PATH -netdev type=vhost-user,id=hostnet1,chardev=char1,vhostforce,queues=$NUM_QUEUES -device virtio-net-pci,disable-modern=false,addr=0x3,netdev=hostnet1,id=net1,mrg_rxbuf=off -smp $VM_CORES -S -drive if=none,file=/root/home/nxa20322/dash/flexbuild/build/images/rootfs_lsdk2108_ubuntu_lite_arm64.ext4,id=foo,format=raw -device virtio-blk-device,drive=foo
+
+
+SSH board:
+----------------
+telnet localhost 4446
+
+Back to qemu:
+----------------
+(qemu) info cpus
+*  CPU #0: thread_id=1072
+   CPU #1: thread_id=1073
+
+        #on host set the pids to processors (e.g for 2 core mode)
+        #note that threads shall be affined to consecutive cores.
+
+	root@localhost:~# taskset -p 0x4 1072
+		pid 1072's current affinity mask: f
+		pid 1072's new affinity mask: 4
+	root@localhost:~# taskset -p 0x8 1073
+		pid 1073's current affinity mask: f
+		pid 1073's new affinity mask: 8
+
+#continue on qemu
+qemu> c
+
+
+On VM:
+----------
+mount -t hugetlbfs none /dev/hugepages
+echo 256 > /proc/sys/vm/nr_hugepages
+/usr/local/share/dpdk/usertools/dpdk-devbind.py --status
+/usr/local/share/dpdk/usertools/dpdk-devbind.py -b uio_pci_generic 0000:00:03.0
+/usr/local/share/dpdk/usertools/dpdk-devbind.py -b uio_pci_generic 0000:00:04.0
+
+
+Run DPDK application in VM:
+----------------------------
+./dpdk-testpmd  -c 0x3 -n 1 -- -i --portmask=0x3 --nb-cores=1
+
+
+Transferring files from host to guest:
+---------------------------------------
+
+On board:
+----------
+/root/qemu/aarch64-softmmu/qemu-system-aarch64 -nographic -object memory-backend-file,id=mem,size=2048M,mem-path=/dev/hugepages,share=on -cpu host -machine type=virt -kernel /boot/Image -enable-kvm -serial tcp::4446,server,telnet -append 'root=/dev/vda rw console=ttyAMA0,115200 rootwait earlyprintk' -m 2048M -numa node,memdev=mem -drive if=none,file=/root/rootfs_lsdk2004_ubuntu_devel_arm64.ext4,id=foo,format=raw -device virtio-blk-device,drive=foo -device e1000,netdev=net0,mac=52:55:00:d1:55:01 -netdev tap,id=net0,script=no
+
+On SSH board:
+-------------
+telnet localhost 4446
+Press enter
+
+On SSH board:
+------------
+ifconfig tap0 1.1.1.2
+
+On VM:
+-------
+ifconfig enp0s1 1.1.1.1
+scp root@1.1.1.2:/root/ovs.sh .
+
