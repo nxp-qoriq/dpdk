@@ -9097,6 +9097,7 @@ test_PDCP_PROTO_all(void)
 	status += test_PDCP_PROTO_SGL_oop_128B_32B();
 	status += test_PDCP_SDAP_PROTO_encap_all();
 	status += test_PDCP_SDAP_PROTO_decap_all();
+	status += test_PDCP_PROTO_short_mac();
 
 	if (status)
 		return TEST_FAILED;
@@ -13995,8 +13996,6 @@ static struct unit_test_suite cryptodev_testsuite  = {
 			test_snow3g_encryption_test_case_5),
 
 		TEST_CASE_ST(ut_setup, ut_teardown,
-			test_PDCP_PROTO_short_mac),
-		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_snow3g_encryption_test_case_1_oop),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_snow3g_encryption_test_case_1_oop_sgl),
@@ -14214,8 +14213,6 @@ static struct unit_test_suite cryptodev_testsuite  = {
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_kasumi_decryption_test_case_1_oop),
 
-		TEST_CASE_ST(ut_setup, ut_teardown,
-			test_PDCP_PROTO_short_mac),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_kasumi_cipher_auth_test_case_1),
 
