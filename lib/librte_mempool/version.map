@@ -1,6 +1,7 @@
 DPDK_21 {
 	global:
 
+	dpaa_svr_family_1;
 	rte_mempool_audit;
 	rte_mempool_avail_count;
 	rte_mempool_cache_create;
@@ -31,6 +32,7 @@ DPDK_21 {
 	rte_mempool_register_ops;
 	rte_mempool_set_ops_byname;
 	rte_mempool_walk;
+	set_dpaa_svr_family;
 
 	local: *;
 };
