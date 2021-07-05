@@ -6118,8 +6118,6 @@ test_ipsec_lookaside_protocol_decrypt_aes_sha1(uint8_t oop)
 	feat_flags = dev_info.feature_flags;
 	/* Out of place support */
 	if (oop) {
-		if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
-			return -ENOTSUP;
 		/*
 		 * For out-op-place we need to alloc another mbuf
 		 */
@@ -8328,21 +8326,18 @@ static int test_pdcp_proto(int i, int oop, enum rte_crypto_cipher_operation opc,
 						  input_vec_len);
 	memcpy(plaintext, input_vec, input_vec_len);
 
+	if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
+			(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
+		printf("Device does not support RAW data-path APIs.\n");
+		return -ENOTSUP;
+	}
 	/* Out of place support */
 	if (oop) {
-		if (global_api_test_type == CRYPTODEV_RAW_API_TEST)
-			return -ENOTSUP;
 		/*
 		 * For out-op-place we need to alloc another mbuf
 		 */
 		ut_params->obuf = rte_pktmbuf_alloc(ts_params->mbuf_pool);
 		rte_pktmbuf_append(ut_params->obuf, output_vec_len);
-	} else {
-		if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
-				(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
-			printf("Device does not support RAW data-path APIs.\n");
-			return -ENOTSUP;
-		}
 	}
 
 	/* Setup Cipher Parameters */
@@ -8510,9 +8505,17 @@ test_pdcp_proto_SGL(int i, int oop,
 				rte_cryptodev_get_sec_ctx(
 				ts_params->valid_devs[0]);
 	struct rte_cryptodev_info dev_info;
+	uint64_t feat_flags;
+	struct rte_mbuf *temp_mbuf;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
+	feat_flags = dev_info.feature_flags;
 
+	if ((global_api_test_type == CRYPTODEV_RAW_API_TEST) &&
+			(!(feat_flags & RTE_CRYPTODEV_FF_SYM_RAW_DP))) {
+		printf("Device does not support RAW data-path APIs.\n");
+		return -ENOTSUP;
+	}
 	/* Verify the capabilities */
 	struct rte_security_capability_idx sec_cap_idx;
 
@@ -8696,10 +8699,14 @@ test_pdcp_proto_SGL(int i, int oop,
 		ut_params->op->sym->m_dst = ut_params->obuf;
 
 	/* Process crypto operation */
+	temp_mbuf = ut_params->op->sym->m_src;
 	if (global_api_test_type == CRYPTODEV_RAW_API_TEST) {
 		/* filling lengths */
-		ut_params->op->sym->cipher.data.length = ut_params->op->sym->m_src->pkt_len;
-		ut_params->op->sym->auth.data.length = ut_params->op->sym->m_src->pkt_len;
+		while (temp_mbuf) {
+			ut_params->op->sym->cipher.data.length += temp_mbuf->pkt_len;
+			ut_params->op->sym->auth.data.length += temp_mbuf->pkt_len;
+			temp_mbuf = temp_mbuf->next;
+		}
 		process_sym_raw_dp_op(ts_params->valid_devs[0], 0,
 			ut_params->op, 1, 1, 0, 0);
 	} else {

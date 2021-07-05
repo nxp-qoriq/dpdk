@@ -970,6 +970,7 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 		if (left <= seglen) {
 			/* whole requested data is completed */
 			vec[i].len = left;
+			vec[i].tot_len = mb->buf_len;
 			left = 0;
 			i++;
 			break;
