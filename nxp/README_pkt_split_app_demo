@@ -218,7 +218,7 @@ Classification entries in data.input file:
 LGW traffic information in file:
 
   1. LGW_IPV4 <Space separated list of IPv4 subnets>
-     or
+     and/or
      LGW_IPV6 <Space separated list of IPv6 subnets>
 
      Minimum one and maximum four IP subnets can be used.
