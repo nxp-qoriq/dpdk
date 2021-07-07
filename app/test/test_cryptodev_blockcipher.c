@@ -92,8 +92,8 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 	char *buf_p = NULL;
 	uint8_t src_pattern = 0xa5;
 	uint8_t dst_pattern = 0xb6;
-	uint8_t tmp_src_buf[MBUF_SIZE];
-	uint8_t tmp_dst_buf[MBUF_SIZE];
+	uint8_t *tmp_src_buf = NULL;
+	uint8_t *tmp_dst_buf = NULL;
 
 	int nb_segs = 1;
 	uint32_t nb_iterates = 0;
@@ -460,9 +460,27 @@ iterate:
 
 	debug_hexdump(stdout, "m_src(before):",
 			sym_op->m_src->buf_addr, sym_op->m_src->buf_len);
+	tmp_src_buf = rte_zmalloc(NULL, sym_op->m_src->buf_len, 0);
+
+	if (!tmp_src_buf) {
+		snprintf(test_msg, BLOCKCIPHER_TEST_MSG_LEN, "line %u "
+				"FAILED: %s", __LINE__, "Failed to "
+				"allocate memory for src buf");
+		status = TEST_FAILED;
+		goto error_exit;
+	}
+
 	rte_memcpy(tmp_src_buf, sym_op->m_src->buf_addr,
 						sym_op->m_src->buf_len);
 	if (t->feature_mask & BLOCKCIPHER_TEST_FEATURE_OOP) {
+		tmp_dst_buf = rte_zmalloc(NULL, sym_op->m_dst->buf_len, 0);
+		if (!tmp_dst_buf) {
+			snprintf(test_msg, BLOCKCIPHER_TEST_MSG_LEN, "line %u "
+				"FAILED: %s", __LINE__, "Failed to "
+				"allocate memory for dst buf");
+			status = TEST_FAILED;
+			goto error_exit;
+		}
 		debug_hexdump(stdout, "m_dst(before):",
 			sym_op->m_dst->buf_addr, sym_op->m_dst->buf_len);
 		rte_memcpy(tmp_dst_buf, sym_op->m_dst->buf_addr,
@@ -718,6 +736,12 @@ error_exit:
 		if (auth_xform)
 			rte_free(auth_xform);
 	}
+
+	if (tmp_src_buf)
+		rte_free(tmp_src_buf);
+
+	if (tmp_dst_buf)
+		rte_free(tmp_dst_buf);
 
 	if (op)
 		rte_crypto_op_free(op);
