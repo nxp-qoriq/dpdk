@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020 NXP
+ * Copyright 2020-2021 NXP
  * Driver for NXP Layerscape Queue direct memory access controller (qDMA)
  */
 
@@ -731,8 +731,11 @@ dpaa_qdma_queue_setup(struct rte_rawdev *rawdev,
 	struct rte_qdma_queue_config *q_config =
 		(struct rte_qdma_queue_config *)queue_conf;
 
-	if (conf_size != sizeof(*q_config))
+	if (conf_size != sizeof(*q_config)) {
+		DPAA_QDMA_ERR("Config size mismatch. Expected %ld, Got: %ld",
+			sizeof(*q_config), conf_size);
 		return -EINVAL;
+	}
 
 	return dpaa_get_channel(fsl_qdma, q_config->lcore_id);
 }
