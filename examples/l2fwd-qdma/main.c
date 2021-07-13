@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- * Copyright 2018-2020 NXP
+ * Copyright 2018-2021 NXP
  */
 
 #include <stdio.h>
@@ -338,7 +338,8 @@ l2fwd_qdma_main_loop(void)
 		q_config.flags |= RTE_QDMA_VQ_FD_SG_FORMAT;
 	q_config.rbp = NULL;
 
-	vq_id = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config);
+	vq_id = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config,
+				     sizeof(q_config));
 	if (vq_id < 0) {
 		RTE_LOG(ERR, L2FWD, "QDMA VQ creation failed\n");
 		return;
@@ -910,7 +911,7 @@ main(int argc, char **argv)
 
 	dev_conf.dev_private = (void *)&qdma_config;
 
-	ret = rte_qdma_configure(qdma_dev_id, &dev_conf);
+	ret = rte_qdma_configure(qdma_dev_id, &dev_conf, sizeof(qdma_config));
 	if (ret)
 		rte_exit(EXIT_FAILURE, "QDMA configuration failed\n");
 

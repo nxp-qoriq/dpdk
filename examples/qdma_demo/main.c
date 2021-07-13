@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2020 NXP
+ * Copyright 2018-2021 NXP
  */
 
 /* System headers */
@@ -129,7 +129,7 @@ test_dma_init(void)
 	qdma_config.max_vqs = LSINIC_QDMA_MAX_VQS;
 
 	dev_conf.dev_private = (void *)&qdma_config;
-	ret = rte_qdma_configure(qdma_dev_id, &dev_conf);
+	ret = rte_qdma_configure(qdma_dev_id, &dev_conf, sizeof(qdma_config));
 	if (ret) {
 		RTE_LOG(ERR, PMD, "Failed to configure DMA\n");
 		return -EINVAL;
@@ -534,7 +534,8 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 		if (g_scatter_gather)
 			q_config.flags |= RTE_QDMA_VQ_FD_SG_FORMAT;
 		q_config.rbp = NULL;
-		g_vqid[i] = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config);
+		g_vqid[i] = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config,
+						 sizeof(q_config));
 		printf("core id:%d g_vqid[%d]:%d\n", i, i, g_vqid[i]);
 		if (g_vqid[i] < 0)
 			return g_vqid[i];
