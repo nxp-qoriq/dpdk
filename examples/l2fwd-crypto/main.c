@@ -2290,9 +2290,6 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 		struct rte_cryptodev_qp_conf qp_conf;
 		struct rte_cryptodev_info dev_info;
 
-		if (enabled_cdevs[cdev_id] == 0)
-			continue;
-
 		if (check_cryptodev_mask(options, cdev_id) < 0)
 			continue;
 
@@ -2760,18 +2757,23 @@ main(int argc, char **argv)
 	printf("MAC updating %s\n",
 			options.mac_updating ? "enabled" : "disabled");
 
+	proc_type = rte_eal_process_type();
 	/* create the mbuf pool */
-	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF, 512,
-			RTE_ALIGN(sizeof(struct rte_crypto_op),
-				RTE_CACHE_LINE_SIZE),
-			RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	l2fwd_pktmbuf_pool = (proc_type == RTE_PROC_SECONDARY) ?
+			rte_mempool_lookup("mbuf_pool") :
+			rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF, 512,
+				RTE_ALIGN(sizeof(struct rte_crypto_op),
+					  RTE_CACHE_LINE_SIZE),
+				RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 	if (l2fwd_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* create crypto op pool */
-	l2fwd_crypto_op_pool = rte_crypto_op_pool_create("crypto_op_pool",
-			RTE_CRYPTO_OP_TYPE_SYMMETRIC, NB_MBUF, 128, MAXIMUM_IV_LENGTH,
-			rte_socket_id());
+	l2fwd_crypto_op_pool = (proc_type == RTE_PROC_SECONDARY) ?
+			rte_mempool_lookup("crypto_op_pool") :
+			rte_crypto_op_pool_create("crypto_op_pool",
+				RTE_CRYPTO_OP_TYPE_SYMMETRIC, NB_MBUF, 128,
+				MAXIMUM_IV_LENGTH, rte_socket_id());
 	if (l2fwd_crypto_op_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create crypto op pool\n");
 

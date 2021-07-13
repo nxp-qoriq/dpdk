@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- * Copyright 2019-2020 NXP
+ * Copyright 2019-2021 NXP
  */
 
 /*
@@ -491,7 +491,7 @@ qdma_init(void) {
 	qdma_config.max_vqs = QDMA_MAX_VQS;
 
 	dev_conf.dev_private = (void *)&qdma_config;
-	ret = rte_qdma_configure(qdma_dev_id, &dev_conf);
+	ret = rte_qdma_configure(qdma_dev_id, &dev_conf, sizeof(qdma_config));
 	if (ret) {
 		printf("QDMA configuration failed\n");
 		return -1;
@@ -553,7 +553,8 @@ lcore_main(void *arg __rte_unused)
 		q_config.flags |= RTE_QDMA_VQ_EXCLUSIVE_PQ;
 	q_config.rbp = NULL;
 
-	vq_id = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config);
+	vq_id = rte_qdma_queue_setup(qdma_dev_id, -1, &q_config,
+				     sizeof(q_config));
 	if (vq_id < 0) {
 		printf("QDMA VQ creation failed\n");
 		return 0;
