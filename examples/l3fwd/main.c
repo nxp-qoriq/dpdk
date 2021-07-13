@@ -1216,6 +1216,20 @@ l3fwd_poll_resource_setup(void)
 				"Error during getting device (port %u) info: %s\n",
 				portid, strerror(-ret));
 
+		/* Enable Receive side SCATTER, if supported by NIC,
+		 * when jumbo packet is enabled.
+		 */
+		if (local_port_conf.rxmode.offloads &
+				DEV_RX_OFFLOAD_JUMBO_FRAME){
+			if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_SCATTER)
+				local_port_conf.rxmode.offloads |=
+						DEV_RX_OFFLOAD_SCATTER;
+			else if (local_port_conf.rxmode.max_rx_pkt_len >
+					RTE_MBUF_DEFAULT_DATAROOM)
+				rte_exit(EXIT_FAILURE,
+					"Max packet length greater than default MBUF size\n");
+		}
+
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
