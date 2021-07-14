@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2020 Hisilicon Limited.
+ * Copyright(c) 2020-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_RXTX_VEC_H_
@@ -70,6 +70,9 @@ hns3_rx_reassemble_pkts(struct rte_mbuf **rx_pkts,
 {
 	uint16_t count, i;
 	uint64_t mask;
+
+	if (likely(pkt_err_mask == 0))
+		return nb_pkts;
 
 	count = 0;
 	for (i = 0; i < nb_pkts; i++) {

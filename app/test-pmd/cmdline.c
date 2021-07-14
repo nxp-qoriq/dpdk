@@ -1521,6 +1521,9 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 		}
 	}
 
+	if (*speed != ETH_LINK_SPEED_AUTONEG)
+		*speed |= ETH_LINK_SPEED_FIXED;
+
 	return 0;
 }
 
@@ -2807,6 +2810,10 @@ cmd_setup_rxtx_queue_parsed(
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
 			socket_id = port->socket_id;
 
+		if (port->nb_tx_desc[res->qid] < tx_pkt_nb_segs) {
+			printf("Failed to setup TX queue: not enough descriptors\n");
+			return;
+		}
 		ret = rte_eth_tx_queue_setup(res->portid,
 					     res->qid,
 					     port->nb_tx_desc[res->qid],
@@ -4563,7 +4570,7 @@ cmd_config_queue_tx_offloads(struct rte_port *port)
 	int k;
 
 	/* Apply queue tx offloads configuration */
-	for (k = 0; k < port->dev_info.max_rx_queues; k++)
+	for (k = 0; k < port->dev_info.max_tx_queues; k++)
 		port->tx_conf[k].offloads =
 			port->dev_conf.txmode.offloads;
 }
@@ -9098,7 +9105,7 @@ cmdline_parse_inst_t cmd_vf_rate_limit = {
 
 /* *** CONFIGURE TUNNEL UDP PORT *** */
 struct cmd_tunnel_udp_config {
-	cmdline_fixed_string_t cmd;
+	cmdline_fixed_string_t rx_vxlan_port;
 	cmdline_fixed_string_t what;
 	uint16_t udp_port;
 	portid_t port_id;
@@ -9114,9 +9121,7 @@ cmd_tunnel_udp_config_parsed(void *parsed_result,
 	int ret;
 
 	tunnel_udp.udp_port = res->udp_port;
-
-	if (!strcmp(res->cmd, "rx_vxlan_port"))
-		tunnel_udp.prot_type = RTE_TUNNEL_TYPE_VXLAN;
+	tunnel_udp.prot_type = RTE_TUNNEL_TYPE_VXLAN;
 
 	if (!strcmp(res->what, "add"))
 		ret = rte_eth_dev_udp_tunnel_port_add(res->port_id,
@@ -9129,9 +9134,9 @@ cmd_tunnel_udp_config_parsed(void *parsed_result,
 		printf("udp tunneling add error: (%s)\n", strerror(-ret));
 }
 
-cmdline_parse_token_string_t cmd_tunnel_udp_config_cmd =
+cmdline_parse_token_string_t cmd_tunnel_udp_config_rx_vxlan_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_tunnel_udp_config,
-				cmd, "rx_vxlan_port");
+				rx_vxlan_port, "rx_vxlan_port");
 cmdline_parse_token_string_t cmd_tunnel_udp_config_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_tunnel_udp_config,
 				what, "add#rm");
@@ -9148,7 +9153,7 @@ cmdline_parse_inst_t cmd_tunnel_udp_config = {
 	.help_str = "rx_vxlan_port add|rm <udp_port> <port_id>: "
 		"Add/Remove a tunneling UDP port filter",
 	.tokens = {
-		(void *)&cmd_tunnel_udp_config_cmd,
+		(void *)&cmd_tunnel_udp_config_rx_vxlan_port,
 		(void *)&cmd_tunnel_udp_config_what,
 		(void *)&cmd_tunnel_udp_config_udp_port,
 		(void *)&cmd_tunnel_udp_config_port_id,
@@ -9554,7 +9559,7 @@ dump_socket_mem(FILE *f)
 	fprintf(f,
 		"Total   : size(M) total: %.6lf alloc: %.6lf(%.3lf%%) free: %.6lf \tcount alloc: %-4u free: %u\n",
 		(double)total / (1024 * 1024), (double)alloc / (1024 * 1024),
-		(double)alloc * 100 / (double)total,
+		total ? ((double)alloc * 100 / (double)total) : 0,
 		(double)free / (1024 * 1024),
 		n_alloc, n_free);
 	if (last_allocs)
@@ -16617,7 +16622,8 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 		rc = rte_eth_rx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
-			printf("Invalid queueid = %d\n", res->cmd_qid);
+			printf("Invalid input: queue id = %d, desc id = %d\n",
+			       res->cmd_qid, res->cmd_did);
 			return;
 		}
 		if (rc == RTE_ETH_RX_DESC_AVAIL)
@@ -16630,7 +16636,8 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 		rc = rte_eth_tx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
-			printf("Invalid queueid = %d\n", res->cmd_qid);
+			printf("Invalid input: queue id = %d, desc id = %d\n",
+			       res->cmd_qid, res->cmd_did);
 			return;
 		}
 		if (rc == RTE_ETH_TX_DESC_FULL)

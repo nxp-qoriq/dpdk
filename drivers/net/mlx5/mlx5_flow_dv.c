@@ -1450,13 +1450,20 @@ flow_dv_validate_item_meta(struct rte_eth_dev *dev __rte_unused,
 					  "isn't supported");
 		if (reg != REG_A)
 			nic_mask.data = priv->sh->dv_meta_mask;
-	} else if (attr->transfer) {
-		return rte_flow_error_set(error, ENOTSUP,
+	} else {
+		if (attr->transfer)
+			return rte_flow_error_set(error, ENOTSUP,
 					RTE_FLOW_ERROR_TYPE_ITEM, item,
 					"extended metadata feature "
 					"should be enabled when "
 					"meta item is requested "
 					"with e-switch mode ");
+		if (attr->ingress)
+			return rte_flow_error_set(error, ENOTSUP,
+					RTE_FLOW_ERROR_TYPE_ITEM, item,
+					"match on metadata for ingress "
+					"is not supported in legacy "
+					"metadata mode");
 	}
 	if (!mask)
 		mask = &rte_flow_item_meta_mask;
@@ -3032,6 +3039,7 @@ flow_dv_port_id_create_cb(struct mlx5_cache_list *list,
 				   "cannot create action");
 		return NULL;
 	}
+	cache->idx = idx;
 	return &cache->entry;
 }
 
@@ -3123,6 +3131,7 @@ flow_dv_push_vlan_create_cb(struct mlx5_cache_list *list,
 				   "cannot create push vlan action");
 		return NULL;
 	}
+	cache->idx = idx;
 	return &cache->entry;
 }
 
@@ -5314,32 +5323,33 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 	int16_t rw_act_num = 0;
 	uint64_t is_root;
 	const struct mlx5_flow_tunnel *tunnel;
+	enum mlx5_tof_rule_type tof_rule_type;
 	struct flow_grp_info grp_info = {
 		.external = !!external,
 		.transfer = !!attr->transfer,
 		.fdb_def_rule = !!priv->fdb_def_rule,
+		.std_tbl_fix = true,
 	};
 	const struct rte_eth_hairpin_conf *conf;
 
 	if (items == NULL)
 		return -1;
-	if (is_flow_tunnel_match_rule(dev, attr, items, actions)) {
-		tunnel = flow_items_to_tunnel(items);
-		action_flags |= MLX5_FLOW_ACTION_TUNNEL_MATCH |
-				MLX5_FLOW_ACTION_DECAP;
-	} else if (is_flow_tunnel_steer_rule(dev, attr, items, actions)) {
-		tunnel = flow_actions_to_tunnel(actions);
-		action_flags |= MLX5_FLOW_ACTION_TUNNEL_SET;
-	} else {
-		tunnel = NULL;
+	tunnel = is_tunnel_offload_active(dev) ?
+		 mlx5_get_tof(items, actions, &tof_rule_type) : NULL;
+	if (tunnel) {
+		if (priv->representor)
+			return rte_flow_error_set
+				(error, ENOTSUP,
+				 RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				 NULL, "decap not supported for VF representor");
+		if (tof_rule_type == MLX5_TUNNEL_OFFLOAD_SET_RULE)
+			action_flags |= MLX5_FLOW_ACTION_TUNNEL_SET;
+		else if (tof_rule_type == MLX5_TUNNEL_OFFLOAD_MATCH_RULE)
+			action_flags |= MLX5_FLOW_ACTION_TUNNEL_MATCH |
+					MLX5_FLOW_ACTION_DECAP;
+		grp_info.std_tbl_fix = tunnel_use_standard_attr_group_translate
+					(dev, attr, tunnel, tof_rule_type);
 	}
-	if (tunnel && priv->representor)
-		return rte_flow_error_set(error, ENOTSUP,
-					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-					  "decap not supported "
-					  "for VF representor");
-	grp_info.std_tbl_fix = tunnel_use_standard_attr_group_translate
-				(dev, tunnel, attr, items, actions);
 	ret = flow_dv_validate_attributes(dev, tunnel, attr, &grp_info, error);
 	if (ret < 0)
 		return ret;
@@ -5353,15 +5363,6 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 						  RTE_FLOW_ERROR_TYPE_ITEM,
 						  NULL, "item not supported");
 		switch (type) {
-		case MLX5_RTE_FLOW_ITEM_TYPE_TUNNEL:
-			if (items[0].type != (typeof(items[0].type))
-						MLX5_RTE_FLOW_ITEM_TYPE_TUNNEL)
-				return rte_flow_error_set
-						(error, EINVAL,
-						RTE_FLOW_ERROR_TYPE_ITEM,
-						NULL, "MLX5 private items "
-						"must be the first");
-			break;
 		case RTE_FLOW_ITEM_TYPE_VOID:
 			break;
 		case RTE_FLOW_ITEM_TYPE_PORT_ID:
@@ -5621,6 +5622,11 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 			if (ret < 0)
 				return ret;
 			last_item = MLX5_FLOW_LAYER_ECPRI;
+			break;
+		case MLX5_RTE_FLOW_ITEM_TYPE_TUNNEL:
+			/* tunnel offload item was processed before
+			 * list it here as a supported type
+			 */
 			break;
 		default:
 			return rte_flow_error_set(error, ENOTSUP,
@@ -6090,15 +6096,9 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 			++actions_n;
 			break;
 		case MLX5_RTE_FLOW_ACTION_TYPE_TUNNEL_SET:
-			if (actions[0].type != (typeof(actions[0].type))
-				MLX5_RTE_FLOW_ACTION_TYPE_TUNNEL_SET)
-				return rte_flow_error_set
-						(error, EINVAL,
-						RTE_FLOW_ERROR_TYPE_ACTION,
-						NULL, "MLX5 private action "
-						"must be the first");
-
-			action_flags |= MLX5_FLOW_ACTION_TUNNEL_SET;
+			/* tunnel offload action was processed before
+			 * list it here as a supported type
+			 */
 			break;
 		default:
 			return rte_flow_error_set(error, ENOTSUP,
@@ -9015,20 +9015,8 @@ flow_dv_dest_array_create_cb(struct mlx5_cache_list *list __rte_unused,
 	return &cache_resource->entry;
 error:
 	for (idx = 0; idx < resource->num_of_dest; idx++) {
-		struct mlx5_flow_sub_actions_idx *act_res =
-					&cache_resource->sample_idx[idx];
-		if (act_res->rix_hrxq &&
-		    !mlx5_hrxq_release(dev,
-				act_res->rix_hrxq))
-			act_res->rix_hrxq = 0;
-		if (act_res->rix_encap_decap &&
-			!flow_dv_encap_decap_resource_release(dev,
-				act_res->rix_encap_decap))
-			act_res->rix_encap_decap = 0;
-		if (act_res->rix_port_id_action &&
-			!flow_dv_port_id_action_resource_release(dev,
-				act_res->rix_port_id_action))
-			act_res->rix_port_id_action = 0;
+		flow_dv_sample_sub_actions_release(dev,
+				&cache_resource->sample_idx[idx]);
 		if (dest_attr[idx])
 			mlx5_free(dest_attr[idx]);
 	}
@@ -9359,6 +9347,7 @@ flow_dv_create_action_sample(struct rte_eth_dev *dev,
 				dev_flow->handle->dvh.rix_encap_decap;
 			sample_act->dr_encap_action =
 				dev_flow->dv.encap_decap->action;
+			dev_flow->handle->dvh.rix_encap_decap = 0;
 		}
 		if (sample_act->action_flags & MLX5_FLOW_ACTION_PORT_ID) {
 			normal_idx++;
@@ -9366,6 +9355,7 @@ flow_dv_create_action_sample(struct rte_eth_dev *dev,
 				dev_flow->handle->rix_port_id_action;
 			sample_act->dr_port_id_action =
 				dev_flow->dv.port_id_action->action;
+			dev_flow->handle->rix_port_id_action = 0;
 		}
 		sample_act->actions_num = normal_idx;
 		/* update sample action resource into first index of array */
@@ -9731,12 +9721,13 @@ flow_dv_translate(struct rte_eth_dev *dev,
 	int tmp_actions_n = 0;
 	uint32_t table;
 	int ret = 0;
-	const struct mlx5_flow_tunnel *tunnel;
+	const struct mlx5_flow_tunnel *tunnel = NULL;
 	struct flow_grp_info grp_info = {
 		.external = !!dev_flow->external,
 		.transfer = !!attr->transfer,
 		.fdb_def_rule = !!priv->fdb_def_rule,
 		.skip_scale = !!dev_flow->skip_scale,
+		.std_tbl_fix = true,
 	};
 
 	if (!wks)
@@ -9751,15 +9742,21 @@ flow_dv_translate(struct rte_eth_dev *dev,
 					   MLX5DV_FLOW_TABLE_TYPE_NIC_RX;
 	/* update normal path action resource into last index of array */
 	sample_act = &mdest_res.sample_act[MLX5_MAX_DEST_NUM - 1];
-	tunnel = is_flow_tunnel_match_rule(dev, attr, items, actions) ?
-		 flow_items_to_tunnel(items) :
-		 is_flow_tunnel_steer_rule(dev, attr, items, actions) ?
-		 flow_actions_to_tunnel(actions) :
-		 dev_flow->tunnel ? dev_flow->tunnel : NULL;
+	if (is_tunnel_offload_active(dev)) {
+		if (dev_flow->tunnel) {
+			RTE_VERIFY(dev_flow->tof_type ==
+				   MLX5_TUNNEL_OFFLOAD_MISS_RULE);
+			tunnel = dev_flow->tunnel;
+		} else {
+			tunnel = mlx5_get_tof(items, actions,
+					      &dev_flow->tof_type);
+			dev_flow->tunnel = tunnel;
+		}
+		grp_info.std_tbl_fix = tunnel_use_standard_attr_group_translate
+					(dev, attr, tunnel, dev_flow->tof_type);
+	}
 	mhdr_res->ft_type = attr->egress ? MLX5DV_FLOW_TABLE_TYPE_NIC_TX :
 					   MLX5DV_FLOW_TABLE_TYPE_NIC_RX;
-	grp_info.std_tbl_fix = tunnel_use_standard_attr_group_translate
-				(dev, tunnel, attr, items, actions);
 	ret = mlx5_flow_group_to_table(dev, tunnel, attr->group, &table,
 				       &grp_info, error);
 	if (ret)
@@ -9771,7 +9768,7 @@ flow_dv_translate(struct rte_eth_dev *dev,
 		priority = dev_conf->flow_prio - 1;
 	/* number of actions must be set to 0 in case of dirty stack. */
 	mhdr_res->actions_num = 0;
-	if (is_flow_tunnel_match_rule(dev, attr, items, actions)) {
+	if (is_flow_tunnel_match_rule(dev_flow->tof_type)) {
 		/*
 		 * do not add decap action if match rule drops packet
 		 * HW rejects rules with decap & drop
@@ -10666,28 +10663,51 @@ flow_dv_translate(struct rte_eth_dev *dev,
 static int
 __flow_dv_action_rss_hrxq_set(struct mlx5_shared_action_rss *action,
 			      const uint64_t hash_fields,
-			      const int tunnel,
 			      uint32_t hrxq_idx)
 {
-	uint32_t *hrxqs = tunnel ? action->hrxq : action->hrxq_tunnel;
+	uint32_t *hrxqs = action->hrxq;
 
 	switch (hash_fields & ~IBV_RX_HASH_INNER) {
 	case MLX5_RSS_HASH_IPV4:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_SRC_ONLY:
 		hrxqs[0] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_IPV4_TCP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_TCP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_TCP_SRC_ONLY:
 		hrxqs[1] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_IPV4_UDP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_UDP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_UDP_SRC_ONLY:
 		hrxqs[2] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_IPV6:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_SRC_ONLY:
 		hrxqs[3] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_IPV6_TCP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_TCP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_TCP_SRC_ONLY:
 		hrxqs[4] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_IPV6_UDP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_UDP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_UDP_SRC_ONLY:
 		hrxqs[5] = hrxq_idx;
 		return 0;
 	case MLX5_RSS_HASH_NONE:
@@ -10716,33 +10736,56 @@ __flow_dv_action_rss_hrxq_set(struct mlx5_shared_action_rss *action,
  */
 static uint32_t
 __flow_dv_action_rss_hrxq_lookup(struct rte_eth_dev *dev, uint32_t idx,
-				 const uint64_t hash_fields,
-				 const int tunnel)
+				 const uint64_t hash_fields)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_shared_action_rss *shared_rss =
 	    mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_RSS_SHARED_ACTIONS], idx);
-	const uint32_t *hrxqs = tunnel ? shared_rss->hrxq :
-							shared_rss->hrxq_tunnel;
+	const uint32_t *hrxqs = shared_rss->hrxq;
 
 	switch (hash_fields & ~IBV_RX_HASH_INNER) {
 	case MLX5_RSS_HASH_IPV4:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_SRC_ONLY:
 		return hrxqs[0];
 	case MLX5_RSS_HASH_IPV4_TCP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_TCP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_TCP_SRC_ONLY:
 		return hrxqs[1];
 	case MLX5_RSS_HASH_IPV4_UDP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_UDP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV4_UDP_SRC_ONLY:
 		return hrxqs[2];
 	case MLX5_RSS_HASH_IPV6:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_SRC_ONLY:
 		return hrxqs[3];
 	case MLX5_RSS_HASH_IPV6_TCP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_TCP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_TCP_SRC_ONLY:
 		return hrxqs[4];
 	case MLX5_RSS_HASH_IPV6_UDP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_UDP_DST_ONLY:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_UDP_SRC_ONLY:
 		return hrxqs[5];
 	case MLX5_RSS_HASH_NONE:
 		return hrxqs[6];
 	default:
 		return 0;
 	}
+
 }
 
 /**
@@ -10784,11 +10827,19 @@ flow_dv_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 		n = dv->actions_n;
 		if (dh->fate_action == MLX5_FLOW_FATE_DROP) {
 			if (dv->transfer) {
-				dv->actions[n++] = priv->sh->esw_drop_action;
+				MLX5_ASSERT(priv->sh->dr_drop_action);
+				dv->actions[n++] = priv->sh->dr_drop_action;
 			} else {
+#ifdef HAVE_MLX5DV_DR
+				/* DR supports drop action placeholder. */
+				MLX5_ASSERT(priv->sh->dr_drop_action);
+				dv->actions[n++] = priv->sh->dr_drop_action;
+#else
+				/* For DV we use the explicit drop queue. */
 				MLX5_ASSERT(priv->drop_queue.hrxq);
 				dv->actions[n++] =
 						priv->drop_queue.hrxq->action;
+#endif
 			}
 		} else if ((dh->fate_action == MLX5_FLOW_FATE_QUEUE &&
 			   !dv_h->rix_sample && !dv_h->rix_dest_array)) {
@@ -10812,9 +10863,7 @@ flow_dv_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 
 			hrxq_idx = __flow_dv_action_rss_hrxq_lookup(dev,
 						rss_desc->shared_rss,
-						dev_flow->hash_fields,
-						!!(dh->layers &
-						MLX5_FLOW_LAYER_TUNNEL));
+						dev_flow->hash_fields);
 			if (hrxq_idx)
 				hrxq = mlx5_ipool_get
 					(priv->sh->ipool[MLX5_IPOOL_HRXQ],
@@ -11132,7 +11181,8 @@ flow_dv_fate_resource_release(struct rte_eth_dev *dev,
 		return;
 	switch (handle->fate_action) {
 	case MLX5_FLOW_FATE_QUEUE:
-		mlx5_hrxq_release(dev, handle->rix_hrxq);
+		if (!handle->dvh.rix_sample && !handle->dvh.rix_dest_array)
+			mlx5_hrxq_release(dev, handle->rix_hrxq);
 		break;
 	case MLX5_FLOW_FATE_JUMP:
 		flow_dv_jump_tbl_resource_release(dev, handle);
@@ -11406,8 +11456,85 @@ static int
 __flow_dv_action_rss_hrxqs_release(struct rte_eth_dev *dev,
 				 struct mlx5_shared_action_rss *shared_rss)
 {
-	return __flow_dv_hrxqs_release(dev, &shared_rss->hrxq) +
-		__flow_dv_hrxqs_release(dev, &shared_rss->hrxq_tunnel);
+	return __flow_dv_hrxqs_release(dev, &shared_rss->hrxq);
+}
+
+/**
+ * Adjust L3/L4 hash value of pre-created shared RSS hrxq according to
+ * user input.
+ *
+ * Only one hash value is available for one L3+L4 combination:
+ * for example:
+ * MLX5_RSS_HASH_IPV4, MLX5_RSS_HASH_IPV4_SRC_ONLY, and
+ * MLX5_RSS_HASH_IPV4_DST_ONLY are mutually exclusive so they can share
+ * same slot in mlx5_rss_hash_fields.
+ *
+ * @param[in] rss
+ *   Pointer to the shared action RSS conf.
+ * @param[in, out] hash_field
+ *   hash_field variable needed to be adjusted.
+ *
+ * @return
+ *   void
+ */
+static void
+__flow_dv_action_rss_l34_hash_adjust(struct mlx5_shared_action_rss *rss,
+				     uint64_t *hash_field)
+{
+	uint64_t rss_types = rss->origin.types;
+
+	switch (*hash_field & ~IBV_RX_HASH_INNER) {
+	case MLX5_RSS_HASH_IPV4:
+		if (rss_types & MLX5_IPV4_LAYER_TYPES) {
+			*hash_field &= ~MLX5_RSS_HASH_IPV4;
+			if (rss_types & ETH_RSS_L3_DST_ONLY)
+				*hash_field |= IBV_RX_HASH_DST_IPV4;
+			else if (rss_types & ETH_RSS_L3_SRC_ONLY)
+				*hash_field |= IBV_RX_HASH_SRC_IPV4;
+			else
+				*hash_field |= MLX5_RSS_HASH_IPV4;
+		}
+		return;
+	case MLX5_RSS_HASH_IPV6:
+		if (rss_types & MLX5_IPV6_LAYER_TYPES) {
+			*hash_field &= ~MLX5_RSS_HASH_IPV6;
+			if (rss_types & ETH_RSS_L3_DST_ONLY)
+				*hash_field |= IBV_RX_HASH_DST_IPV6;
+			else if (rss_types & ETH_RSS_L3_SRC_ONLY)
+				*hash_field |= IBV_RX_HASH_SRC_IPV6;
+			else
+				*hash_field |= MLX5_RSS_HASH_IPV6;
+		}
+		return;
+	case MLX5_RSS_HASH_IPV4_UDP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_UDP:
+		if (rss_types & ETH_RSS_UDP) {
+			*hash_field &= ~MLX5_UDP_IBV_RX_HASH;
+			if (rss_types & ETH_RSS_L4_DST_ONLY)
+				*hash_field |= IBV_RX_HASH_DST_PORT_UDP;
+			else if (rss_types & ETH_RSS_L4_SRC_ONLY)
+				*hash_field |= IBV_RX_HASH_SRC_PORT_UDP;
+			else
+				*hash_field |= MLX5_UDP_IBV_RX_HASH;
+		}
+		return;
+	case MLX5_RSS_HASH_IPV4_TCP:
+		/* fall-through. */
+	case MLX5_RSS_HASH_IPV6_TCP:
+		if (rss_types & ETH_RSS_TCP) {
+			*hash_field &= ~MLX5_TCP_IBV_RX_HASH;
+			if (rss_types & ETH_RSS_L4_DST_ONLY)
+				*hash_field |= IBV_RX_HASH_DST_PORT_TCP;
+			else if (rss_types & ETH_RSS_L4_SRC_ONLY)
+				*hash_field |= IBV_RX_HASH_SRC_PORT_TCP;
+			else
+				*hash_field |= MLX5_TCP_IBV_RX_HASH;
+		}
+		return;
+	default:
+		return;
+	}
 }
 
 /**
@@ -11453,23 +11580,26 @@ __flow_dv_action_rss_setup(struct rte_eth_dev *dev,
 	for (i = 0; i < MLX5_RSS_HASH_FIELDS_LEN; i++) {
 		uint32_t hrxq_idx;
 		uint64_t hash_fields = mlx5_rss_hash_fields[i];
-		int tunnel;
+		int tunnel = 0;
 
-		for (tunnel = 0; tunnel < 2; tunnel++) {
-			rss_desc.tunnel = tunnel;
-			rss_desc.hash_fields = hash_fields;
-			hrxq_idx = mlx5_hrxq_get(dev, &rss_desc);
-			if (!hrxq_idx) {
-				rte_flow_error_set
-					(error, rte_errno,
-					 RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-					 "cannot get hash queue");
-				goto error_hrxq_new;
-			}
-			err = __flow_dv_action_rss_hrxq_set
-				(shared_rss, hash_fields, tunnel, hrxq_idx);
-			MLX5_ASSERT(!err);
+		__flow_dv_action_rss_l34_hash_adjust(shared_rss, &hash_fields);
+		if (shared_rss->origin.level > 1) {
+			hash_fields |= IBV_RX_HASH_INNER;
+			tunnel = 1;
 		}
+		rss_desc.tunnel = tunnel;
+		rss_desc.hash_fields = hash_fields;
+		hrxq_idx = mlx5_hrxq_get(dev, &rss_desc);
+		if (!hrxq_idx) {
+			rte_flow_error_set
+				(error, rte_errno,
+				 RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+				 "cannot get hash queue");
+			goto error_hrxq_new;
+		}
+		err = __flow_dv_action_rss_hrxq_set
+			(shared_rss, hash_fields, hrxq_idx);
+		MLX5_ASSERT(!err);
 	}
 	return 0;
 error_hrxq_new:
@@ -12455,7 +12585,7 @@ mlx5_flow_dv_discover_counter_offset_support(struct rte_eth_dev *dev)
 		.size = sizeof(value.buf),
 	};
 	struct mlx5dv_flow_matcher_attr dv_attr = {
-		.type = IBV_FLOW_ATTR_NORMAL,
+		.type = IBV_FLOW_ATTR_NORMAL | IBV_FLOW_ATTR_FLAGS_EGRESS,
 		.priority = 0,
 		.match_criteria_enable = 0,
 		.match_mask = (void *)&mask,
@@ -12467,7 +12597,7 @@ mlx5_flow_dv_discover_counter_offset_support(struct rte_eth_dev *dev)
 	void *flow = NULL;
 	int ret = -1;
 
-	tbl = flow_dv_tbl_resource_get(dev, 0, 0, 0, false, NULL, 0, 0, NULL);
+	tbl = flow_dv_tbl_resource_get(dev, 0, 1, 0, false, NULL, 0, 0, NULL);
 	if (!tbl)
 		goto err;
 	dcs = mlx5_devx_cmd_flow_counter_alloc(priv->sh->ctx, 0x4);
@@ -12477,13 +12607,12 @@ mlx5_flow_dv_discover_counter_offset_support(struct rte_eth_dev *dev)
 						    &actions[0]);
 	if (ret)
 		goto err;
-	actions[1] = priv->drop_queue.hrxq->action;
 	dv_attr.match_criteria_enable = flow_dv_matcher_enable(mask.buf);
 	ret = mlx5_flow_os_create_flow_matcher(sh->ctx, &dv_attr, tbl->obj,
 					       &matcher);
 	if (ret)
 		goto err;
-	ret = mlx5_flow_os_create_flow(matcher, (void *)&value, 2,
+	ret = mlx5_flow_os_create_flow(matcher, (void *)&value, 1,
 				       actions, &flow);
 err:
 	/*

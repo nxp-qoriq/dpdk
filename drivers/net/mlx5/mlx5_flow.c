@@ -50,6 +50,7 @@ flow_tunnel_add_default_miss(struct rte_eth_dev *dev,
 			     const struct rte_flow_attr *attr,
 			     const struct rte_flow_action *app_actions,
 			     uint32_t flow_idx,
+			     const struct mlx5_flow_tunnel *tunnel,
 			     struct tunnel_default_miss_ctx *ctx,
 			     struct rte_flow_error *error);
 static struct mlx5_flow_tunnel *
@@ -99,6 +100,8 @@ struct mlx5_flow_expand_node {
 	 * RSS types bit-field associated with this node
 	 * (see ETH_RSS_* definitions).
 	 */
+	uint8_t optional;
+	/**< optional expand field. Default 0 to expand, 1 not go deeper. */
 };
 
 /** Object returned by mlx5_flow_expand_rss(). */
@@ -212,7 +215,7 @@ mlx5_flow_expand_rss_item_complete(const struct rte_flow_item *item)
 	return ret;
 }
 
-#define MLX5_RSS_EXP_ELT_N 8
+#define MLX5_RSS_EXP_ELT_N 16
 
 /**
  * Expand RSS flows into several possible flows according to the RSS hash
@@ -366,7 +369,7 @@ mlx5_flow_expand_rss(struct mlx5_flow_expand_rss *buf, size_t size,
 			}
 		}
 		/* Go deeper. */
-		if (node->next) {
+		if (!node->optional && node->next) {
 			next_node = node->next;
 			if (stack_pos++ == MLX5_RSS_EXP_ELT_N) {
 				rte_errno = E2BIG;
@@ -385,22 +388,6 @@ mlx5_flow_expand_rss(struct mlx5_flow_expand_rss *buf, size_t size,
 		}
 		node = *next_node ? &graph[*next_node] : NULL;
 	};
-	/* no expanded flows but we have missed item, create one rule for it */
-	if (buf->entries == 1 && missed != 0) {
-		elt = 2;
-		lsize += elt * sizeof(*item) + user_pattern_size;
-		if (lsize <= size) {
-			buf->entry[buf->entries].priority = 1;
-			buf->entry[buf->entries].pattern = addr;
-			buf->entries++;
-			flow_items[0].type = missed_item.type;
-			flow_items[1].type = RTE_FLOW_ITEM_TYPE_END;
-			rte_memcpy(addr, buf->entry[0].pattern,
-				   user_pattern_size);
-			addr = (void *)(((uintptr_t)addr) + user_pattern_size);
-			rte_memcpy(addr, flow_items, elt * sizeof(*item));
-		}
-	}
 	return lsize;
 }
 
@@ -421,6 +408,8 @@ enum mlx5_expansion {
 	MLX5_EXPANSION_VXLAN,
 	MLX5_EXPANSION_VXLAN_GPE,
 	MLX5_EXPANSION_GRE,
+	MLX5_EXPANSION_NVGRE,
+	MLX5_EXPANSION_GRE_KEY,
 	MLX5_EXPANSION_MPLS,
 	MLX5_EXPANSION_ETH,
 	MLX5_EXPANSION_ETH_VLAN,
@@ -478,6 +467,7 @@ static const struct mlx5_flow_expand_node mlx5_support_expansion[] = {
 			(MLX5_EXPANSION_OUTER_IPV4_UDP,
 			 MLX5_EXPANSION_OUTER_IPV4_TCP,
 			 MLX5_EXPANSION_GRE,
+			 MLX5_EXPANSION_NVGRE,
 			 MLX5_EXPANSION_IPV4,
 			 MLX5_EXPANSION_IPV6),
 		.type = RTE_FLOW_ITEM_TYPE_IPV4,
@@ -499,7 +489,9 @@ static const struct mlx5_flow_expand_node mlx5_support_expansion[] = {
 			(MLX5_EXPANSION_OUTER_IPV6_UDP,
 			 MLX5_EXPANSION_OUTER_IPV6_TCP,
 			 MLX5_EXPANSION_IPV4,
-			 MLX5_EXPANSION_IPV6),
+			 MLX5_EXPANSION_IPV6,
+			 MLX5_EXPANSION_GRE,
+			 MLX5_EXPANSION_NVGRE),
 		.type = RTE_FLOW_ITEM_TYPE_IPV6,
 		.rss_types = ETH_RSS_IPV6 | ETH_RSS_FRAG_IPV6 |
 			ETH_RSS_NONFRAG_IPV6_OTHER,
@@ -527,8 +519,20 @@ static const struct mlx5_flow_expand_node mlx5_support_expansion[] = {
 		.type = RTE_FLOW_ITEM_TYPE_VXLAN_GPE,
 	},
 	[MLX5_EXPANSION_GRE] = {
-		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4),
+		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4,
+						  MLX5_EXPANSION_IPV6,
+						  MLX5_EXPANSION_GRE_KEY),
 		.type = RTE_FLOW_ITEM_TYPE_GRE,
+	},
+	[MLX5_EXPANSION_GRE_KEY] = {
+		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4,
+						  MLX5_EXPANSION_IPV6),
+		.type = RTE_FLOW_ITEM_TYPE_GRE_KEY,
+		.optional = 1,
+	},
+	[MLX5_EXPANSION_NVGRE] = {
+		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_ETH),
+		.type = RTE_FLOW_ITEM_TYPE_NVGRE,
 	},
 	[MLX5_EXPANSION_MPLS] = {
 		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4,
@@ -1220,10 +1224,14 @@ mlx5_flow_rxq_dynf_metadata_set(struct rte_eth_dev *dev)
 			data->dynf_meta = 0;
 			data->flow_meta_mask = 0;
 			data->flow_meta_offset = -1;
+			data->flow_meta_port_mask = 0;
 		} else {
 			data->dynf_meta = 1;
 			data->flow_meta_mask = rte_flow_dynf_metadata_mask;
 			data->flow_meta_offset = rte_flow_dynf_metadata_offs;
+			data->flow_meta_port_mask = (uint32_t)~0;
+			if (priv->config.dv_xmeta_en == MLX5_XMETA_MODE_META16)
+				data->flow_meta_port_mask >>= 16;
 		}
 	}
 }
@@ -5183,22 +5191,14 @@ flow_create_split_outer(struct rte_eth_dev *dev,
 	return ret;
 }
 
-static struct mlx5_flow_tunnel *
-flow_tunnel_from_rule(struct rte_eth_dev *dev,
-		      const struct rte_flow_attr *attr,
-		      const struct rte_flow_item items[],
-		      const struct rte_flow_action actions[])
+static inline struct mlx5_flow_tunnel *
+flow_tunnel_from_rule(const struct mlx5_flow *flow)
 {
 	struct mlx5_flow_tunnel *tunnel;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-qual"
-	if (is_flow_tunnel_match_rule(dev, attr, items, actions))
-		tunnel = (struct mlx5_flow_tunnel *)items[0].spec;
-	else if (is_flow_tunnel_steer_rule(dev, attr, items, actions))
-		tunnel = (struct mlx5_flow_tunnel *)actions[0].conf;
-	else
-		tunnel = NULL;
+	tunnel = (typeof(tunnel))flow->tunnel;
 #pragma GCC diagnostic pop
 
 	return tunnel;
@@ -5392,12 +5392,11 @@ flow_list_create(struct rte_eth_dev *dev, uint32_t *list,
 					      error);
 		if (ret < 0)
 			goto error;
-		if (is_flow_tunnel_steer_rule(dev, attr,
-					      buf->entry[i].pattern,
-					      p_actions_rx)) {
+		if (is_flow_tunnel_steer_rule(wks->flows[0].tof_type)) {
 			ret = flow_tunnel_add_default_miss(dev, flow, attr,
 							   p_actions_rx,
 							   idx,
+							   wks->flows[0].tunnel,
 							   &default_miss_ctx,
 							   error);
 			if (ret < 0) {
@@ -5461,7 +5460,7 @@ flow_list_create(struct rte_eth_dev *dev, uint32_t *list,
 	}
 	flow_rxq_flags_set(dev, flow);
 	rte_free(translated_actions);
-	tunnel = flow_tunnel_from_rule(dev, attr, items, actions);
+	tunnel = flow_tunnel_from_rule(wks->flows);
 	if (tunnel) {
 		flow->tunnel = 1;
 		flow->tunnel_id = tunnel->tunnel_id;
@@ -7210,6 +7209,28 @@ int rte_pmd_mlx5_sync_flow(uint16_t port_id, uint32_t domains)
 	return ret;
 }
 
+const struct mlx5_flow_tunnel *
+mlx5_get_tof(const struct rte_flow_item *item,
+	     const struct rte_flow_action *action,
+	     enum mlx5_tof_rule_type *rule_type)
+{
+	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
+		if (item->type == (typeof(item->type))
+				  MLX5_RTE_FLOW_ITEM_TYPE_TUNNEL) {
+			*rule_type = MLX5_TUNNEL_OFFLOAD_MATCH_RULE;
+			return flow_items_to_tunnel(item);
+		}
+	}
+	for (; action->conf != RTE_FLOW_ACTION_TYPE_END; action++) {
+		if (action->type == (typeof(action->type))
+				    MLX5_RTE_FLOW_ACTION_TYPE_TUNNEL_SET) {
+			*rule_type = MLX5_TUNNEL_OFFLOAD_SET_RULE;
+			return flow_actions_to_tunnel(action);
+		}
+	}
+	return NULL;
+}
+
 /**
  * tunnel offload functionalilty is defined for DV environment only
  */
@@ -7240,13 +7261,13 @@ flow_tunnel_add_default_miss(struct rte_eth_dev *dev,
 			     const struct rte_flow_attr *attr,
 			     const struct rte_flow_action *app_actions,
 			     uint32_t flow_idx,
+			     const struct mlx5_flow_tunnel *tunnel,
 			     struct tunnel_default_miss_ctx *ctx,
 			     struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flow *dev_flow;
 	struct rte_flow_attr miss_attr = *attr;
-	const struct mlx5_flow_tunnel *tunnel = app_actions[0].conf;
 	const struct rte_flow_item miss_items[2] = {
 		{
 			.type = RTE_FLOW_ITEM_TYPE_ETH,
@@ -7332,6 +7353,7 @@ flow_tunnel_add_default_miss(struct rte_eth_dev *dev,
 	dev_flow->flow = flow;
 	dev_flow->external = true;
 	dev_flow->tunnel = tunnel;
+	dev_flow->tof_type = MLX5_TUNNEL_OFFLOAD_MISS_RULE;
 	/* Subflow object was created, we must include one in the list. */
 	SILIST_INSERT(&flow->dev_handles, dev_flow->handle_idx,
 		      dev_flow->handle, next);
@@ -7603,10 +7625,11 @@ static void get_tunnel_miss(struct rte_eth_dev *dev, void *x)
 
 	rte_spinlock_unlock(&thub->sl);
 	ctx->tunnel = mlx5_flow_tunnel_allocate(dev, ctx->app_tunnel);
-	ctx->tunnel->refctn = 1;
 	rte_spinlock_lock(&thub->sl);
-	if (ctx->tunnel)
+	if (ctx->tunnel) {
+		ctx->tunnel->refctn = 1;
 		LIST_INSERT_HEAD(&thub->tunnels, ctx->tunnel, chain);
+	}
 }
 
 
@@ -7648,7 +7671,8 @@ int mlx5_alloc_tunnel_hub(struct mlx5_dev_ctx_shared *sh)
 		return -ENOMEM;
 	LIST_INIT(&thub->tunnels);
 	rte_spinlock_init(&thub->sl);
-	thub->groups = mlx5_hlist_create("flow groups", MLX5_MAX_TABLES, 0,
+	thub->groups = mlx5_hlist_create("flow groups",
+					 rte_align32pow2(MLX5_MAX_TABLES), 0,
 					 0, mlx5_flow_tunnel_grp2tbl_create_cb,
 					 NULL,
 					 mlx5_flow_tunnel_grp2tbl_remove_cb);
@@ -7924,6 +7948,7 @@ flow_tunnel_add_default_miss(__rte_unused struct rte_eth_dev *dev,
 			     __rte_unused const struct rte_flow_attr *attr,
 			     __rte_unused const struct rte_flow_action *actions,
 			     __rte_unused uint32_t flow_idx,
+			     __rte_unused const struct mlx5_flow_tunnel *tunnel,
 			     __rte_unused struct tunnel_default_miss_ctx *ctx,
 			     __rte_unused struct rte_flow_error *error)
 {

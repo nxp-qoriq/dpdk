@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_ethdev_pci.h>
@@ -322,11 +322,6 @@ hns3_get_regs(struct rte_eth_dev *eth_dev, struct rte_dev_reg_info *regs)
 	uint32_t *data;
 	int ret;
 
-	if (regs == NULL) {
-		hns3_err(hw, "the input parameter regs is NULL!");
-		return -EINVAL;
-	}
-
 	ret = hns3_get_regs_length(hw, &length);
 	if (ret)
 		return ret;
@@ -341,6 +336,8 @@ hns3_get_regs(struct rte_eth_dev *eth_dev, struct rte_dev_reg_info *regs)
 	/* Only full register dump is supported */
 	if (regs->length && regs->length != length)
 		return -ENOTSUP;
+
+	regs->version = hw->fw_version;
 
 	/* fetching per-PF registers values from PF PCIe register space */
 	data += hns3_direct_access_regs(hw, data);

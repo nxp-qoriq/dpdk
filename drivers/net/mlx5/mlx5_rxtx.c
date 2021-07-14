@@ -1338,10 +1338,15 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 			}
 		}
 	}
-	if (rxq->dynf_meta && cqe->flow_table_metadata) {
-		pkt->ol_flags |= rxq->flow_meta_mask;
-		*RTE_MBUF_DYNFIELD(pkt, rxq->flow_meta_offset, uint32_t *) =
-			cqe->flow_table_metadata;
+	if (rxq->dynf_meta) {
+		uint32_t meta = cqe->flow_table_metadata &
+				rxq->flow_meta_port_mask;
+
+		if (meta) {
+			pkt->ol_flags |= rxq->flow_meta_mask;
+			*RTE_MBUF_DYNFIELD(pkt, rxq->flow_meta_offset,
+						uint32_t *) = meta;
+		}
 	}
 	if (rxq->csum)
 		pkt->ol_flags |= rxq_cq_to_ol_flags(cqe);
@@ -1430,6 +1435,9 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				rte_mbuf_raw_free(pkt);
 				pkt = rep;
 			}
+			rq_ci >>= sges_n;
+			++rq_ci;
+			rq_ci <<= sges_n;
 			break;
 		}
 		if (!pkt) {

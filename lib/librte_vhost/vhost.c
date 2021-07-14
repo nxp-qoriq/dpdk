@@ -598,7 +598,7 @@ alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 		if (dev->virtqueue[i])
 			continue;
 
-		vq = rte_malloc(NULL, sizeof(struct vhost_virtqueue), 0);
+		vq = rte_zmalloc(NULL, sizeof(struct vhost_virtqueue), 0);
 		if (vq == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"Failed to allocate memory for vring:%u.\n", i);
@@ -742,7 +742,7 @@ vhost_set_ifname(int vid, const char *if_name, unsigned int if_len)
 }
 
 void
-vhost_set_builtin_virtio_net(int vid, bool enable)
+vhost_setup_virtio_net(int vid, bool enable, bool compliant_ol_flags)
 {
 	struct virtio_net *dev = get_device(vid);
 
@@ -753,6 +753,10 @@ vhost_set_builtin_virtio_net(int vid, bool enable)
 		dev->flags |= VIRTIO_DEV_BUILTIN_VIRTIO_NET;
 	else
 		dev->flags &= ~VIRTIO_DEV_BUILTIN_VIRTIO_NET;
+	if (!compliant_ol_flags)
+		dev->flags |= VIRTIO_DEV_LEGACY_OL_FLAGS;
+	else
+		dev->flags &= ~VIRTIO_DEV_LEGACY_OL_FLAGS;
 }
 
 void

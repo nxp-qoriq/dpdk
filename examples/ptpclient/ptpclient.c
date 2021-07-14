@@ -606,10 +606,6 @@ lcore_main(void)
 	unsigned nb_rx;
 	struct rte_mbuf *m;
 
-	/*
-	 * Check that the port is on the same NUMA node as the polling thread
-	 * for best performance.
-	 */
 	printf("\nCore %u Waiting for SYNC packets. [Ctrl+C to quit]\n",
 			rte_lcore_id());
 
@@ -787,6 +783,9 @@ main(int argc, char *argv[])
 
 	/* Call lcore_main on the main core only. */
 	lcore_main();
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

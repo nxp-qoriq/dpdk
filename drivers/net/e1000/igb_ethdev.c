@@ -1827,8 +1827,7 @@ eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
-	rte_stats->ierrors = stats->crcerrs +
-	                     stats->rlec + stats->ruc + stats->roc +
+	rte_stats->ierrors = stats->crcerrs + stats->rlec +
 	                     stats->rxerrc + stats->algnerrc + stats->cexterr;
 
 	/* Tx Errors */
@@ -2691,8 +2690,7 @@ igb_vlan_hw_extend_disable(struct rte_eth_dev *dev)
 	/* Update maximum packet length */
 	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		E1000_WRITE_REG(hw, E1000_RLPML,
-			dev->data->dev_conf.rxmode.max_rx_pkt_len +
-						VLAN_TAG_SIZE);
+				dev->data->dev_conf.rxmode.max_rx_pkt_len);
 }
 
 static void
@@ -2711,7 +2709,7 @@ igb_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		E1000_WRITE_REG(hw, E1000_RLPML,
 			dev->data->dev_conf.rxmode.max_rx_pkt_len +
-						2 * VLAN_TAG_SIZE);
+						VLAN_TAG_SIZE);
 }
 
 static int
@@ -4396,11 +4394,15 @@ eth_igb_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 			frame_size > dev_info.max_rx_pktlen)
 		return -EINVAL;
 
-	/* refuse mtu that requires the support of scattered packets when this
-	 * feature has not been enabled before. */
-	if (!dev->data->scattered_rx &&
-	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)
+	/*
+	 * If device is started, refuse mtu that requires the support of
+	 * scattered packets when this feature has not been enabled before.
+	 */
+	if (dev->data->dev_started && !dev->data->scattered_rx &&
+	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
+		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
+	}
 
 	rctl = E1000_READ_REG(hw, E1000_RCTL);
 
@@ -5134,9 +5136,6 @@ eth_igb_get_module_eeprom(struct rte_eth_dev *dev,
 	u16 first_word, last_word;
 	int i = 0;
 
-	if (info->length == 0)
-		return -EINVAL;
-
 	first_word = info->offset >> 1;
 	last_word = (info->offset + info->length - 1) >> 1;
 
@@ -5436,9 +5435,3 @@ RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb, "* igb_uio | uio_pci_generic | vfio-pci
 RTE_PMD_REGISTER_PCI(net_e1000_igb_vf, rte_igbvf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb_vf, pci_id_igbvf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb_vf, "* igb_uio | vfio-pci");
-
-/* see e1000_logs.c */
-RTE_INIT(e1000_init_log)
-{
-	e1000_igb_init_log();
-}

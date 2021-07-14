@@ -316,9 +316,11 @@ struct rte_flow {
 	struct bnxt_vnic_info	*vnic;
 };
 
+#define BNXT_PTP_RX_PND_CNT		10
 #define BNXT_PTP_FLAGS_PATH_TX		0x0
 #define BNXT_PTP_FLAGS_PATH_RX		0x1
 #define BNXT_PTP_FLAGS_CURRENT_TIME	0x2
+#define BNXT_PTP_CURRENT_TIME_MASK	0xFFFF00000000ULL
 
 struct bnxt_ptp_cfg {
 #define BNXT_GRCPF_REG_WINDOW_BASE_OUT  0x400
@@ -368,6 +370,7 @@ struct bnxt_ptp_cfg {
 
 	/* On Thor, the Rx timestamp is present in the Rx completion record */
 	uint64_t			rx_timestamp;
+	uint64_t			current_time;
 };
 
 struct bnxt_coal {
@@ -591,13 +594,6 @@ struct bnxt_rep_info {
 				     DEV_RX_OFFLOAD_SCATTER | \
 				     DEV_RX_OFFLOAD_RSS_HASH)
 
-#define  MAX_TABLE_SUPPORT 4
-#define  MAX_DIR_SUPPORT   2
-struct bnxt_dmabuf_info {
-	uint32_t entry_num;
-	int      fd[MAX_DIR_SUPPORT][MAX_TABLE_SUPPORT];
-};
-
 #define BNXT_HWRM_SHORT_REQ_LEN		sizeof(struct hwrm_short_input)
 
 struct bnxt_flow_stat_info {
@@ -646,6 +642,8 @@ struct bnxt {
 #define BNXT_FLAG_DFLT_MAC_SET			BIT(26)
 #define BNXT_FLAG_TRUFLOW_EN			BIT(27)
 #define BNXT_FLAG_GFID_ENABLE			BIT(28)
+#define BNXT_FLAGS_PTP_TIMESYNC_ENABLED	BIT(29)
+#define BNXT_FLAGS_PTP_ALARM_SCHEDULED		BIT(30)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
 #define BNXT_NPAR(bp)		((bp)->flags & BNXT_FLAG_NPAR_PF)
@@ -662,6 +660,8 @@ struct bnxt {
 #define BNXT_HAS_DFLT_MAC_SET(bp)      ((bp)->flags & BNXT_FLAG_DFLT_MAC_SET)
 #define BNXT_TRUFLOW_EN(bp)	((bp)->flags & BNXT_FLAG_TRUFLOW_EN)
 #define BNXT_GFID_ENABLED(bp)	((bp)->flags & BNXT_FLAG_GFID_ENABLE)
+#define BNXT_THOR_PTP_TIMESYNC_ENABLED(bp)	\
+	((bp)->flags & BNXT_FLAGS_PTP_TIMESYNC_ENABLED)
 
 	uint32_t		fw_cap;
 #define BNXT_FW_CAP_HOT_RESET		BIT(0)
@@ -705,7 +705,7 @@ struct bnxt {
 	uint32_t		max_ring_grps;
 	struct bnxt_ring_grp_info	*grp_info;
 
-	unsigned int		nr_vnics;
+	uint16_t			nr_vnics;
 
 #define BNXT_GET_DEFAULT_VNIC(bp)	(&(bp)->vnic_info[0])
 	struct bnxt_vnic_info	*vnic_info;
@@ -803,7 +803,6 @@ struct bnxt {
 	uint16_t		port_svif;
 
 	struct tf		tfp;
-	struct bnxt_dmabuf_info dmabuf;
 	struct bnxt_ulp_context	*ulp_ctx;
 	struct bnxt_flow_stat_info *flow_stat;
 	uint8_t			flow_xstat;
@@ -830,6 +829,12 @@ inline uint16_t bnxt_max_rings(struct bnxt *bp)
 		max_rx_rings = RTE_MIN(max_rx_rings / 2U,
 				       bp->max_stat_ctx / 2U);
 	}
+
+	/* RSS table size in Thor is 512.
+	 * Cap max Rx rings to the same value for RSS.
+	 */
+	if (BNXT_CHIP_THOR(bp))
+		max_rx_rings = RTE_MIN(max_rx_rings, BNXT_RSS_TBL_SIZE_THOR);
 
 	max_tx_rings = RTE_MIN(max_tx_rings, max_rx_rings);
 	if (max_cp_rings > BNXT_NUM_ASYNC_CPR(bp))

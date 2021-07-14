@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_CMD_H_
@@ -55,13 +55,6 @@ enum hns3_cmd_return_status {
 	HNS3_CMD_INVALID        = 11,
 };
 
-enum hns3_cmd_status {
-	HNS3_STATUS_SUCCESS     = 0,
-	HNS3_ERR_CSQ_FULL       = -1,
-	HNS3_ERR_CSQ_TIMEOUT    = -2,
-	HNS3_ERR_CSQ_ERROR      = -3,
-};
-
 struct hns3_misc_vector {
 	uint8_t *addr;
 	int vector_irq;
@@ -71,7 +64,7 @@ struct hns3_cmq {
 	struct hns3_cmq_ring csq;
 	struct hns3_cmq_ring crq;
 	uint16_t tx_timeout;
-	enum hns3_cmd_status last_status;
+	enum hns3_cmd_return_status last_status;
 };
 
 enum hns3_opcode_type {
@@ -432,8 +425,6 @@ struct hns3_umv_spc_alc_cmd {
 #define HNS3_CFG_RD_LEN_BYTES		16
 #define HNS3_CFG_RD_LEN_UNIT		4
 
-#define HNS3_CFG_VMDQ_S			0
-#define HNS3_CFG_VMDQ_M			GENMASK(7, 0)
 #define HNS3_CFG_TC_NUM_S		8
 #define HNS3_CFG_TC_NUM_M		GENMASK(15, 8)
 #define HNS3_CFG_TQP_DESC_N_S		16
@@ -856,10 +847,16 @@ struct hns3_reset_tqp_queue_cmd {
 
 #define HNS3_CFG_RESET_MAC_B		3
 #define HNS3_CFG_RESET_FUNC_B		7
+#define HNS3_CFG_RESET_RCB_B		1
 struct hns3_reset_cmd {
 	uint8_t mac_func_reset;
 	uint8_t fun_reset_vfid;
-	uint8_t rsv[22];
+	uint8_t fun_reset_rcb;
+	uint8_t rsv1;
+	uint16_t fun_reset_rcb_vqid_start;
+	uint16_t fun_reset_rcb_vqid_num;
+	uint8_t fun_reset_rcb_return_status;
+	uint8_t rsv2[15];
 };
 
 #define HNS3_QUERY_DEV_SPECS_BD_NUM		4

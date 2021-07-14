@@ -396,8 +396,6 @@ if cc.has_argument('-Wno-format-truncation')
     cflags += '-Wno-format-truncation'
 endif
 
-# specify -D_GNU_SOURCE unconditionally
-cflags += '-D_GNU_SOURCE'
 # Strict-aliasing rules are violated by uint8_t[] to context size casts.
 cflags += '-fno-strict-aliasing'
 
@@ -424,7 +422,6 @@ foreach d:test_deps
 	def_lib = get_option('default_library')
 	test_dep_objs += get_variable(def_lib + '_rte_' + d)
 endforeach
-test_dep_objs += cc.find_library('execinfo', required: false)
 
 link_libs = []
 if get_option('default_library') == 'static'

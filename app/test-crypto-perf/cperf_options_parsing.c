@@ -506,6 +506,12 @@ parse_test_name(struct cperf_options *opts,
 {
 	char *test_name = (char *) rte_zmalloc(NULL,
 		sizeof(char) * (strlen(arg) + 3), 0);
+	if (test_name == NULL) {
+		RTE_LOG(ERR, USER1, "Failed to rte zmalloc with size: %zu\n",
+			strlen(arg) + 3);
+		return -1;
+	}
+
 	snprintf(test_name, strlen(arg) + 3, "[%s]", arg);
 	opts->test_name = test_name;
 
@@ -989,7 +995,7 @@ cperf_options_parse(struct cperf_options *options, int argc, char **argv)
 		switch (opt) {
 		case 'h':
 			usage(argv[0]);
-			rte_exit(EXIT_SUCCESS, "Displayed help\n");
+			exit(EXIT_SUCCESS);
 			break;
 		/* long options */
 		case 0:

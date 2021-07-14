@@ -284,7 +284,7 @@ lcore_main(struct flow_classifier *cls_app)
 	 * for best performance.
 	 */
 	RTE_ETH_FOREACH_DEV(port)
-		if (rte_eth_dev_socket_id(port) > 0 &&
+		if (rte_eth_dev_socket_id(port) >= 0 &&
 			rte_eth_dev_socket_id(port) != (int)rte_socket_id()) {
 			printf("\n\n");
 			printf("WARNING: port %u is on remote NUMA node\n",
@@ -852,6 +852,9 @@ main(int argc, char *argv[])
 
 	/* Call lcore_main on the main core only. */
 	lcore_main(cls_app);
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

@@ -136,7 +136,7 @@ struct iavf_info {
 	uint64_t supported_rxdid;
 	uint8_t *proto_xtr; /* proto xtr type for all queues */
 	volatile enum virtchnl_ops pend_cmd; /* pending command not finished */
-	uint32_t cmd_retval; /* return value of the cmd response from PF */
+	int cmd_retval; /* return value of the cmd response from PF */
 	uint8_t *aq_resp; /* buffer to store the adminq response from PF */
 
 	/* Event from pf */
@@ -255,7 +255,7 @@ struct iavf_cmd_info {
  * _atomic_set_cmd successfully.
  */
 static inline void
-_notify_cmd(struct iavf_info *vf, uint32_t msg_ret)
+_notify_cmd(struct iavf_info *vf, int msg_ret)
 {
 	vf->cmd_retval = msg_ret;
 	rte_wmb();
@@ -314,7 +314,7 @@ int iavf_query_stats(struct iavf_adapter *adapter,
 int iavf_config_promisc(struct iavf_adapter *adapter, bool enable_unicast,
 		       bool enable_multicast);
 int iavf_add_del_eth_addr(struct iavf_adapter *adapter,
-			 struct rte_ether_addr *addr, bool add);
+			 struct rte_ether_addr *addr, bool add, uint8_t type);
 int iavf_add_del_vlan(struct iavf_adapter *adapter, uint16_t vlanid, bool add);
 int iavf_fdir_add(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);
 int iavf_fdir_del(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);

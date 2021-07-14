@@ -977,7 +977,6 @@ txgbe_vlan_hw_extend_disable(struct rte_eth_dev *dev)
 
 	ctrl = rd32(hw, TXGBE_PORTCTL);
 	ctrl &= ~TXGBE_PORTCTL_VLANEXT;
-	ctrl &= ~TXGBE_PORTCTL_QINQ;
 	wr32(hw, TXGBE_PORTCTL, ctrl);
 }
 
@@ -985,17 +984,38 @@ static void
 txgbe_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
-	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
-	struct rte_eth_txmode *txmode = &dev->data->dev_conf.txmode;
 	uint32_t ctrl;
 
 	PMD_INIT_FUNC_TRACE();
 
 	ctrl  = rd32(hw, TXGBE_PORTCTL);
 	ctrl |= TXGBE_PORTCTL_VLANEXT;
-	if (rxmode->offloads & DEV_RX_OFFLOAD_QINQ_STRIP ||
-	    txmode->offloads & DEV_TX_OFFLOAD_QINQ_INSERT)
-		ctrl |= TXGBE_PORTCTL_QINQ;
+	wr32(hw, TXGBE_PORTCTL, ctrl);
+}
+
+static void
+txgbe_qinq_hw_strip_disable(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t ctrl;
+
+	PMD_INIT_FUNC_TRACE();
+
+	ctrl = rd32(hw, TXGBE_PORTCTL);
+	ctrl &= ~TXGBE_PORTCTL_QINQ;
+	wr32(hw, TXGBE_PORTCTL, ctrl);
+}
+
+static void
+txgbe_qinq_hw_strip_enable(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t ctrl;
+
+	PMD_INIT_FUNC_TRACE();
+
+	ctrl  = rd32(hw, TXGBE_PORTCTL);
+	ctrl |= TXGBE_PORTCTL_QINQ | TXGBE_PORTCTL_VLANEXT;
 	wr32(hw, TXGBE_PORTCTL, ctrl);
 }
 
@@ -1060,6 +1080,13 @@ txgbe_vlan_offload_config(struct rte_eth_dev *dev, int mask)
 			txgbe_vlan_hw_extend_enable(dev);
 		else
 			txgbe_vlan_hw_extend_disable(dev);
+	}
+
+	if (mask & ETH_QINQ_STRIP_MASK) {
+		if (rxmode->offloads & DEV_RX_OFFLOAD_QINQ_STRIP)
+			txgbe_qinq_hw_strip_enable(dev);
+		else
+			txgbe_qinq_hw_strip_disable(dev);
 	}
 
 	return 0;
@@ -1881,6 +1908,7 @@ txgbe_read_stats_registers(struct txgbe_hw *hw,
 
 	hw_stats->rx_bytes += rd64(hw, TXGBE_DMARXOCTL);
 	hw_stats->tx_bytes += rd64(hw, TXGBE_DMATXOCTL);
+	hw_stats->rx_dma_drop += rd32(hw, TXGBE_DMARXDROP);
 	hw_stats->rx_drop_packets += rd32(hw, TXGBE_PBRXDROP);
 
 	/* MAC Stats */
@@ -2029,7 +2057,8 @@ txgbe_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	}
 
 	/* Rx Errors */
-	stats->imissed  = hw_stats->rx_total_missed_packets;
+	stats->imissed  = hw_stats->rx_total_missed_packets +
+			  hw_stats->rx_dma_drop;
 	stats->ierrors  = hw_stats->rx_crc_errors +
 			  hw_stats->rx_mac_short_packet_dropped +
 			  hw_stats->rx_length_errors +

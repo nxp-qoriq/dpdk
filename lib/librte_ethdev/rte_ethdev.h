@@ -4350,6 +4350,7 @@ int rte_eth_tx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-ENODEV) if *port_id* invalid.
+ *   - (-EINVAL) if bad parameter.
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
  */
@@ -4380,6 +4381,7 @@ int rte_eth_dev_get_eeprom_length(uint16_t port_id);
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-EINVAL) if bad parameter.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
@@ -4397,6 +4399,7 @@ int rte_eth_dev_get_eeprom(uint16_t port_id, struct rte_dev_eeprom_info *info);
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-EINVAL) if bad parameter.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
@@ -4416,6 +4419,7 @@ int rte_eth_dev_set_eeprom(uint16_t port_id, struct rte_dev_eeprom_info *info);
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-EINVAL) if bad parameter.
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
@@ -4440,6 +4444,7 @@ rte_eth_dev_get_module_info(uint16_t port_id,
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-ENODEV) if *port_id* invalid.
+ *   - (-EINVAL) if bad parameter.
  *   - (-EIO) if device is removed.
  *   - others depends on the specific operations implementation.
  */

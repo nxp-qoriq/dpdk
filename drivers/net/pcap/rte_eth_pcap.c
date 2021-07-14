@@ -621,9 +621,11 @@ eth_dev_stop(struct rte_eth_dev *dev)
 
 	/* Special iface case. Single pcap is open and shared between tx/rx. */
 	if (internals->single_iface) {
-		pcap_close(pp->tx_pcap[0]);
-		pp->tx_pcap[0] = NULL;
-		pp->rx_pcap[0] = NULL;
+		if (pp->tx_pcap[0] != NULL) {
+			pcap_close(pp->tx_pcap[0]);
+			pp->tx_pcap[0] = NULL;
+			pp->rx_pcap[0] = NULL;
+		}
 		goto status_down;
 	}
 
@@ -755,6 +757,8 @@ eth_dev_close(struct rte_eth_dev *dev)
 	PMD_LOG(INFO, "Closing pcap ethdev on NUMA socket %d",
 			rte_socket_id());
 
+	eth_dev_stop(dev);
+
 	rte_free(dev->process_private);
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
@@ -827,7 +831,7 @@ eth_rx_queue_setup(struct rte_eth_dev *dev,
 
 		pcap_pkt_count = count_packets_in_pcap(pcap, pcap_q);
 
-		snprintf(ring_name, sizeof(ring_name), "PCAP_RING%" PRIu16,
+		snprintf(ring_name, sizeof(ring_name), "PCAP_RING%" PRIu32,
 				ring_number);
 
 		pcap_q->pkts = rte_ring_create(ring_name,

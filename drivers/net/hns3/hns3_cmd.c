@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_ethdev_pci.h>
@@ -9,10 +9,6 @@
 #include "hns3_regs.h"
 #include "hns3_intr.h"
 #include "hns3_logs.h"
-
-#define hns3_is_csq(ring) ((ring)->flag & HNS3_TYPE_CSQ)
-
-#define cmq_ring_to_dev(ring)   (&(ring)->dev->pdev->dev)
 
 static int
 hns3_ring_space(struct hns3_cmq_ring *ring)
@@ -195,12 +191,14 @@ hns3_cmd_csq_clean(struct hns3_hw *hw)
 {
 	struct hns3_cmq_ring *csq = &hw->cmq.csq;
 	uint32_t head;
+	uint32_t addr;
 	int clean;
 
 	head = hns3_read_dev(hw, HNS3_CMDQ_TX_HEAD_REG);
-	if (!is_valid_csq_clean_head(csq, head)) {
-		hns3_err(hw, "wrong cmd head (%u, %u-%u)", head,
-			    csq->next_to_use, csq->next_to_clean);
+	addr = hns3_read_dev(hw, HNS3_CMDQ_TX_ADDR_L_REG);
+	if (!is_valid_csq_clean_head(csq, head) || addr == 0) {
+		hns3_err(hw, "wrong cmd addr(%0x) head (%u, %u-%u)", addr, head,
+			 csq->next_to_use, csq->next_to_clean);
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 			rte_atomic16_set(&hw->reset.disable_cmd, 1);
 			hns3_schedule_delayed_reset(HNS3_DEV_HW_TO_ADAPTER(hw));
@@ -424,8 +422,14 @@ static void hns3_parse_capability(struct hns3_hw *hw,
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_PTP_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_TX_PUSH_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_TX_PUSH_B, 1);
+	/*
+	 * Currently, the query of link status and link info on copper ports
+	 * are not supported. So it is necessary for driver to set the copper
+	 * capability bit to zero when the firmware supports the configuration
+	 * of the PHY.
+	 */
 	if (hns3_get_bit(caps, HNS3_CAPS_PHY_IMP_B))
-		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_COPPER_B, 1);
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_COPPER_B, 0);
 	if (hns3_get_bit(caps, HNS3_CAPS_TQP_TXRX_INDEP_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_INDEP_TXRX_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_STASH_B))
@@ -442,7 +446,7 @@ hns3_build_api_caps(void)
 	return rte_cpu_to_le_32(api_caps);
 }
 
-static enum hns3_cmd_status
+static int
 hns3_cmd_query_firmware_version_and_capability(struct hns3_hw *hw)
 {
 	struct hns3_query_version_cmd *resp;

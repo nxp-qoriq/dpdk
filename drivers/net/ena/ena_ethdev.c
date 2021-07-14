@@ -51,6 +51,8 @@
 
 #define ENA_MIN_RING_DESC	128
 
+#define ENA_PTYPE_HAS_HASH	(RTE_PTYPE_L4_TCP | RTE_PTYPE_L4_UDP)
+
 enum ethtool_stringset {
 	ETH_SS_TEST             = 0,
 	ETH_SS_STATS,
@@ -313,6 +315,11 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 			ol_flags |= PKT_RX_L4_CKSUM_BAD;
 		else
 			ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+
+	if (likely((packet_type & ENA_PTYPE_HAS_HASH) && !ena_rx_ctx->frag)) {
+		ol_flags |= PKT_RX_RSS_HASH;
+		mbuf->hash.rss = ena_rx_ctx->hash;
+	}
 
 	mbuf->ol_flags = ol_flags;
 	mbuf->packet_type = packet_type;
@@ -767,8 +774,10 @@ static void ena_tx_queue_release_bufs(struct ena_ring *ring)
 	for (i = 0; i < ring->ring_size; ++i) {
 		struct ena_tx_buffer *tx_buf = &ring->tx_buffer_info[i];
 
-		if (tx_buf->mbuf)
+		if (tx_buf->mbuf) {
 			rte_pktmbuf_free(tx_buf->mbuf);
+			tx_buf->mbuf = NULL;
+		}
 	}
 }
 
@@ -1273,9 +1282,6 @@ static int ena_tx_queue_setup(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	if (nb_desc == RTE_ETH_DEV_FALLBACK_TX_RINGSIZE)
-		nb_desc = adapter->max_tx_ring_size;
-
 	txq->port_id = dev->data->port_id;
 	txq->next_to_clean = 0;
 	txq->next_to_use = 0;
@@ -1346,9 +1352,6 @@ static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 			queue_idx);
 		return ENA_COM_FAULT;
 	}
-
-	if (nb_desc == RTE_ETH_DEV_FALLBACK_RX_RINGSIZE)
-		nb_desc = adapter->max_rx_ring_size;
 
 	if (!rte_is_power_of_2(nb_desc)) {
 		PMD_DRV_LOG(ERR,
@@ -1457,7 +1460,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 		"bad ring state\n");
 
 	/* get resources for incoming packets */
-	rc = rte_mempool_get_bulk(rxq->mb_pool, (void **)mbufs, count);
+	rc = rte_pktmbuf_alloc_bulk(rxq->mb_pool, mbufs, count);
 	if (unlikely(rc < 0)) {
 		rte_atomic64_inc(&rxq->adapter->drv_stats->rx_nombuf);
 		++rxq->rx_stats.mbuf_alloc_fail;
@@ -1486,8 +1489,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 	if (unlikely(i < count)) {
 		PMD_DRV_LOG(WARNING, "refilled rx qid %d with only %d "
 			"buffers (from %d)\n", rxq->id, i, count);
-		rte_mempool_put_bulk(rxq->mb_pool, (void **)(&mbufs[i]),
-				     count - i);
+		rte_pktmbuf_free_bulk(&mbufs[i], count - i);
 		++rxq->rx_stats.refill_partial;
 	}
 
@@ -1959,6 +1961,9 @@ static int ena_dev_configure(struct rte_eth_dev *dev)
 
 	adapter->state = ENA_ADAPTER_STATE_CONFIG;
 
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+
 	adapter->tx_selected_offloads = dev->data->dev_conf.txmode.offloads;
 	adapter->rx_selected_offloads = dev->data->dev_conf.rxmode.offloads;
 	return 0;
@@ -2035,6 +2040,7 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 
 	/* Inform framework about available features */
 	dev_info->rx_offload_capa = rx_feat;
+	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_RSS_HASH;
 	dev_info->rx_queue_offload_capa = rx_feat;
 	dev_info->tx_offload_capa = tx_feat;
 	dev_info->tx_queue_offload_capa = tx_feat;
@@ -2066,6 +2072,9 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 					adapter->max_tx_sgl_size);
 	dev_info->tx_desc_lim.nb_mtu_seg_max = RTE_MIN(ENA_PKT_MAX_BUFS,
 					adapter->max_tx_sgl_size);
+
+	dev_info->default_rxportconf.ring_size = ENA_DEFAULT_RING_SIZE;
+	dev_info->default_txportconf.ring_size = ENA_DEFAULT_RING_SIZE;
 
 	return 0;
 }
@@ -2243,8 +2252,6 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			rte_atomic64_inc(&rx_ring->adapter->drv_stats->ierrors);
 			++rx_ring->rx_stats.bad_csum;
 		}
-
-		mbuf->hash.rss = ena_rx_ctx.hash;
 
 		rx_pkts[completed] = mbuf;
 		rx_ring->rx_stats.bytes += mbuf->pkt_len;
@@ -2864,7 +2871,7 @@ static int ena_process_bool_devarg(const char *key,
 	}
 
 	/* Now, assign it to the proper adapter field. */
-	if (strcmp(key, ENA_DEVARG_LARGE_LLQ_HDR))
+	if (strcmp(key, ENA_DEVARG_LARGE_LLQ_HDR) == 0)
 		adapter->use_large_llq_hdr = bool_value;
 
 	return 0;
@@ -2875,6 +2882,7 @@ static int ena_parse_devargs(struct ena_adapter *adapter,
 {
 	static const char * const allowed_args[] = {
 		ENA_DEVARG_LARGE_LLQ_HDR,
+		NULL,
 	};
 	struct rte_kvargs *kvlist;
 	int rc;
@@ -2972,7 +2980,7 @@ static void ena_notification(void *data,
 			aenq_e->aenq_common_desc.group,
 			ENA_ADMIN_NOTIFICATION);
 
-	switch (aenq_e->aenq_common_desc.syndrom) {
+	switch (aenq_e->aenq_common_desc.syndrome) {
 	case ENA_ADMIN_UPDATE_HINTS:
 		hints = (struct ena_admin_ena_hw_hints *)
 			(&aenq_e->inline_data_w4);
@@ -2980,7 +2988,7 @@ static void ena_notification(void *data,
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid aenq notification link state %d\n",
-			aenq_e->aenq_common_desc.syndrom);
+			aenq_e->aenq_common_desc.syndrome);
 	}
 }
 

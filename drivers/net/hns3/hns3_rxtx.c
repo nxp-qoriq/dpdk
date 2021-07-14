@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_bus_pci.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
+#include <rte_geneve.h>
 #include <rte_vxlan.h>
 #include <rte_ethdev_driver.h>
 #include <rte_io.h>
 #include <rte_net.h>
 #include <rte_malloc.h>
-#if defined(RTE_ARCH_ARM64) && defined(__ARM_FEATURE_SVE)
+#if defined(RTE_ARCH_ARM64)
 #include <rte_cpuflags.h>
 #endif
 
@@ -624,13 +625,9 @@ static int
 hns3pf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 {
 #define HNS3_TQP_RESET_TRY_MS	200
+	uint16_t wait_time = 0;
 	uint8_t reset_status;
-	uint64_t end;
 	int ret;
-
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
 
 	/*
 	 * In current version VF is not supported when PF is driven by DPDK
@@ -642,17 +639,18 @@ hns3pf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 		hns3_err(hw, "Send reset tqp cmd fail, ret = %d", ret);
 		return ret;
 	}
-	end = get_timeofday_ms() + HNS3_TQP_RESET_TRY_MS;
+
 	do {
 		/* Wait for tqp hw reset */
 		rte_delay_ms(HNS3_POLL_RESPONE_MS);
+		wait_time += HNS3_POLL_RESPONE_MS;
 		ret = hns3_get_tqp_reset_status(hw, queue_id, &reset_status);
 		if (ret)
 			goto tqp_reset_fail;
 
 		if (reset_status)
 			break;
-	} while (get_timeofday_ms() < end);
+	} while (wait_time < HNS3_TQP_RESET_TRY_MS);
 
 	if (!reset_status) {
 		ret = -ETIMEDOUT;
@@ -678,11 +676,6 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 	uint8_t msg_data[2];
 	int ret;
 
-	/* Disable VF's queue before send queue reset msg to PF */
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
-
 	memcpy(msg_data, &queue_id, sizeof(uint16_t));
 
 	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
@@ -694,14 +687,105 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 }
 
 static int
-hns3_reset_tqp(struct hns3_adapter *hns, uint16_t queue_id)
+hns3_reset_rcb_cmd(struct hns3_hw *hw, uint8_t *reset_status)
 {
-	struct hns3_hw *hw = &hns->hw;
+	struct hns3_reset_cmd *req;
+	struct hns3_cmd_desc desc;
+	int ret;
 
-	if (hns->is_vf)
-		return hns3vf_reset_tqp(hw, queue_id);
-	else
-		return hns3pf_reset_tqp(hw, queue_id);
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CFG_RST_TRIGGER, false);
+	req = (struct hns3_reset_cmd *)desc.data;
+	hns3_set_bit(req->mac_func_reset, HNS3_CFG_RESET_RCB_B, 1);
+
+	/*
+	 * The start qid should be the global qid of the first tqp of the
+	 * function which should be reset in this port. Since our PF not
+	 * support take over of VFs, so we only need to reset function 0,
+	 * and its start qid is always 0.
+	 */
+	req->fun_reset_rcb_vqid_start = rte_cpu_to_le_16(0);
+	req->fun_reset_rcb_vqid_num = rte_cpu_to_le_16(hw->cfg_max_queues);
+
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset cmd, ret = %d.", ret);
+		return ret;
+	}
+
+	*reset_status = req->fun_reset_rcb_return_status;
+	return 0;
+}
+
+static int
+hns3pf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3_RESET_RCB_NOT_SUPPORT	0U
+#define HNS3_RESET_ALL_TQP_SUCCESS	1U
+	uint8_t reset_status;
+	int ret;
+	int i;
+
+	ret = hns3_reset_rcb_cmd(hw, &reset_status);
+	if (ret)
+		return ret;
+
+	/*
+	 * If the firmware version is low, it may not support the rcb reset
+	 * which means reset all the tqps at a time. In this case, we should
+	 * reset tqps one by one.
+	 */
+	if (reset_status == HNS3_RESET_RCB_NOT_SUPPORT) {
+		for (i = 0; i < hw->cfg_max_queues; i++) {
+			ret = hns3pf_reset_tqp(hw, i);
+			if (ret) {
+				hns3_err(hw,
+				  "fail to reset tqp, queue_id = %d, ret = %d.",
+				  i, ret);
+				return ret;
+			}
+		}
+	} else if (reset_status != HNS3_RESET_ALL_TQP_SUCCESS) {
+		hns3_err(hw, "fail to reset all tqps, reset_status = %u.",
+				reset_status);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int
+hns3vf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3VF_RESET_ALL_TQP_DONE	1U
+	uint8_t reset_status;
+	uint8_t msg_data[2];
+	int ret;
+	int i;
+
+	memset(msg_data, 0, sizeof(uint16_t));
+	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
+				sizeof(msg_data), true, &reset_status,
+				sizeof(reset_status));
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset mbx, ret = %d.", ret);
+		return ret;
+	}
+
+	if (reset_status == HNS3VF_RESET_ALL_TQP_DONE)
+		return 0;
+
+	/*
+	 * If the firmware version or kernel PF version is low, it may not
+	 * support the rcb reset which means reset all the tqps at a time.
+	 * In this case, we should reset tqps one by one.
+	 */
+	for (i = 1; i < hw->cfg_max_queues; i++) {
+		ret = hns3vf_reset_tqp(hw, i);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 int
@@ -710,14 +794,21 @@ hns3_reset_all_tqps(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	int ret, i;
 
+	/* Disable all queues before reset all queues */
 	for (i = 0; i < hw->cfg_max_queues; i++) {
-		ret = hns3_reset_tqp(hns, i);
+		ret = hns3_tqp_enable(hw, i, false);
 		if (ret) {
-			hns3_err(hw, "Failed to reset No.%d queue: %d", i, ret);
+			hns3_err(hw,
+			    "fail to disable tqps before tqps reset, ret = %d.",
+			    ret);
 			return ret;
 		}
 	}
-	return 0;
+
+	if (hns->is_vf)
+		return hns3vf_reset_all_tqps(hw);
+	else
+		return hns3pf_reset_all_tqps(hw);
 }
 
 static int
@@ -1873,8 +1964,6 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
-		RTE_PTYPE_L2_ETHER_VLAN,
-		RTE_PTYPE_L2_ETHER_QINQ,
 		RTE_PTYPE_L2_ETHER_LLDP,
 		RTE_PTYPE_L2_ETHER_ARP,
 		RTE_PTYPE_L3_IPV4,
@@ -1888,8 +1977,6 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_TUNNEL_GRE,
 		RTE_PTYPE_INNER_L2_ETHER,
-		RTE_PTYPE_INNER_L2_ETHER_VLAN,
-		RTE_PTYPE_INNER_L2_ETHER_QINQ,
 		RTE_PTYPE_INNER_L3_IPV4,
 		RTE_PTYPE_INNER_L3_IPV6,
 		RTE_PTYPE_INNER_L3_IPV4_EXT,
@@ -1915,32 +2002,12 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 static void
 hns3_init_non_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 {
-	tbl->l2l3table[0][0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[0][1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[0][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[0][3] = RTE_PTYPE_L2_ETHER;
-	tbl->l2l3table[0][4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[0][5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[0][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[0][15] = RTE_PTYPE_L2_ETHER;
-
-	tbl->l2l3table[1][0] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[1][1] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[1][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[1][3] = RTE_PTYPE_L2_ETHER_VLAN;
-	tbl->l2l3table[1][4] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[1][5] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[1][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[1][15] = RTE_PTYPE_L2_ETHER_VLAN;
-
-	tbl->l2l3table[2][0] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[2][1] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[2][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[2][3] = RTE_PTYPE_L2_ETHER_QINQ;
-	tbl->l2l3table[2][4] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[2][5] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[2][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[2][15] = RTE_PTYPE_L2_ETHER_QINQ;
+	tbl->l3table[0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
+	tbl->l3table[1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
+	tbl->l3table[2] = RTE_PTYPE_L2_ETHER_ARP;
+	tbl->l3table[4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
+	tbl->l3table[5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
+	tbl->l3table[6] = RTE_PTYPE_L2_ETHER_LLDP;
 
 	tbl->l4table[0] = RTE_PTYPE_L4_UDP;
 	tbl->l4table[1] = RTE_PTYPE_L4_TCP;
@@ -1953,17 +2020,17 @@ hns3_init_non_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 static void
 hns3_init_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 {
-	tbl->inner_l2table[0] = RTE_PTYPE_INNER_L2_ETHER;
-	tbl->inner_l2table[1] = RTE_PTYPE_INNER_L2_ETHER_VLAN;
-	tbl->inner_l2table[2] = RTE_PTYPE_INNER_L2_ETHER_QINQ;
-
-	tbl->inner_l3table[0] = RTE_PTYPE_INNER_L3_IPV4;
-	tbl->inner_l3table[1] = RTE_PTYPE_INNER_L3_IPV6;
+	tbl->inner_l3table[0] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV4;
+	tbl->inner_l3table[1] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV6;
 	/* There is not a ptype for inner ARP/RARP */
 	tbl->inner_l3table[2] = RTE_PTYPE_UNKNOWN;
 	tbl->inner_l3table[3] = RTE_PTYPE_UNKNOWN;
-	tbl->inner_l3table[4] = RTE_PTYPE_INNER_L3_IPV4_EXT;
-	tbl->inner_l3table[5] = RTE_PTYPE_INNER_L3_IPV6_EXT;
+	tbl->inner_l3table[4] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV4_EXT;
+	tbl->inner_l3table[5] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV6_EXT;
 
 	tbl->inner_l4table[0] = RTE_PTYPE_INNER_L4_UDP;
 	tbl->inner_l4table[1] = RTE_PTYPE_INNER_L4_TCP;
@@ -1974,19 +2041,15 @@ hns3_init_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 	tbl->inner_l4table[4] = RTE_PTYPE_UNKNOWN;
 	tbl->inner_l4table[5] = RTE_PTYPE_INNER_L4_ICMP;
 
-	tbl->ol2table[0] = RTE_PTYPE_L2_ETHER;
-	tbl->ol2table[1] = RTE_PTYPE_L2_ETHER_VLAN;
-	tbl->ol2table[2] = RTE_PTYPE_L2_ETHER_QINQ;
-
-	tbl->ol3table[0] = RTE_PTYPE_L3_IPV4;
-	tbl->ol3table[1] = RTE_PTYPE_L3_IPV6;
+	tbl->ol3table[0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
+	tbl->ol3table[1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
 	tbl->ol3table[2] = RTE_PTYPE_UNKNOWN;
 	tbl->ol3table[3] = RTE_PTYPE_UNKNOWN;
-	tbl->ol3table[4] = RTE_PTYPE_L3_IPV4_EXT;
-	tbl->ol3table[5] = RTE_PTYPE_L3_IPV6_EXT;
+	tbl->ol3table[4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
+	tbl->ol3table[5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
 
 	tbl->ol4table[0] = RTE_PTYPE_UNKNOWN;
-	tbl->ol4table[1] = RTE_PTYPE_TUNNEL_VXLAN;
+	tbl->ol4table[1] = RTE_PTYPE_L4_UDP | RTE_PTYPE_TUNNEL_VXLAN;
 	tbl->ol4table[2] = RTE_PTYPE_TUNNEL_NVGRE;
 }
 
@@ -2483,6 +2546,16 @@ hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 }
 
 static bool
+hns3_get_default_vec_support(void)
+{
+#if defined(RTE_ARCH_ARM64)
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON))
+		return true;
+#endif
+	return false;
+}
+
+static bool
 hns3_check_sve_support(void)
 {
 #if defined(RTE_ARCH_ARM64) && defined(__ARM_FEATURE_SVE)
@@ -2498,9 +2571,12 @@ hns3_get_rx_function(struct rte_eth_dev *dev)
 	struct hns3_adapter *hns = dev->data->dev_private;
 	uint64_t offloads = dev->data->dev_conf.rxmode.offloads;
 
-	if (hns->rx_vec_allowed && hns3_rx_check_vec_support(dev) == 0)
-		return hns3_check_sve_support() ? hns3_recv_pkts_vec_sve :
-		       hns3_recv_pkts_vec;
+	if (hns->rx_vec_allowed && hns3_rx_check_vec_support(dev) == 0) {
+		if (hns3_get_default_vec_support())
+			return hns3_recv_pkts_vec;
+		else if (hns3_check_sve_support())
+			return hns3_recv_pkts_vec_sve;
+	}
 
 	if (hns->rx_simple_allowed && !dev->data->scattered_rx &&
 	    (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0)
@@ -2640,6 +2716,7 @@ hns3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 					     HNS3_RING_TX_TAIL_REG);
 	txq->min_tx_pkt_len = hw->min_tx_pkt_len;
 	txq->tso_mode = hw->tso_mode;
+	txq->udp_cksum_mode = hw->udp_cksum_mode;
 	txq->over_length_pkt_cnt = 0;
 	txq->exceed_limit_bd_pkt_cnt = 0;
 	txq->exceed_limit_bd_reassem_fail = 0;
@@ -3083,6 +3160,7 @@ hns3_parse_l4_cksum_params(struct rte_mbuf *m, uint32_t *type_cs_vlan_tso_len)
 	uint32_t tmp;
 	/* Enable L4 checksum offloads */
 	switch (ol_flags & (PKT_TX_L4_MASK | PKT_TX_TCP_SEG)) {
+	case PKT_TX_TCP_CKSUM | PKT_TX_TCP_SEG:
 	case PKT_TX_TCP_CKSUM:
 	case PKT_TX_TCP_SEG:
 		tmp = *type_cs_vlan_tso_len;
@@ -3292,6 +3370,69 @@ hns3_vld_vlan_chk(struct hns3_tx_queue *txq, struct rte_mbuf *m)
 }
 #endif
 
+static uint16_t
+hns3_udp_cksum_help(struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	uint16_t cksum = 0;
+	uint32_t l4_len;
+
+	if (ol_flags & PKT_TX_IPV4) {
+		struct rte_ipv4_hdr *ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv4_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv4_hdr->total_length) - m->l3_len;
+	} else {
+		struct rte_ipv6_hdr *ipv6_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv6_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv6_hdr->payload_len);
+	}
+
+	rte_raw_cksum_mbuf(m, m->l2_len + m->l3_len, l4_len, &cksum);
+
+	cksum = ~cksum;
+	/*
+	 * RFC 768:If the computed checksum is zero for UDP, it is transmitted
+	 * as all ones
+	 */
+	if (cksum == 0)
+		cksum = 0xffff;
+
+	return (uint16_t)cksum;
+}
+
+static bool
+hns3_validate_tunnel_cksum(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	struct rte_udp_hdr *udp_hdr;
+	uint16_t dst_port;
+
+	if (tx_queue->udp_cksum_mode == HNS3_SPECIAL_PORT_HW_CKSUM_MODE ||
+	    ol_flags & PKT_TX_TUNNEL_MASK ||
+	    (ol_flags & PKT_TX_L4_MASK) != PKT_TX_UDP_CKSUM)
+		return true;
+	/*
+	 * A UDP packet with the same dst_port as VXLAN\VXLAN_GPE\GENEVE will
+	 * be recognized as a tunnel packet in HW. In this case, if UDP CKSUM
+	 * offload is set and the tunnel mask has not been set, the CKSUM will
+	 * be wrong since the header length is wrong and driver should complete
+	 * the CKSUM to avoid CKSUM error.
+	 */
+	udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+						m->l2_len + m->l3_len);
+	dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+	switch (dst_port) {
+	case RTE_VXLAN_DEFAULT_PORT:
+	case RTE_VXLAN_GPE_DEFAULT_PORT:
+	case RTE_GENEVE_DEFAULT_PORT:
+		udp_hdr->dgram_cksum = hns3_udp_cksum_help(m);
+		m->ol_flags = ol_flags & ~PKT_TX_L4_MASK;
+		return false;
+	default:
+		return true;
+	}
+}
+
 static int
 hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 {
@@ -3335,6 +3476,9 @@ hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 		rte_errno = -ret;
 		return ret;
 	}
+
+	if (!hns3_validate_tunnel_cksum(tx_queue, m))
+		return 0;
 
 	hns3_outer_header_cksum_prepare(m);
 
@@ -3734,8 +3878,10 @@ hns3_get_tx_function(struct rte_eth_dev *dev, eth_tx_prep_t *prep)
 
 	if (hns->tx_vec_allowed && hns3_tx_check_vec_support(dev) == 0) {
 		*prep = NULL;
-		return hns3_check_sve_support() ? hns3_xmit_pkts_vec_sve :
-			hns3_xmit_pkts_vec;
+		if (hns3_get_default_vec_support())
+			return hns3_xmit_pkts_vec;
+		else if (hns3_check_sve_support())
+			return hns3_xmit_pkts_vec_sve;
 	}
 
 	if (hns->tx_simple_allowed &&
@@ -3819,10 +3965,12 @@ hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	ret = hns3_reset_queue(hw, rx_queue_id, HNS3_RING_TYPE_RX);
 	if (ret) {
 		hns3_err(hw, "fail to reset Rx queue %u, ret = %d.",
 			 rx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
@@ -3830,11 +3978,13 @@ hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (ret) {
 		hns3_err(hw, "fail to init Rx queue %u, ret = %d.",
 			 rx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
 	hns3_enable_rxq(rxq, true);
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return ret;
 }
@@ -3861,12 +4011,14 @@ hns3_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	hns3_enable_rxq(rxq, false);
 
 	hns3_rx_queue_release_mbufs(rxq);
 
 	hns3_reset_sw_rxq(rxq);
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return 0;
 }
@@ -3881,16 +4033,19 @@ hns3_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	ret = hns3_reset_queue(hw, tx_queue_id, HNS3_RING_TYPE_TX);
 	if (ret) {
 		hns3_err(hw, "fail to reset Tx queue %u, ret = %d.",
 			 tx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
 	hns3_init_txq(txq);
 	hns3_enable_txq(txq, true);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return ret;
 }
@@ -3904,6 +4059,7 @@ hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	hns3_enable_txq(txq, false);
 	hns3_tx_queue_release_mbufs(txq);
 	/*
@@ -3915,6 +4071,7 @@ hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	 */
 	hns3_init_txq(txq);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return 0;
 }

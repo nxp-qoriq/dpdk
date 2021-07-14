@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_ETHDEV_H_
 #define _HNS3_ETHDEV_H_
 
+#include <pthread.h>
 #include <sys/time.h>
 #include <rte_ethdev_driver.h>
 
@@ -42,6 +43,9 @@
 
 #define HNS3_UNLIMIT_PROMISC_MODE       0
 #define HNS3_LIMIT_PROMISC_MODE         1
+
+#define HNS3_SPECIAL_PORT_SW_CKSUM_MODE         0
+#define HNS3_SPECIAL_PORT_HW_CKSUM_MODE         1
 
 #define HNS3_UC_MACADDR_NUM		128
 #define HNS3_VF_UC_MACADDR_NUM		48
@@ -144,7 +148,6 @@ struct hns3_tc_queue_info {
 };
 
 struct hns3_cfg {
-	uint8_t vmdq_vport_num;
 	uint8_t tc_num;
 	uint16_t tqp_desc_num;
 	uint16_t rx_buf_len;
@@ -424,7 +427,6 @@ struct hns3_hw {
 	struct hns3_cmq cmq;
 	struct hns3_mbx_resp_status mbx_resp; /* mailbox response */
 	struct hns3_mbx_arq_ring arq;         /* mailbox async rx queue */
-	pthread_t irq_thread_id;
 	struct hns3_mac mac;
 	unsigned int secondary_cnt; /* Number of secondary processes init'd. */
 	struct hns3_tqp_stats tqp_stats;
@@ -454,8 +456,7 @@ struct hns3_hw {
 
 	uint8_t num_tc;             /* Total number of enabled TCs */
 	uint8_t hw_tc_map;
-	enum hns3_fc_mode current_mode;
-	enum hns3_fc_mode requested_mode;
+	enum hns3_fc_mode requested_fc_mode; /* FC mode requested by user */
 	struct hns3_dcb_info dcb_info;
 	enum hns3_fc_status current_fc_status; /* current flow control status */
 	struct hns3_tc_queue_info tc_queue[HNS3_MAX_TC_NUM];
@@ -535,8 +536,27 @@ struct hns3_hw {
 	 */
 	uint8_t promisc_mode;
 	uint8_t max_non_tso_bd_num; /* max BD number of one non-TSO packet */
+	/*
+	 * udp checksum mode.
+	 * value range:
+	 *      HNS3_SPECIAL_PORT_HW_CKSUM_MODE/HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *
+	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *     In this mode, HW can not do checksum for special UDP port like
+	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
+	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     do the checksum for these packets to avoid a checksum error.
+	 *
+	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
+	 *     In this mode, HW does not have the preceding problems and can
+	 *     directly calculate the checksum of these UDP packets.
+	 */
+	uint8_t udp_cksum_mode;
 
 	struct hns3_port_base_vlan_config port_base_vlan_cfg;
+
+	pthread_mutex_t flows_lock; /* rte_flow ops lock */
+
 	/*
 	 * PMD setup and configuration is not thread safe. Since it is not
 	 * performance sensitive, it is better to guarantee thread-safety
@@ -659,12 +679,10 @@ struct hns3_mp_param {
 #define HNS3_OL4TBL_NUM	16
 
 struct hns3_ptype_table {
-	uint32_t l2l3table[HNS3_L2TBL_NUM][HNS3_L3TBL_NUM];
+	uint32_t l3table[HNS3_L3TBL_NUM];
 	uint32_t l4table[HNS3_L4TBL_NUM];
-	uint32_t inner_l2table[HNS3_L2TBL_NUM];
 	uint32_t inner_l3table[HNS3_L3TBL_NUM];
 	uint32_t inner_l4table[HNS3_L4TBL_NUM];
-	uint32_t ol2table[HNS3_OL2TBL_NUM];
 	uint32_t ol3table[HNS3_OL3TBL_NUM];
 	uint32_t ol4table[HNS3_OL4TBL_NUM];
 };
@@ -889,15 +907,9 @@ static inline uint32_t hns3_read_reg(void *base, uint32_t reg)
 #define MSEC_PER_SEC              1000L
 #define USEC_PER_MSEC             1000L
 
-static inline uint64_t
-get_timeofday_ms(void)
-{
-	struct timeval tv;
-
-	(void)gettimeofday(&tv, NULL);
-
-	return (uint64_t)tv.tv_sec * MSEC_PER_SEC + tv.tv_usec / USEC_PER_MSEC;
-}
+void hns3_clock_gettime(struct timeval *tv);
+uint64_t hns3_clock_calctime_ms(struct timeval *tv);
+uint64_t hns3_clock_gettime_ms(void);
 
 static inline uint64_t
 hns3_atomic_test_bit(unsigned int nr, volatile uint64_t *addr)

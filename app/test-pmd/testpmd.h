@@ -423,7 +423,6 @@ extern uint64_t noisy_lkup_num_reads;
 extern uint64_t noisy_lkup_num_reads_writes;
 
 extern uint8_t dcb_config;
-extern uint8_t dcb_test;
 
 extern uint32_t mbuf_data_size_n;
 extern uint16_t mbuf_data_size[MAX_SEGS_BUFFER_SPLIT];
@@ -934,7 +933,7 @@ int set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate,
 
 void port_rss_hash_conf_show(portid_t port_id, int show_rss_key);
 void port_rss_hash_key_update(portid_t port_id, char rss_type[],
-			      uint8_t *hash_key, uint hash_key_len);
+			      uint8_t *hash_key, uint8_t hash_key_len);
 int rx_queue_id_is_invalid(queueid_t rxq_id);
 int tx_queue_id_is_invalid(queueid_t txq_id);
 void setup_gro(const char *onoff, portid_t port_id);

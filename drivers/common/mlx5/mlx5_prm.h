@@ -843,6 +843,8 @@ enum {
 	MLX5_CMD_OP_SUSPEND_QP = 0x50F,
 	MLX5_CMD_OP_RESUME_QP = 0x510,
 	MLX5_CMD_OP_QUERY_NIC_VPORT_CONTEXT = 0x754,
+	MLX5_CMD_OP_ALLOC_Q_COUNTER = 0x771,
+	MLX5_CMD_OP_QUERY_Q_COUNTER = 0x773,
 	MLX5_CMD_OP_ACCESS_REGISTER = 0x805,
 	MLX5_CMD_OP_ALLOC_TRANSPORT_DOMAIN = 0x816,
 	MLX5_CMD_OP_CREATE_TIR = 0x900,
@@ -851,6 +853,7 @@ enum {
 	MLX5_CMD_OP_MODIFY_SQ = 0X905,
 	MLX5_CMD_OP_CREATE_RQ = 0x908,
 	MLX5_CMD_OP_MODIFY_RQ = 0x909,
+	MLX5_CMD_OP_QUERY_RQ = 0x90b,
 	MLX5_CMD_OP_CREATE_TIS = 0x912,
 	MLX5_CMD_OP_QUERY_TIS = 0x915,
 	MLX5_CMD_OP_CREATE_RQT = 0x916,
@@ -1053,6 +1056,7 @@ enum {
 	MLX5_GET_HCA_CAP_OP_MOD_GENERAL_DEVICE = 0x0 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_ETHERNET_OFFLOAD_CAPS = 0x1 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_QOS_CAP = 0xc << 1,
+	MLX5_GET_HCA_CAP_OP_MOD_ROCE = 0x4 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_NIC_FLOW_TABLE = 0x7 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_VDPA_EMULATION = 0x13 << 1,
 };
@@ -1086,6 +1090,20 @@ enum {
 	MLX5_INLINE_MODE_INNER_L2,
 	MLX5_INLINE_MODE_INNER_IP,
 	MLX5_INLINE_MODE_INNER_TCP_UDP,
+};
+
+/* The supported timestamp formats reported in HCA attributes. */
+enum {
+	MLX5_HCA_CAP_TIMESTAMP_FORMAT_FR = 0x0,
+	MLX5_HCA_CAP_TIMESTAMP_FORMAT_RT = 0x1,
+	MLX5_HCA_CAP_TIMESTAMP_FORMAT_FR_RT = 0x2,
+};
+
+/* The timestamp format attributes to configure queues (RQ/SQ/QP). */
+enum {
+	MLX5_QPC_TIMESTAMP_FORMAT_FREE_RUNNING = 0x0,
+	MLX5_QPC_TIMESTAMP_FORMAT_DEFAULT      = 0x1,
+	MLX5_QPC_TIMESTAMP_FORMAT_REAL_TIME    = 0x2,
 };
 
 /* HCA bit masks indicating which Flex parser protocols are already enabled. */
@@ -1350,7 +1368,9 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8 reserved_at_3f8[0x3];
 	u8 log_max_current_uc_list[0x5];
 	u8 general_obj_types[0x40];
-	u8 reserved_at_440[0x20];
+	u8 sq_ts_format[0x2];
+	u8 rq_ts_format[0x2];
+	u8 reserved_at_444[0x1C];
 	u8 reserved_at_460[0x10];
 	u8 max_num_eqs[0x10];
 	u8 reserved_at_480[0x3];
@@ -1540,6 +1560,12 @@ struct mlx5_ifc_flow_table_prop_layout_bits {
 	u8 reserved_at_c0[0x140];
 };
 
+struct mlx5_ifc_roce_caps_bits {
+	u8 reserved_0[0x1e];
+	u8 qp_ts_format[0x2];
+	u8 reserved_at_20[0x7e0];
+};
+
 struct mlx5_ifc_flow_table_nic_cap_bits {
 	u8	   reserved_at_0[0x200];
 	struct mlx5_ifc_flow_table_prop_layout_bits flow_table_properties;
@@ -1552,6 +1578,7 @@ union mlx5_ifc_hca_cap_union_bits {
 	struct mlx5_ifc_qos_cap_bits qos_cap;
 	struct mlx5_ifc_virtio_emulation_cap_bits vdpa_caps;
 	struct mlx5_ifc_flow_table_nic_cap_bits flow_table_nic_cap;
+	struct mlx5_ifc_roce_caps_bits roce_caps;
 	u8 reserved_at_0[0x8000];
 };
 
@@ -1768,7 +1795,9 @@ struct mlx5_ifc_rqc_bits {
 	u8 reserved_at_c[0x1];
 	u8 flush_in_error_en[0x1];
 	u8 hairpin[0x1];
-	u8 reserved_at_f[0x11];
+	u8 reserved_at_f[0xB];
+	u8 ts_format[0x02];
+	u8 reserved_at_1c[0x4];
 	u8 reserved_at_20[0x8];
 	u8 user_index[0x18];
 	u8 reserved_at_40[0x8];
@@ -1808,6 +1837,24 @@ struct mlx5_ifc_modify_rq_out_bits {
 	u8 reserved_at_8[0x18];
 	u8 syndrome[0x20];
 	u8 reserved_at_40[0x40];
+};
+
+struct mlx5_ifc_query_rq_out_bits {
+	u8 status[0x8];
+	u8 reserved_at_8[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_at_40[0xc0];
+	struct mlx5_ifc_rqc_bits rq_context;
+};
+
+struct mlx5_ifc_query_rq_in_bits {
+	u8 opcode[0x10];
+	u8 reserved_at_10[0x10];
+	u8 reserved_at_20[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_at_40[0x8];
+	u8 rqn[0x18];
+	u8 reserved_at_60[0x20];
 };
 
 struct mlx5_ifc_create_tis_out_bits {
@@ -2056,7 +2103,9 @@ struct mlx5_ifc_sqc_bits {
 	u8 hairpin[0x1];
 	u8 non_wire[0x1];
 	u8 static_sq_wq[0x1];
-	u8 reserved_at_11[0xf];
+	u8 reserved_at_11[0x9];
+	u8 ts_format[0x02];
+	u8 reserved_at_1c[0x4];
 	u8 reserved_at_20[0x8];
 	u8 user_index[0x18];
 	u8 reserved_at_40[0x8];
@@ -2518,7 +2567,9 @@ struct mlx5_ifc_qpc_bits {
 	u8 log_rq_stride[0x3];
 	u8 no_sq[0x1];
 	u8 log_sq_size[0x4];
-	u8 reserved_at_55[0x6];
+	u8 reserved_at_55[0x3];
+	u8 ts_format[0x2];
+	u8 reserved_at_5a[0x1];
 	u8 rlky[0x1];
 	u8 ulp_stateless_offload_mode[0x4];
 	u8 counter_set_id[0x8];
@@ -3015,6 +3066,85 @@ struct mlx5_ifc_query_regexp_register_out_bits {
 	u8 register_data[0x20];
 };
 
+/* Queue counters. */
+struct mlx5_ifc_alloc_q_counter_out_bits {
+	u8 status[0x8];
+	u8 reserved_at_8[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_at_40[0x18];
+	u8 counter_set_id[0x8];
+	u8 reserved_at_60[0x20];
+};
+
+struct mlx5_ifc_alloc_q_counter_in_bits {
+	u8 opcode[0x10];
+	u8 uid[0x10];
+	u8 reserved_at_20[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_at_40[0x40];
+};
+
+struct mlx5_ifc_query_q_counter_out_bits {
+	u8 status[0x8];
+	u8 reserved_at_8[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_at_40[0x40];
+	u8 rx_write_requests[0x20];
+	u8 reserved_at_a0[0x20];
+	u8 rx_read_requests[0x20];
+	u8 reserved_at_e0[0x20];
+	u8 rx_atomic_requests[0x20];
+	u8 reserved_at_120[0x20];
+	u8 rx_dct_connect[0x20];
+	u8 reserved_at_160[0x20];
+	u8 out_of_buffer[0x20];
+	u8 reserved_at_1a0[0x20];
+	u8 out_of_sequence[0x20];
+	u8 reserved_at_1e0[0x20];
+	u8 duplicate_request[0x20];
+	u8 reserved_at_220[0x20];
+	u8 rnr_nak_retry_err[0x20];
+	u8 reserved_at_260[0x20];
+	u8 packet_seq_err[0x20];
+	u8 reserved_at_2a0[0x20];
+	u8 implied_nak_seq_err[0x20];
+	u8 reserved_at_2e0[0x20];
+	u8 local_ack_timeout_err[0x20];
+	u8 reserved_at_320[0xa0];
+	u8 resp_local_length_error[0x20];
+	u8 req_local_length_error[0x20];
+	u8 resp_local_qp_error[0x20];
+	u8 local_operation_error[0x20];
+	u8 resp_local_protection[0x20];
+	u8 req_local_protection[0x20];
+	u8 resp_cqe_error[0x20];
+	u8 req_cqe_error[0x20];
+	u8 req_mw_binding[0x20];
+	u8 req_bad_response[0x20];
+	u8 req_remote_invalid_request[0x20];
+	u8 resp_remote_invalid_request[0x20];
+	u8 req_remote_access_errors[0x20];
+	u8 resp_remote_access_errors[0x20];
+	u8 req_remote_operation_errors[0x20];
+	u8 req_transport_retries_exceeded[0x20];
+	u8 cq_overflow[0x20];
+	u8 resp_cqe_flush_error[0x20];
+	u8 req_cqe_flush_error[0x20];
+	u8 reserved_at_620[0x1e0];
+};
+
+struct mlx5_ifc_query_q_counter_in_bits {
+	u8 opcode[0x10];
+	u8 uid[0x10];
+	u8 reserved_at_20[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_at_40[0x80];
+	u8 clear[0x1];
+	u8 reserved_at_c1[0x1f];
+	u8 reserved_at_e0[0x18];
+	u8 counter_set_id[0x8];
+};
+
 /* CQE format mask. */
 #define MLX5E_CQE_FORMAT_MASK 0xc
 
@@ -3159,6 +3289,23 @@ mlx5_flow_mark_get(uint32_t val)
 #else
 	return val - 1;
 #endif
+}
+
+/**
+ * Convert a timestamp format to configure settings in the queue context.
+ *
+ * @param val
+ *   timestamp format supported by the queue.
+ *
+ * @return
+ *   Converted timstamp format settings.
+ */
+static inline uint32_t
+mlx5_ts_format_conv(uint32_t ts_format)
+{
+	return ts_format == MLX5_HCA_CAP_TIMESTAMP_FORMAT_FR ?
+			MLX5_QPC_TIMESTAMP_FORMAT_FREE_RUNNING :
+			MLX5_QPC_TIMESTAMP_FORMAT_DEFAULT;
 }
 
 #endif /* RTE_PMD_MLX5_PRM_H_ */

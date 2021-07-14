@@ -6,14 +6,14 @@
 #define _RTE_OS_H_
 
 /**
- * This is header should contain any function/macro definition
- * which are not supported natively or named differently in the
- * freebsd OS. Functions will be added in future releases.
+ * This header should contain any definition
+ * which is not supported natively or named differently in FreeBSD.
  */
 
 #include <pthread_np.h>
 
 typedef cpuset_t rte_cpuset_t;
+#define RTE_HAS_CPUSET
 #define RTE_CPU_AND(dst, src1, src2) do \
 { \
 	cpuset_t tmp; \

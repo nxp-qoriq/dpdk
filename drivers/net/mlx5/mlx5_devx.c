@@ -339,6 +339,7 @@ mlx5_rxq_create_devx_rq_resources(struct rte_eth_dev *dev, uint16_t idx)
 	rq_attr.mem_rq_type = MLX5_RQC_MEM_RQ_TYPE_MEMORY_RQ_INLINE;
 	rq_attr.flush_in_error_en = 1;
 	mlx5_devx_create_rq_attr_fill(rxq_data, cqn, &rq_attr);
+	rq_attr.ts_format = mlx5_ts_format_conv(priv->sh->rq_ts_format);
 	/* Fill WQ attributes for this RQ. */
 	if (mlx5_rxq_mprq_enabled(rxq_data)) {
 		rq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ;
@@ -1369,6 +1370,7 @@ mlx5_txq_create_devx_sq_resources(struct rte_eth_dev *dev, uint16_t idx,
 	sq_attr.allow_multi_pkt_send_wqe = !!priv->config.mps;
 	sq_attr.allow_swp = !!priv->config.swp;
 	sq_attr.min_wqe_inline_mode = priv->config.hca_attr.vport_inline_mode;
+	sq_attr.ts_format = mlx5_ts_format_conv(priv->sh->sq_ts_format);
 	sq_attr.wq_attr.uar_page =
 				mlx5_os_get_devx_uar_page_id(priv->sh->tx_uar);
 	sq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC;
@@ -1566,4 +1568,6 @@ struct mlx5_obj_ops devx_obj_ops = {
 	.txq_obj_new = mlx5_txq_devx_obj_new,
 	.txq_obj_modify = mlx5_devx_modify_sq,
 	.txq_obj_release = mlx5_txq_devx_obj_release,
+	.lb_dummy_queue_create = NULL,
+	.lb_dummy_queue_release = NULL,
 };

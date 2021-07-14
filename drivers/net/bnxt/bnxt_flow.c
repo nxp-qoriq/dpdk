@@ -188,11 +188,15 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 				PMD_DRV_LOG(DEBUG, "Parse inner header\n");
 			break;
 		case RTE_FLOW_ITEM_TYPE_ETH:
-			if (!item->spec || !item->mask)
+			if (!item->spec)
 				break;
 
 			eth_spec = item->spec;
-			eth_mask = item->mask;
+
+			if (item->mask)
+				eth_mask = item->mask;
+			else
+				eth_mask = &rte_flow_item_eth_mask;
 
 			/* Source MAC address mask cannot be partially set.
 			 * Should be All 0's or all 1's.
@@ -281,7 +285,12 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			break;
 		case RTE_FLOW_ITEM_TYPE_VLAN:
 			vlan_spec = item->spec;
-			vlan_mask = item->mask;
+
+			if (item->mask)
+				vlan_mask = item->mask;
+			else
+				vlan_mask = &rte_flow_item_vlan_mask;
+
 			if (en & en_ethertype) {
 				rte_flow_error_set(error, EINVAL,
 						   RTE_FLOW_ERROR_TYPE_ITEM,
@@ -324,10 +333,14 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			/* If mask is not involved, we could use EM filters. */
 			ipv4_spec = item->spec;
-			ipv4_mask = item->mask;
 
-			if (!item->spec || !item->mask)
+			if (!item->spec)
 				break;
+
+			if (item->mask)
+				ipv4_mask = item->mask;
+			else
+				ipv4_mask = &rte_flow_item_ipv4_mask;
 
 			/* Only IP DST and SRC fields are maskable. */
 			if (ipv4_mask->hdr.version_ihl ||
@@ -385,10 +398,14 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
 			ipv6_spec = item->spec;
-			ipv6_mask = item->mask;
 
-			if (!item->spec || !item->mask)
+			if (!item->spec)
 				break;
+
+			if (item->mask)
+				ipv6_mask = item->mask;
+			else
+				ipv6_mask = &rte_flow_item_ipv6_mask;
 
 			/* Only IP DST and SRC fields are maskable. */
 			if (ipv6_mask->hdr.vtc_flow ||
@@ -437,10 +454,14 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			break;
 		case RTE_FLOW_ITEM_TYPE_TCP:
 			tcp_spec = item->spec;
-			tcp_mask = item->mask;
 
-			if (!item->spec || !item->mask)
+			if (!item->spec)
 				break;
+
+			if (item->mask)
+				tcp_mask = item->mask;
+			else
+				tcp_mask = &rte_flow_item_tcp_mask;
 
 			/* Check TCP mask. Only DST & SRC ports are maskable */
 			if (tcp_mask->hdr.sent_seq ||
@@ -482,10 +503,14 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			break;
 		case RTE_FLOW_ITEM_TYPE_UDP:
 			udp_spec = item->spec;
-			udp_mask = item->mask;
 
-			if (!item->spec || !item->mask)
+			if (!item->spec)
 				break;
+
+			if (item->mask)
+				udp_mask = item->mask;
+			else
+				udp_mask = &rte_flow_item_udp_mask;
 
 			if (udp_mask->hdr.dgram_len ||
 			    udp_mask->hdr.dgram_cksum) {
@@ -899,6 +924,9 @@ static int bnxt_vnic_prep(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
 	uint64_t rx_offloads = dev_conf->rxmode.offloads;
 	int rc;
+
+	if (bp->nr_vnics > bp->max_vnics - 1)
+		return -ENOMEM;
 
 	rc = bnxt_vnic_grp_alloc(bp, vnic);
 	if (rc)
@@ -1372,8 +1400,8 @@ use_vnic:
 				/* If hash key has not been specified,
 				 * use random hash key.
 				 */
-				prandom_bytes(vnic->rss_hash_key,
-					      HW_HASH_KEY_SIZE);
+				bnxt_prandom_bytes(vnic->rss_hash_key,
+						   HW_HASH_KEY_SIZE);
 			} else {
 				if (rss->key_len > HW_HASH_KEY_SIZE)
 					memcpy(vnic->rss_hash_key,
@@ -1518,6 +1546,7 @@ bnxt_flow_validate(struct rte_eth_dev *dev,
 			bnxt_hwrm_vnic_ctx_free(bp, vnic);
 			bnxt_hwrm_vnic_free(bp, vnic);
 			vnic->rx_queue_cnt = 0;
+			bp->nr_vnics--;
 			PMD_DRV_LOG(DEBUG, "Free VNIC\n");
 		}
 	}
@@ -1976,6 +2005,7 @@ done:
 
 			bnxt_hwrm_vnic_free(bp, vnic);
 			vnic->rx_queue_cnt = 0;
+			bp->nr_vnics--;
 		}
 	} else {
 		rte_flow_error_set(error, -ret,

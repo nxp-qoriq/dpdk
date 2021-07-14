@@ -629,6 +629,7 @@ struct i40e_fdir_flow_ext {
 	uint8_t raw_id;
 	uint8_t is_vf;   /* 1 for VF, 0 for port dev */
 	uint16_t dst_id; /* VF ID, available when is_vf is 1*/
+	uint64_t input_set;
 	bool inner_ip;   /* If there is inner ip */
 	enum i40e_fdir_ip_type iip_type; /* ip type for inner ip */
 	enum i40e_fdir_ip_type oip_type; /* ip type for outer ip */
@@ -1439,8 +1440,8 @@ bool is_i40evf_supported(struct rte_eth_dev *dev);
 
 int i40e_validate_input_set(enum i40e_filter_pctype pctype,
 			    enum rte_filter_type filter, uint64_t inset);
-int i40e_generate_inset_mask_reg(uint64_t inset, uint32_t *mask,
-				 uint8_t nb_elem);
+int i40e_generate_inset_mask_reg(struct i40e_hw *hw, uint64_t inset,
+				 uint32_t *mask, uint8_t nb_elem);
 uint64_t i40e_translate_input_set_reg(enum i40e_mac_type type, uint64_t input);
 void i40e_check_write_reg(struct i40e_hw *hw, uint32_t addr, uint32_t val);
 void i40e_check_write_global_reg(struct i40e_hw *hw,

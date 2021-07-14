@@ -52,8 +52,6 @@ struct bnxt_vnic_info {
 	bool		vlan_strip;
 	bool		func_default;
 	bool		bd_stall;
-	bool		roce_dual;
-	bool		roce_only;
 	bool		rss_dflt_cr;
 
 	STAILQ_HEAD(, bnxt_filter_info)	filter;
@@ -70,7 +68,7 @@ int bnxt_alloc_vnic_attributes(struct bnxt *bp);
 void bnxt_free_vnic_mem(struct bnxt *bp);
 int bnxt_alloc_vnic_mem(struct bnxt *bp);
 int bnxt_vnic_grp_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic);
-void prandom_bytes(void *dest_ptr, size_t len);
+void bnxt_prandom_bytes(void *dest_ptr, size_t len);
 uint16_t bnxt_rte_to_hwrm_hash_types(uint64_t rte_type);
 int bnxt_rte_to_hwrm_hash_level(struct bnxt *bp, uint64_t hash_f, uint32_t lvl);
 uint64_t bnxt_hwrm_to_rte_rss_level(struct bnxt *bp, uint32_t mode);
