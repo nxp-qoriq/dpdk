@@ -385,13 +385,6 @@ Following are some pre-requisites:
            Using configuration not meant for a board can render system unusable
            for DPDK applications.
 
-
-  4. Export the environment variable defining the number of queues configured
-     by the 'fmc' binary above through the provided policy hash file.
-
-     $ export DPAA_NUM_RX_QUEUES=1
-
-
   NOTE: For all the example applications, a port mask is provided for ports to
         be used by application for I/O. For DPAA platform, the number is
         defined by the order of detection which is platform specific. For DPAA2,
