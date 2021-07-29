@@ -355,9 +355,6 @@ Following are some pre-requisites:
     $ mount -t hugetlbfs hugetlbfs /dev/hugetlbfs/
 
   3. By default the system will need fmc scripts to be run prior to uses.
-     However the dynamic FMC configurations for queue Management can be done via:
-
-     export DPAA_FMCLESS_MODE=1
 
      By default, =>
      Before running application, a binary `fmc` needs to be executed to
@@ -711,26 +708,15 @@ the primary application (the first one) for information. For example, the
 sample application 'dpdk-pdump' allows capturing of packets arriving on
 other interfaces/devices available in DPDK.
 
-Compiling 'dpdk-pdump':
+Compiling 'dpdk-pdump' on host:
 
-For compiling 'dpdk-pdump', enable 'CONFIG_RTE_LIBRTE_PMD_PCAP=y' and
-'CONFIG_RTE_LIBRTE_PDUMP=y' configuration. Later configuration is to enable
-dumping packets to a PCAP format which can then be used to read using
-applications like Wireshark. PCAP support is optional.
+Follow the below steps to compile DPDK on host:
+------------------------------------------------
+	$ meson arm64-build
+	$ ninja -C arm64-build install
 
-For PCAP support, 'libpcap' library has to be provided to DPDK during
-compilation.
-
-    Step 1: Compile 'libpcap' externally using same toolchain used for
-            compiling DPDK drivers/sample applications.
-
-    Step 2: While compiling DPDK, pass EXTRA_CFLAGS="-I/path/to/headers" and
-            EXTRA_LDFLAGS="-L/path/to/compiled/libraries". Similar to:
-
-    make T=arm64-dpaa-linuxapp-gcc install EXTRA_CFLAGS="-I/path/libpcap/include" EXTRA_LDFLAGS="-L/path/libpca/lib" CONFIG_RTE_KNI_KMOD=n CONFIG_RTE_EAL_IGB_UIO=n -j 4
-
-    'dpdk-pdump'` would be available in the <T>/app folder along with 'testpmd'
-    and other inbuilt DPDK apps.
+'dpdk-pdump'` would be available in the arm64-build/app folder along with 'testpmd'
+and other inbuilt DPDK apps.
 
 Executing 'dpdk-pdump':
     Pre-condition: disable ASLR:
@@ -801,81 +787,26 @@ Building Pktgen Application
 ======================================
 
 Pktgen is a packet generator powered by DPDK. It requires DPDK environment for
-compilation and DPDK compliant infrastructurefor execution. DPAA and DPAA2 DPDK
+compilation and DPDK compliant infrastructure for execution. DPAA and DPAA2 DPDK
 PMD (Poll Mode Drivers) can be used by Pktgen for building a packet generator
 using the DPAA infrastructure.
 
-
-Prerequisites for cross compiling pktgen
---------------------------------------
-
-For compiling pktgen, libpcap and liblua library is required. They need to be
-build as cross compiled targets.
-
-Add the Cross compiler path to $PATH:
-	$ export PATH=`echo $PATH`:<Path to uncompressed toolchain>/bin
-Refer to Section "Cross compiled toolchain For ARM64"
-
-Install these two packages, flex and bison.
-	$ sudo apt install flex
-	$ sudo apt install bison
-
-1. Compiling libpcap:
-	$ wget https://www.tcpdump.org/release/libpcap-1.9.1.tar.gz
-	$ tar -xzvf libpcap-1.9.1.tar.gz
-	$ cd libpcap-1.9.1/
-	$ ./configure --host=aarch64-linux-gnu --with-pcap=linux
-	$ make
-
-   We will also need some changes in libpcap-1.9.1/pcap/bpf.h file, so that
-   pktgen can be compiled using its library. These changes can be done after
-   compiling the libpcap library.
-
-   Add these lines in the code(lines with + in front of them are new lines):
-
-+	#ifndef BPF_STMT
-	#define BPF_STMT(code, k) { (u_short)(code), 0, 0, k }
-+	#endif
-+	#ifndef BPF_JUMP
-	#define BPF_JUMP(code, k, jt, jf) { (u_short)(code), jt, jf, k }
-+	#endif
-
-
-2. Compiling lreadline(Required for liblua compilation):
-	$ wget https://git.savannah.gnu.org/cgit/readline.git/snapshot/readline-8.0.tar.gz
-	$ tar -xzvf readline-8.0.tar.gz
-	$ cd readline-8.0/
-	$ ./configure --host=aarch64-linux-gnu
-	$ make
-
-3. Compiling lncurses(Required for liblua compilation):
-	$ wget https://invisible-island.net/datafiles/release/ncurses.tar.gz
-	$ tar -xzvf ncurses.tar.gz
-	$ cd ncurses-6.2/
-	$ ./configure --host=aarch64-linux-gnu
-	$ make
-
-4. Compiling liblua:
-	$ wget https://www.lua.org/ftp/lua-5.3.5.tar.gz
-	$ tar -xzvf lua-5.3.5.tar.gz
-	$ cd lua-5.3.5/
-	$ make CC=aarch64-linux-gnu-gcc CFLAGS="-I/<path to>/readline-8.0" LDFLAGS="-L/<path to>/readline-8.0 -L/<path to>/ncurses-6.2/lib" MYLIBS=-lncurses linux
-
-
-Steps to cross compile pktgen
---------------------------------------
+Steps to compile pktgen on host:
+----------------------------------
 
 These steps assumes that compiled DPDK binaries are available in DPDK build
-directory. Refer the section "Components for Build & Execution Environment"
-for compilation steps of DPDK.
+directory. Refer the section "`dpdk-pdump` for capturing packets"
+for compilation steps of DPDK on host.
 
 	$ export RTE_SDK=<path to compiled DPDK source code containing build folder>
-	$ export RTE_TARGET=arm64-dpaa-linuxapp-gcc
+	$ export RTE_TARGET=arm64-build
+	$ export PKG_CONFIG_PATH=<path to meson-private in arm64-build folder>
 	$ git clone http://dpdk.org/git/apps/pktgen-dpdk
 	$ cd pktgen-dpdk/
-	$ make LUA_PKG_CFLAGS="-I/<path to>/libpcap-1.9.1 -I/<path to>/lua-5.3.5/src" LUA_PKG_LDFLAGS="-L/<path to>/libpcap-1.9.1 -L/<path to>/lua-5.3.5/src"
+	$ meson build -Dc_args="-DRTE_FORCE_INTRINSICS"
+	$ ninja -C build install
 
-Pktgen app location: pktgen-dpdk/app/arm64-dpaa-linuxapp-gcc/pktgen
+Pktgen app location: pktgen-dpdk/build/app/pktgen
 Pktgen Pktgen.lua location: pktgen-dpdk/Pktgen.lua
 
 
@@ -1031,13 +962,11 @@ Common for DPAA1 & DPAA2
 
 DPAA1:
 ------
-1. DPAA_FMCLESS_MODE          - Dynamic Queue Distribution. No need to run FMC scripts.
-
-2. DPAA_RX_TAILDROP_THRESHOLD - Size of the Rx queue taildrop, in packets. Default is 256.
+1. DPAA_RX_TAILDROP_THRESHOLD - Size of the Rx queue taildrop, in packets. Default is 256.
 				If set to 0, this would disable taildrop.
 				(Only applicable for ethernet devices)
 
-3. DPAA_TX_TAILDROP_THRESHOLD - Size of the Tx queue taildrop, in packets. Default is 0.
+2. DPAA_TX_TAILDROP_THRESHOLD - Size of the Tx queue taildrop, in packets. Default is 0.
 				If set to 0, this would disable taildrop.
 				(Only applicable for ethernet devices)
 

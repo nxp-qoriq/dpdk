@@ -104,11 +104,14 @@ The setup is as given below:
 
 3. Compilation
 
-   compilation command
-   -------------------
-   Note: if you are using Scatter Gather support, better to build DPDK with
-	  CONFIG_RTE_LIBRTE_DPAA2_USE_PHYS_IOVA=y
-   make -C examples/qdma_demo/
+   Compilation command
+   --------------------
+   Note: If you are using Scatter Gather support, It is preferable to build DPDK through
+	 standard compilation steps after manually setting RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
+	 as true in config/arm/meson.build.
+
+   meson arm64-build --cross-file config/arm/arm64_dpaa_linux_gcc -Dexamples=qdma_demo
+   ninja -C arm64-build
 
 4. Steps of execution
 
