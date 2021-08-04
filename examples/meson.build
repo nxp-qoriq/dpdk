@@ -21,6 +21,7 @@ all_examples = [
 	'ipv4_multicast', 'kni',
 	'l2fwd', 'l2fwd-cat', 'l2fwd-event',
 	'l2fwd-crypto', 'l2fwd-jobstats',
+	'l2fwd-crypto-event',
 	'l2fwd-keepalive', 'l3fwd',
 	'l3fwd-acl', 'l3fwd-power', 'l3fwd-graph',
 	'link_status_interrupt',
