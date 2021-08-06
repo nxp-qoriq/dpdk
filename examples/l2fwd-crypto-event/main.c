@@ -482,12 +482,12 @@ l2fwd_main_loop(struct l2fwd_crypto_options *options)
 		.crypto_xform = &options->cipher_xform
 	};
 
-
 	socket_id = rte_cryptodev_socket_id(port_cparams[i].dev_id);
 
 	/* Create security session */
 	pdcp_sess = rte_security_session_create(ctx,
-			&sess_conf, session_pool_socket[socket_id].sess_mp);
+			&sess_conf, session_pool_socket[socket_id].sess_mp,
+			session_pool_socket[socket_id].priv_mp);
 
 	if (pdcp_sess == NULL)
 		rte_exit(EXIT_FAILURE, "Failed to initialize crypto session\n");
@@ -1954,8 +1954,8 @@ skip_crypto:
 
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, (void *)&options,
-			CALL_MASTER);
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+			CALL_MAIN);
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
