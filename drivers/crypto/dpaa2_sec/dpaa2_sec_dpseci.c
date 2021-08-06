@@ -1851,11 +1851,11 @@ mbuf_dump:
 	sym_op = op->sym;
 	if (sym_op->m_src) {
 		printf("Source mbuf:\n");
-		rte_pktmbuf_dump(stdout, sym_op->m_src, 64);
+		rte_pktmbuf_dump(stdout, sym_op->m_src, sym_op->m_src->data_len);
 	}
 	if (sym_op->m_dst) {
 		printf("Destination mbuf:\n");
-		rte_pktmbuf_dump(stdout, sym_op->m_dst, 64);
+		rte_pktmbuf_dump(stdout, sym_op->m_dst, sym_op->m_dst->data_len);
 	}
 
 	printf("Session address = %p\ncipher offset: %d, length: %d\n"
