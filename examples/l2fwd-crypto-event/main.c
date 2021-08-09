@@ -1631,26 +1631,6 @@ initialize_ports(struct l2fwd_crypto_options *options)
 	return enabled_portcount;
 }
 
-static void
-reserve_key_memory(struct l2fwd_crypto_options *options)
-{
-	options->cipher_xform.cipher.key.data = options->cipher_key;
-
-	options->auth_xform.auth.key.data = options->auth_key;
-
-	options->cipher_xform.cipher.key.data = rte_malloc("crypto key",
-						MAX_KEY_SIZE, 0);
-	if (options->cipher_xform.cipher.key.data == NULL)
-		rte_exit(EXIT_FAILURE,
-			 "Failed to allocate memory for cipher key");
-
-	options->auth_xform.auth.key.data = rte_malloc("auth key",
-						MAX_KEY_SIZE, 0);
-	if (options->auth_xform.auth.key.data == NULL)
-		rte_exit(EXIT_FAILURE,
-			 "Failed to allocate memory for auth key");
-}
-
 static int
 eventdev_eth_configure(struct l2fwd_crypto_options *options)
 {
@@ -1821,14 +1801,13 @@ main(int argc, char **argv)
 	argc -= ret;
 	argv += ret;
 
-	/* reserve memory for Cipher/Auth key and IV */
-	reserve_key_memory(&options);
-
 	/* parse application arguments (after the EAL ones) */
 	ret = l2fwd_crypto_parse_args(&options, argc, argv);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid L2FWD-CRYPTO arguments\n");
 
+	options.cipher_xform.cipher.key.data = options.cipher_key;
+	options.auth_xform.auth.key.data = options.auth_key;
 	/* create the mbuf pool */
 	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF, 512,
 			sizeof(struct rte_crypto_op),
