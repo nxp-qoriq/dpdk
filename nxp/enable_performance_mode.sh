@@ -63,9 +63,9 @@ if [ -e "/proc/sys/kernel/sched_rt_runtime_us" ]
 then
 	if [[ -z "$ISOLCPUS" ]]
 	then
-		# Reserve 0.4% CPU when core 0 is used for tasks running in non-rt priority
+		# Reserve 0.2% CPU when core 0 is used for tasks running in non-rt priority
 		# This does not impact any CPU reservation when core 0 is not used
-		echo 996000 > /proc/sys/kernel/sched_rt_runtime_us
+		echo 998000 > /proc/sys/kernel/sched_rt_runtime_us
 	else
 		# Reserve complete CPU for DPDK when core 0 is not used
 		echo -1 > /proc/sys/kernel/sched_rt_runtime_us
