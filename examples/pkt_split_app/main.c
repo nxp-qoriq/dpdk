@@ -61,6 +61,8 @@ static int nb_ports_available;
 #define PKT_IPV4 0
 #define PKT_IPV6 1
 #define PKT_UNKNOWN 2
+#define NON_OL_PORT 0
+#define OL_PORT 1
 
 static int max_burst_size = MAX_PKT_BURST;
 char *data_file;
@@ -864,7 +866,7 @@ validate_cls_info(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info)
 
 static int
 get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
-	      struct rte_pmd_dpaa_lgw_info_s *lgw_info)
+	      struct rte_pmd_dpaa_lgw_info_s *lgw_info, bool is_ol_port)
 {
 	size_t len = 0;
 	FILE *fp = NULL;
@@ -1003,6 +1005,9 @@ get_user_data(struct rte_pmd_dpaa_uplink_cls_info_s *cls_info,
 		}
 	}
 
+	if (!is_ol_port)
+		return 0;
+
 	if (validate_cls_info(cls_info))
 		return -1;
 
@@ -1093,22 +1098,24 @@ subnet_parse:
 }
 
 static int
-set_classif_info(void)
+set_classif_info(bool is_ol_port)
 {
 	struct rte_pmd_dpaa_uplink_cls_info_s cls_info;
 	int ret;
 
 	memset(&cls_info, 0, sizeof(struct rte_pmd_dpaa_uplink_cls_info_s));
-	ret = get_user_data(&cls_info, NULL);
+	ret = get_user_data(&cls_info, NULL, is_ol_port);
 	if (ret) {
 		rte_exit(EXIT_FAILURE, "Failed to paarse user data\n");
 		return ret;
 	}
 
-	ret = rte_pmd_dpaa_ol_set_classif_info(&cls_info);
-	if (ret) {
-		rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
-		return ret;
+	if (is_ol_port) {
+		ret = rte_pmd_dpaa_ol_set_classif_info(&cls_info);
+		if (ret) {
+			rte_exit(EXIT_FAILURE, "Failed to set classification info\n");
+			return ret;
+		}
 	}
 
 	printf("######### Classification Info: #####################\n");
@@ -1119,6 +1126,9 @@ set_classif_info(void)
 		printf("\t%d\n", cls_info.gtp_udp_port[i]);
 		gtp_udp_port[i] = cls_info.gtp_udp_port[i];
 	}
+	if (!is_ol_port)
+		goto finish_classif_info_print;
+
 	printf("Protocol ID: %d\n", cls_info.gtp_proto_id);
 	if (cls_info.addr_pair.flags & DPDK_CLASSIF_INNER_IP) {
 		if (cls_info.addr_pair.addr_type == DPA_ISC_IPV4_ADDR_TYPE) {
@@ -1169,6 +1179,7 @@ set_classif_info(void)
 
 	printf("IP flags = 0x%x\n", cls_info.addr_pair.flags);
 	printf("Sec enabled = %d\n", cls_info.sec_enabled);
+finish_classif_info_print:
 	printf("****************************************************\n");
 
 	return ret;
@@ -1187,12 +1198,12 @@ reset_classif_info(void)
 }
 
 static int
-set_lgw_info(void)
+set_lgw_info(bool is_ol_port)
 {
 	struct rte_pmd_dpaa_lgw_info_s lgw_info;
 	int ret;
 
-	ret = get_user_data(NULL, &lgw_info);
+	ret = get_user_data(NULL, &lgw_info, is_ol_port);
 	if (ret) {
 		rte_exit(EXIT_FAILURE, "Failed to paarse user data\n");
 		return ret;
@@ -1544,12 +1555,14 @@ main(int argc, char **argv)
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
 	if (!strcmp(split_port_driver_name, "ol_dpaa")) {
-		ret = set_classif_info();
+		ret = set_classif_info(OL_PORT);
 		if (ret)
 			return ret;
-		ret = set_lgw_info();
+		ret = set_lgw_info(OL_PORT);
 		if (ret)
 			printf("WARN: LGW config. set failed\n");
+	} else {
+		ret = set_classif_info(NON_OL_PORT);
 	}
 
 	ret = 0;
