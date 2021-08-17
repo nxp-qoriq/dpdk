@@ -81,7 +81,7 @@
 	</distribution>
 
 	<distribution name="default_dpdk_queue_mac3">
-		<vsp name="dpdk_mac10_flows" />
+		<vsp name="dpdk_mac3_flows"/>
 		<queue base="0x700" count="1"/>
 	</distribution>
 
@@ -152,7 +152,7 @@
 	</distribution>
 
 	<distribution name="default_dpdk_queue_mac4">
-		<vsp name="dpdk_mac10_flows" />
+		<vsp name="dpdk_mac4_flows"/>
 		<queue base="0x800" count="1"/>
 	</distribution>
 
@@ -450,48 +450,36 @@
 	<policy name="fm_policy_3">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac3_dist"/>
-			<distributionref name="default_dpdk_queue_mac3"/>
-			<distributionref name="default_kernel_queue_mac3"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_4">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac4_dist"/>
-			<distributionref name="default_dpdk_queue_mac4"/>
-			<distributionref name="default_kernel_queue_mac4"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_5">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac5_dist"/>
-			<distributionref name="default_dpdk_queue_mac5"/>
-			<distributionref name="default_kernel_queue_mac5"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_6">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac6_dist"/>
-			<distributionref name="default_dpdk_queue_mac6"/>
-			<distributionref name="default_kernel_queue_mac6"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_9">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac9_dist"/>
-			<distributionref name="default_dpdk_queue_mac9"/>
-			<distributionref name="default_kernel_queue_mac9"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_10">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac10_dist"/>
-			<distributionref name="default_dpdk_queue_mac10"/>
-			<distributionref name="default_kernel_queue_mac10"/>
 		</dist_order>
 	</policy>
 </netpcd>
