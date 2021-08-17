@@ -21,7 +21,7 @@ Note: Please first read nxp/README.
   #Add flows into TC0 with various priorities, the less priority number, the higher priority.
       #IPv4/UDP packets go to RXQ4, this flow is top priority.
       testpmd> flow create 0 group 0 priority 0 ingress pattern ipv4 / udp / end actions queue index 4 / end
-      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ0, this flow is middle priority.
+      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ1, this flow is middle priority.
       testpmd> flow create 0 group 0 priority 1 ingress pattern ipv4 src is 10.10.10.3 / end actions queue index 1 / end
       #Ethernet packets whose source mac address is 11:22:33:44:55:66 go to RXQ2, this flow is lowest priority.
       testpmd> flow create 0 group 0 priority 2 ingress pattern eth src is 11:22:33:44:55:66 / end actions queue index 2 / end
@@ -69,15 +69,16 @@ Note: Please first read nxp/README.
   #Create dpni with 8 TCs
       export FS_ENTRIES=8
       export MAX_TCS=8
+  #Note: export MAX_QUEUES=8 is used on LX2160ARDB to allocate maximum 8 queues on each TC.
       source dynamic_dpl.sh dpmac.x
 
-  #Start testpmd with 16 RXQs and 2 TXQs, RXQ0~RXQ7 are in TC0 and reset are in TC1.
-      ./testpmd  --lcores='0,1,2,3,4@0' --master-lcore 0 -n 1 -- -i --nb-cores=4 --portmask=0x1 --nb-ports=1 --forward-mode=io --rxq=16 --txq=2 --rxq-txq-mapping
+  #Start testpmd with 16 RXQs and 2 TXQs, RXQ0~RXQ7 are in TC0 and RXQ8~RXQ15 are in TC1.
+      ./testpmd  --lcores='0,1,2,3,4@0' --master-lcore 0 -n 1 -- -i --nb-cores=4 --portmask=0x1 --nb-ports=1 --forward-mode=io --rxq=16 --txq=2
 
   #Add flows into TC0 and TC1, TC0 has higher priority.
       #IPv4/UDP packets go to RXQ4, this flow is top priority.
       testpmd> flow create 0 group 0 priority 1 ingress pattern ipv4 / udp / end actions queue index 4 / end
-      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ0, this flow is middle priority.
+      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ1, this flow is middle priority.
       testpmd> flow create 0 group 0 priority 2 ingress pattern ipv4 src is 10.10.10.3 / end actions queue index 1 / end
       #Ethernet packets whose source mac address is 11:22:33:44:55:66 go to RXQ2, this flow is lowest priority.
       testpmd> flow create 0 group 1 priority 0 ingress pattern eth src is 11:22:33:44:55:66 / end actions queue index 12 / end
@@ -96,9 +97,4 @@ Note: Please first read nxp/README.
      testpmd> flow destroy 0 rule 1
      testpmd> start
   #Check the packet go to the expected queue(RXQ12) by stop command.
-     testpmd> stop
-  #Remove the lowest priority flow and inject the same packet above.
-     testpmd> flow destroy 0 rule 2
-     testpmd> start
-  #Check the packet go to the default queue(RXQ0) by stop command.
      testpmd> stop
