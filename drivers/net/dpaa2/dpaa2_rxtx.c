@@ -986,6 +986,10 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				bufs[num_rx] = eth_fd_to_mbuf(fd,
 							eth_data->port_id);
 
+#if defined(RTE_LIBRTE_IEEE1588)
+		priv->rx_timestamp = *dpaa2_timestamp_dynfield(bufs[num_rx]);
+#endif
+
 		if (eth_data->dev_conf.rxmode.offloads &
 				DEV_RX_OFFLOAD_VLAN_STRIP) {
 			rte_vlan_strip(bufs[num_rx]);
