@@ -2446,6 +2446,10 @@ la12xx_bbdev_remove(struct rte_vdev_device *vdev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	/* Do not initialize in secondary process */
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
+		return 0;
+
 	if (vdev == NULL)
 		return -EINVAL;
 
