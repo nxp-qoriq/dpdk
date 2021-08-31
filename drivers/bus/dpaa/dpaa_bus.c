@@ -212,11 +212,8 @@ dpaa_create_device_list(void)
 		rte_dpaa_bus.device_count++;
 	}
 
-	if (!dpaa_netcfg && getenv("OLDEV_ENABLED"))
-		return 0;
-
 	/* Creating Ethernet Devices */
-	for (i = 0; i < dpaa_netcfg->num_ethports; i++) {
+	for (i = 0; dpaa_netcfg && (i < dpaa_netcfg->num_ethports); i++) {
 		dev = calloc(1, sizeof(struct rte_dpaa_device));
 		if (!dev) {
 			DPAA_BUS_LOG(ERR, "Failed to allocate ETH devices");
