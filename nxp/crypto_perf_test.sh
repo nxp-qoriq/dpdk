@@ -274,6 +274,37 @@ if [ $pdcp -ne 0 ]; then
 	done
 fi
 
+#pdcp sdap cases
+if [ $pdcp -ne 0 ]; then
+	for i in 0 1
+	do
+		if [ $i -ne 0 ]; then
+			hfn_param=--pdcp-ses-hfn-en
+		else
+			hfn_param=
+		fi
+
+		for j in 0 1 2 3
+		do
+			for k in 0 1 2 3
+			do
+				echo "***pdcp sdap $hfn_param : ${pdcp_cipher[$j]}- ${pdcp_auth[$k]}" | tee ${logoutput}
+				cmd="$DPDK_EXAMPLE_PATH/dpdk-test-crypto-perf -c $cores $vdev_string $logs -- --devtype $dev_string \
+				--optype pdcp --cipher-algo ${pdcp_cipher[$j]} --cipher-op encrypt \
+				--auth-algo ${pdcp_auth[$k]} \
+				--auth-op generate  --auth-key-sz 16 \
+				--ptest $test_type --total-ops $ops_num --pdcp-sn-sz $pdcp_sn \
+				--pdcp-domain $pdcp_domain $hfn_param --enable-sdap\
+				--burst-sz $burst --buffer-sz $buffer_size $extra_flags"
+				echo "$cmd"
+				mycmd ${cmd}
+			done
+		done
+
+
+	done
+fi
+
 echo -e "===========================================" | tee ${logoutput}
 echo -e "Total testcases run $count : failed $failed" | tee ${logoutput}
 echo -e "Results available at ${logoutput}" | tee ${logoutput}

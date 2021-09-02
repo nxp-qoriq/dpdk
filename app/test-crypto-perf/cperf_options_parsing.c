@@ -528,6 +528,15 @@ parse_silent(struct cperf_options *opts,
 }
 
 static int
+parse_enable_sdap(struct cperf_options *opts,
+		const char *arg __rte_unused)
+{
+	opts->pdcp_sdap = 1;
+
+	return 0;
+}
+
+static int
 parse_cipher_algo(struct cperf_options *opts, const char *arg)
 {
 
@@ -827,6 +836,7 @@ static struct option lgopts[] = {
 	{ CPERF_OPTYPE, required_argument, 0, 0 },
 
 	{ CPERF_SILENT, no_argument, 0, 0 },
+	{ CPERF_ENABLE_SDAP, no_argument, 0, 0 },
 	{ CPERF_SESSIONLESS, no_argument, 0, 0 },
 	{ CPERF_OUT_OF_PLACE, no_argument, 0, 0 },
 	{ CPERF_TEST_FILE, required_argument, 0, 0 },
@@ -939,6 +949,7 @@ cperf_opts_parse_long(int opt_idx, struct cperf_options *opts)
 	struct long_opt_parser parsermap[] = {
 		{ CPERF_PTEST_TYPE,	parse_cperf_test_type },
 		{ CPERF_SILENT,		parse_silent },
+		{ CPERF_ENABLE_SDAP,	parse_enable_sdap },
 		{ CPERF_POOL_SIZE,	parse_pool_sz },
 		{ CPERF_TOTAL_OPS,	parse_total_ops },
 		{ CPERF_BURST_SIZE,	parse_burst_sz },

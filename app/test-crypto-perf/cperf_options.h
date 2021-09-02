@@ -13,6 +13,7 @@
 
 #define CPERF_PTEST_TYPE	("ptest")
 #define CPERF_SILENT		("silent")
+#define CPERF_ENABLE_SDAP	("enable-sdap")
 
 #define CPERF_POOL_SIZE		("pool-sz")
 #define CPERF_TOTAL_OPS		("total-ops")
@@ -126,6 +127,7 @@ struct cperf_options {
 #ifdef RTE_LIB_SECURITY
 	uint16_t pdcp_sn_sz;
 	uint16_t pdcp_ses_hfn_en;
+	uint16_t pdcp_sdap;
 	enum rte_security_pdcp_domain pdcp_domain;
 	uint16_t docsis_hdr_sz;
 #endif
