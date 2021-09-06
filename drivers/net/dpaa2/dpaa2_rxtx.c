@@ -140,8 +140,10 @@ dpaa2_dev_rx_parse_slow(struct rte_mbuf *mbuf,
 			annotation->word3, annotation->word4);
 
 #if defined(RTE_LIBRTE_IEEE1588)
-	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_PTP))
+	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_PTP)) {
 		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP;
+		mbuf->ol_flags |= PKT_RX_IEEE1588_TMST;
+	}
 #endif
 
 	if (BIT_ISSET_AT_POS(annotation->word3, L2_VLAN_1_PRESENT)) {
@@ -1190,6 +1192,7 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	 */
 	priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
 	dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
+	priv->tx_timestamp = 0;
 #endif
 
 	/*Prepare enqueue descriptor*/
