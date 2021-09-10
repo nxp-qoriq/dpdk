@@ -230,3 +230,8 @@ SCATTER GATHER
 
 One can use --scatter option to use Scatter Gather buffers instead of normal single buffer.
 It is perferable to build dpdk with CONFIG_RTE_LIBRTE_DPAA2_USE_PHYS_IOVA=y
+
+DATA VALIDATION
+---------------
+
+One can use --validate option to validate data once DMA operation is performed.

@@ -96,6 +96,7 @@ int g_packet_size = 1024;
 uint64_t g_pci_size = TEST_PCI_SIZE_LIMIT;
 int g_packet_num = (1 * 1024);
 int g_latency;
+int g_validate;
 int g_memcpy;
 int g_scatter_gather;
 
@@ -355,6 +356,7 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 	int pkt_cnt = 0;
 	int poll_miss = 0;
 	int32_t ret = 0;
+	int err;
 
 	int pkt_enquened = 0;
 	int in_dma = 0;
@@ -395,10 +397,43 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 		for (j = 0; j < job_num; j++) {
 			job[j] = &g_jobs[lcore_id][(pkt_cnt + j) % TEST_PACKETS_NUM];
 			job[j]->cnxt = ((pkt_cnt + j) % TEST_PACKETS_NUM);
+
 			if (g_memcpy) {
+				if (g_validate) {
+					/* Setting random value in the
+					 * job[j]->len bits at job[j]->src
+					 * and 0 at job[j]->dest to check data
+					 * validity of entire job[j]->len bits
+					 * of dest, after DMA operation is
+					 * performed from src.
+					 */
+					uint8_t r_num = rand() + 1;
+
+					for (uint32_t i = 0;
+							i < job[j]->len; i++) {
+						*((uint8_t *)(job[j]->src) + i)
+							= r_num;
+						*((uint8_t *)(job[j]->dest) + i)
+							= 0;
+					}
+				}
+
 				rte_memcpy((void *)job[j]->dest,
 					(void *)job[j]->src,
 					job[j]->len);
+
+				if (g_validate) {
+					err = memcmp((void *)job[j]->src,
+						(void *)job[j]->dest,
+						job[j]->len);
+
+					if (err) {
+						printf("ERROR: DATA VALIDATION FAILED\n");
+						quit_signal = 1;
+						return -1;
+					}
+				}
+
 				pkt_cnt++;
 				if (g_latency && (pkt_cnt >= TEST_PACKETS_NUM)) {
 					calculate_latency(lcore_id, cycle1,
@@ -415,6 +450,27 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 
 		e_context.vq_id = g_vqid[lcore_id];
 		e_context.job = job;
+
+		if (g_validate) {
+			for (int i = 0; i < job_num; i++) {
+				uint64_t *src1 =
+					rte_mem_iova2virt(job[i]->src);
+				uint64_t *dest1 =
+					rte_mem_iova2virt(job[i]->dest);
+
+				/* Setting random value in the  job[i]->len bits
+				 * at src1 and 0 at dest1 to check data validity
+				 * of entire job[i]->len bits of dest1, after
+				 * DMA operation is performed from src1.
+				 */
+				uint8_t r_num = rand() + 1;
+
+				for (uint32_t j = 0; j < job[i]->len; j++) {
+					*((uint8_t *)(src1) + j) = r_num;
+					*((uint8_t *)(dest1) + j) = 0;
+				}
+			}
+		}
 
 		/* Submit QDMA Jobs for processing */
 		ret = rte_qdma_enqueue_buffers(qdma_dev_id, NULL, job_num, &e_context);
@@ -438,6 +494,23 @@ dequeue:
 						 "Job Processing Error\n");
 				}
 				pkt_cnt++;
+
+				if (g_validate) {
+					uint64_t *src1 =
+					       rte_mem_iova2virt(job1[j]->src);
+					uint64_t *dest1 =
+					       rte_mem_iova2virt(job1[j]->dest);
+
+					err = memcmp((void *)src1,
+						(void *)dest1,
+						job1[j]->len);
+
+					if (err) {
+						printf("ERROR: DATA VALIDATION FAILED\n");
+						quit_signal = 1;
+						return -1;
+					}
+				}
 
 				if (g_latency && (pkt_cnt >= TEST_PACKETS_NUM)) {
 					calculate_latency(lcore_id, cycle1,
@@ -814,6 +887,7 @@ void qdma_demo_usage(void)
 	printf("	: --scatter_gather\n");
 	printf("	: --burst\n");
 	printf("	: --packet_num (valid only for mem_to_mem)\n");
+	printf("        : --validate\n");
 }
 
 int qdma_parse_long_arg(char *optarg, struct option *lopt)
@@ -919,6 +993,9 @@ int qdma_parse_long_arg(char *optarg, struct option *lopt)
 		ret = 0;
 		printf("%s: Pkt num %d\n", __func__, g_packet_num);
 		break;
+	case ARG_VALIDATE:
+		g_validate = 1;
+		break;
 	default:
 		printf("Unknown Argument\n");
 		ret = -EINVAL;
@@ -945,6 +1022,7 @@ qdma_demo_parse_args(int argc, char **argv)
 	 {"scatter_gather", optional_argument, &flg, ARG_SCATTER_GATHER},
 	 {"burst", optional_argument, &flg, ARG_BURST},
 	 {"packet_num", optional_argument, &flg, ARG_NUM},
+	 {"validate", optional_argument, &flg, ARG_VALIDATE},
 	 {0, 0, 0, 0},
 	};
 	struct option *lopt_cur;
