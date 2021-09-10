@@ -648,7 +648,13 @@ Following are some pre-requisites:
   $ ./dpdk-l3fwd -c 0x6 -n 1 -- -p 0x1 --config="(0,0,1),(0,1,2)" -P --traffic-split-config="(3,2152,2)"
 
   Here "--traffic-split-config - (type,val,mux_conn_id)" is defined by
-       'type' -  1:ETHTYPE, 2:IP_PROTO, 3:UDP_DST_PORT having value as 'val' based on which DPDMUX can split the traffic to mux_conn_id
+       'type' - 1: ETHTYPE,
+		2: IP_PROTO,
+		3: UDP_DST_PORT 	having value as 'val' based on which DPDMUX can
+					split the traffic to mux_conn_id
+		4: IP_FRAG_UDP_AND_GTP
+		5: IP_FRAG_PROTO
+		6: IP_FRAG_UDP_AND_GTP_AND_ESP
 
   Layer-3 Forwarding 'dpdk-l3fwd' Application using eventdev
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
