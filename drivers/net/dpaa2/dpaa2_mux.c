@@ -170,6 +170,83 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	}
 	break;
 
+	case RTE_FLOW_ITEM_TYPE_IP_FRAG_UDP_AND_GTP_AND_ESP:
+	{
+		/* The bit 50, bit 87 and bit 78 in Parse Results signal the
+		 * presence of an IP fragmented frame, GTP frame or ESP frame
+		 * respectively. The following rule extracts the octet from 0xA
+		 * containing bit 50, from 0xE containing bit 87 and from 0xD of
+		 * the Parse Results. The arrays mask and key contain the cases
+		 * for which the rules are created in this switch case ie. GTP
+		 * traffic, ESP traffic and IP fragmented UDP traffic filled in
+		 * this particular order in the arrays.
+		 */
+
+		uint64_t mask[] = {0x0001000000000000, 0x0000020000000000,
+				   0x200000FF00000000};
+		uint64_t key[] = {0x0001000000000000, 0x0000020000000000,
+				  0x2000001100000000};
+		int j = 0;
+
+		/* Mask/Key value needs to be exactly 256 bytes(16 digits). Zero
+		 * bits can be added as padding if extracted bytes are less.
+		 */
+
+		/* 0x020102FF00000000
+		 *    ^ ^ ^ ^ ^ ^ ^ ^
+		 *    | | | | | | | |
+		 *    1 2 3 4 Padding
+		 *
+		 * 02: 1st byte 0x0A
+		 * 01: 2nd byte 0x0E
+		 * 02: 3rd byte 0x0D
+		 * FF: 4th byte NH_FLD_IP_PROTO
+		 * Remaining bytes: Padding
+		 */
+
+		num_rules = 3;
+		keys = rte_malloc(NULL, sizeof(uint64_t), 0);
+		masks = rte_malloc(NULL, sizeof(uint64_t), 0);
+
+		if (!keys)
+			printf("Memory allocation failure for keys\n");
+
+		if (!masks)
+			printf("Memory allocation failure for masks\n");
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		/* 0x0A Represents bits from 48-55 */
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0A;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		/* 0x0E Represents bits from 80-87 */
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0E;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_PARSE;
+		/* 0x0D Represents bits from 72-79 */
+		kg_cfg.extracts[j].extract.from_parse.offset = 0x0D;
+		kg_cfg.extracts[j].extract.from_parse.size = 1;
+		j++;
+
+		kg_cfg.extracts[j].type = DPKG_EXTRACT_FROM_HDR;
+		kg_cfg.extracts[j].extract.from_hdr.type = DPKG_FULL_FIELD;
+		kg_cfg.extracts[j].extract.from_hdr.prot = NET_PROT_IP;
+		/* Size 1. Gets set automatically(NH_FLD_IP_PROTO_SIZE) */
+		kg_cfg.extracts[j].extract.from_hdr.field = NH_FLD_IP_PROTO;
+		j++;
+
+		kg_cfg.num_extracts = j;
+		masks = mask;
+		keys = key;
+		/* Four keys are extracted. */
+		key_size = sizeof(uint8_t) * 4;
+	}
+	break;
+
 	case RTE_FLOW_ITEM_TYPE_IP_FRAG_PROTO:
 	{
 		uint8_t key_val = 0x20;
