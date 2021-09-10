@@ -88,6 +88,7 @@ enum traffic_split_type_t {
 	TRAFFIC_SPLIT_UDP_DST_PORT,
 	TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP,
 	TRAFFIC_SPLIT_IP_FRAG_PROTO,
+	TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP_AND_ESP,
 	TRAFFIC_SPLIT_MAX_NUM
 };
 
@@ -1565,6 +1566,10 @@ configure_split_traffic_config(void)
 		break;
 	case TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP:
 		pattern[0].type = RTE_FLOW_ITEM_TYPE_IP_FRAG_UDP_AND_GTP;
+		break;
+	case TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP_AND_ESP:
+		pattern[0].type =
+			RTE_FLOW_ITEM_TYPE_IP_FRAG_UDP_AND_GTP_AND_ESP;
 		break;
 	case TRAFFIC_SPLIT_IP_FRAG_PROTO:
 		ip_item.hdr.next_proto_id = traffic_split_val;
