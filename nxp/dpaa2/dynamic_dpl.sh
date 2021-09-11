@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2018-2020 NXP
+# Copyright 2018-2021 NXP
 
 cat > script_help << EOF
 
@@ -87,6 +87,11 @@ script help :----->
 					'export MAX_TCS=<Num of traffic class>'
 					where "Number of traffic classes" is an
 					integer value. "e.g export MAX_TCS=8"
+
+		MAX_CHANNELS	    = Maximum channels a DPNI supports.
+					Set the parameter using below command:
+					'export MAX_CHANNELS=<Num of channels>'
+					Default value is 1.
 
 		MAX_QOS             = maximum QoS Entries.
 					Set the parameter using below command:
@@ -268,6 +273,11 @@ get_dpni_parameters() {
 			MAX_TCS=8
 		fi
 	fi
+	if [[ -z "$MAX_CHANNELS" ]]
+	then
+		MAX_CHANNELS=1
+	fi
+
 	if [[ -z "$MAX_CGS" ]]
 	then
 		MAX_CGS=`expr $MAX_QUEUES + 8`
@@ -723,7 +733,7 @@ then
 				PRINT_ONCE=1
 			fi
 		fi
-		DPNI=$(restool -s dpni create --options=$DPNI_OPTIONS --num-tcs=$MAX_TCS --num-queues=$MAX_QUEUES --fs-entries=$FS_ENTRIES --vlan-entries=16 --qos-entries=$MAX_QOS --num-cgs=$MAX_CGS --container=$DPRC)
+		DPNI=$(restool -s dpni create --options=$DPNI_OPTIONS --num-tcs=$MAX_TCS --num-channels=$MAX_CHANNELS --num-queues=$MAX_QUEUES --fs-entries=$FS_ENTRIES --vlan-entries=16 --qos-entries=$MAX_QOS --num-cgs=$MAX_CGS --container=$DPRC)
 		restool dprc sync
 		restool dpni update $DPNI --mac-addr=$ACTUAL_MAC
 		echo -e '\t'$DPNI "created with MAC addr = "$ACTUAL_MAC >> dynamic_dpl_logs
