@@ -6,17 +6,110 @@ The purpose of this write-up is to show the steps for running the DPDK applicati
 
 For Building the applications and basic steps please refer to nxp/README file.
 
-This README showcases LS1046 as an example.
+1) Single Shared MAC port (fm1-mac10) Demo:
 
-Boot up the board with 'fsl-ls1046a-rdb-usdpaa-shared.dtb' dtb file.
-Once the board is up with the Linux DTB having shared MAC, user should be able to see 'fm1-macX' interfaces in ifconfig.
+==========================
+Changes in the  Kernel dts
+==========================
+
+The changes consist in adding shared mac port in the main dts, and vsp configuration as shown below. Sample DTS is at <dpdk>/nxp/dpaa/fsl-ls1046a-rdb-usdpaa-shared-mac10.dts
+This README showcases fm1-mac10 of LS1046 as an example.
+
+-----------------------------------------------------------------------------------------------------------------------
+	chosen {
+		name = "chosen";
+		dpaa-extended-args {
+			fman0-extd-args {
+
+				cell-index = <0>;
+				compatible = "fsl,fman-extended-args";
+				dma-aid-mode = "port";
+
+				fman0_rxt1-extd-args {
+					cell-index = <1>;
+					compatible = "fsl,fman-port-10g-rx-extended-args";
+					/* Define Virtual storage profile */
+					/* <number of profiles, default profile id> */
+					vsp-window = <2 0>;
+				};
+			};
+		};
+	};
+
+
+	fsl,dpaa {
+		compatible = "fsl,ls1046a", "fsl,dpaa", "simple-bus";
+
+		ethernet@9 {
+			fsl,bman-buffer-pools = <&bp7 &bp8 &bp9>;
+			fsl,qman-frame-queues-rx = <0x5e 1 0x5f 1 0x8b 1;
+			fsl,qman-frame-queues-tx = <0x7e 1 0x7f 1 0x85 1>;
+		};
+------------------------------------------------------------------------------------------------------------------------
+
+NOTE: Here 0x5f is the default Rx queue (see fsl,qman-frame-queues-rx property) which is requried to be configured in the fmc policy file as the default rule.
+
+Once the board is up with the Linux DTB having shared MAC, user should be able to see 'fm1-mac10' as an interface in ifconfig.
+NOTE: Change to ethernet@8 for fm1-mac9 and also use the fman0_rxt0-extd-args with cell-index as 0.
+
+NOTE: For fm1-mac9 - Change to ethernet@8 and also use the fman0_rxt0-extd-args with cell-index as 0.
+
+Following dts examples are available as samples:
+1. fsl-ls1046a-rdb-usdpaa-shared.dts - all ports are in shared mode with kernel.
+2. fsl-ls1046a-rdb-usdpaa-shared-mac10.dts - only mac10  is in shared mode with kernel. Other ports are assigned to dpdk only. (i.e. userspace)
+3. fsl-ls1046a-rdb-shared-mac9-only.dts - all ports are assigned to linux kernel. Only mac9 is shared with dpdk/userspace.
+
 
 Sample policy files have been added to support UDP and ESP traffic classified to user-space and rest all traffic to kernel.
-See: usdpaa_policy_classif_udp_ipsec_1queue.xml and usdpaa_config_ls1046_shared_10g.xml, usdpaa_config_ls1046_shared_24g.xml
+See: usdpaa_policy_vsp_24g_classif_udp_ipsec_1queue.xml and usdpaa_config_ls1046_shared_mac10.xml
 
-==============================================
-Running l3fwd/testpmd in shared MAC mode
-==============================================
+NOTE: Also, the queue ID's used for classification (for DPDK flows) should match with the ones which are used in the DPDK default use-cases. i.e. 0x500 for mac1, 0x600 for mac2 ... 0xe00 for mac10.
+
+Other policy file examples to receive specific traffic to dpdk:
+1. usdpaa_policy_vsp_classif_vlan_mac9_only.xml
+	- splitting the packet on vlan id (example used is 0x100)
+	 (config is: usdpaa_config_ls1046_shared_mac9_only.xml)
+2. usdpaa_policy_vsp_ecpri_1queue.xml
+	- splitting packet on eth type as eCPRI with ecpri message type
+	 (config is: usdpaa_config_ls1046_ecpri.xml)
+3. usdpaa_policy_vsp_classif_udp_ipsec_mac10_1queue.xml
+	- splitting traffic for ipsec esp and UDP for mac10, rest are normal hash
+	(config is: usdpaa_config_ls1046_shared_mac10.xml)
+4. usdpaa_policy_vsp_24g_classif_udp_ipsec_1queue.xml
+	- splitting traffic for ipsec esp and UDP on all ports
+	(config is: usdpaa_config_ls1046_shared_24g.xml)
+5. usdpaa_policy_vsp_24g_classif_udp_gtp_1queue.xml
+	- splitting traffic for udp destination port 2152 (GTP)
+	(config is: usdpaa_config_ls1046_shared_24g.xml)
+6. usdpaa_policy_vsp_24g_classif_frag_gtp_1queue.xml
+	- splitting traffic for UDP IPv4/v6 frags and dest Port 2152(GTP)
+	(config is: usdpaa_config_ls1046_shared_24g.xml)
+
+================================
+Running l2fwd in shared MAC mode
+================================
+
+Below are the steps to run fm-mac10 in shared mode with l2fwd receiving UDP and ESP traffic and rest going to kernel:
+
+1. fmc -x
+2. ifconfig fm1-mac10 <valid IP address>
+   # At this point all the traffic which is sent on the interface (via spirent/network) will be received by the kernel.
+3. mount -t hugetlbfs hugetlbfs /dev/hugepages
+4. echo 512 > /proc/sys/vm/nr_hugepages
+5. fmc -c usdpaa_config_ls1046_shared_10g.xml -p usdpaa_policy_vsp_24g_classif_udp_ipsec_1queue.xml -a
+   # Once FMC is run kernel will not receive UDP or ESP traffic.
+6. l2fwd -c 1 -n 1 -- -p 0x20
+   # Now DPDK will handle UDP or ESP traffic, and kernel will handle rest of the traffic
+
+2) Multiple Shared MAC ports Demo:
+
+=======================================================================
+Build kernel with <dpdk>/nxp/dpaa/fsl-ls1046a-rdb-sdk-shared-usdpaa.dts
+=======================================================================
+
+==================================================
+Running l3fwd in shared MAC mode on multiple ports
+==================================================
 
 Below are the steps to run fm1-mac3, fm1-mac4, fm1-mac5, fm1-mac6, fm1-mac9, fm1-mac10 in shared mode with l3fwd receiving UDP and ESP traffic and rest going to kernel:
 
@@ -30,7 +123,7 @@ Below are the steps to run fm1-mac3, fm1-mac4, fm1-mac5, fm1-mac6, fm1-mac9, fm1
    # At this point all the traffic which is sent on the interfaces (via spirent/network) will be received by the kernel.
 3. mount -t hugetlbfs none /mnt/hugepages
 4. echo 512 > /proc/sys/vm/nr_hugepages
-5. fmc -c usdpaa_config_ls1046_shared_24g.xml -p usdpaa_policy_24g_classif_udp_ipsec_1queue.xml -a
+5. fmc -c usdpaa_config_ls1046_shared_24g.xml -p usdpaa_policy_vsp_24g_classif_udp_ipsec_1queue.xml -a
    # Once FMC is run kernel will not receive UDP or ESP traffic.
 
 6a. Run l3fwd:
@@ -46,7 +139,8 @@ Below are the steps to run fm1-mac3, fm1-mac4, fm1-mac5, fm1-mac6, fm1-mac9, fm1
 6b. Run testpmd:
     dpdk-testpmd -c 0xF -n 1 -- -i --portmask=0x3 --nb-cores=2
 
+NOTES:
 
-NOTE:
 1. If required after exiting the DPDK application run 'fmc -x' to remove the FMC configuration for DPDK, so that all traffic can again go to kernel.
+
 2. For DPDK to work, kernel shared interface must be up. Also, shared MAC is only supported in FMC mode.

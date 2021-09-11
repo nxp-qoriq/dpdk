@@ -2,7 +2,9 @@
 <!--
   SPDX-License-Identifier: BSD-3-Clause
 
-  Copyright 2019,2021 NXP
+  Copyright 2019-2021 NXP
+
+  Example to split the traffic with ip proto as ESP or UDP to dpdk
 -->
 
 <netpcd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

@@ -3,6 +3,8 @@
   SPDX-License-Identifier: BSD-3-Clause
 
   Copyright 2021 NXP
+
+  Splitting traffic for UDP IPv4/v6 frags and dest Port 2152(GTP)
 -->
 
 <netpcd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

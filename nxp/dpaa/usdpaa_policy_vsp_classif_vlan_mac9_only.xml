@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright 2021 NXP
+-->
+<!--	Distributions for VLAN ID 0x100 to MAC 9 -->
+
+<netpcd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="xmlProject/pcd.xsd" name="example"
+	description="Bridging configuration">
+
+
+	<vsp name="shared_mac_pool" base="0"/>
+	<vsp name="dpdk_mac9_flows" base="1"/>
+
+	<classification name="dpdk_mac9_classif" masks="yes">
+		<key>
+		<fieldref name ="vlan.tci"/>
+		</key>
+		<entry>
+			<vsp name="dpdk_mac9_flows" />
+			<data>0x100</data>
+			<mask>0x0fff</mask>
+			<queue base="0xd00" count="1"/>
+		</entry>
+		<action condition="on-miss" type="distribution" name="default_mac9_dist"/>
+	</classification>
+
+	<distribution name="dpdk_mac9_dist">
+		<vsp name="dpdk_mac9_flows" />
+		<protocols>
+			<protocolref name="vlan"/>
+		</protocols>
+		<queue base="0xd00" count="1"/>
+		<action type="classification" name="dpdk_mac9_classif" />
+	</distribution>
+
+	<distribution name="default_mac9_dist">
+		<vsp name="shared_mac_pool" />
+		<queue count="1" base="0x8a"/>
+	</distribution>
+
+
+<!--	xxxxxxxxxxxxxxxxxxxxxxxxxx Policies xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -->
+
+	<policy name="fm_policy_9">
+		<dist_order>
+			<distributionref name="dpdk_mac9_dist"/>
+			<distributionref name="default_mac9_dist"/>
+		</dist_order>
+	</policy>
+</netpcd>

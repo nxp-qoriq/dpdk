@@ -3,6 +3,7 @@
   SPDX-License-Identifier: BSD-3-Clause
 
   Copyright 2021 NXP
+  Split on ethernet type as eCPRI and 2 queues, one each for ecpri.type
 -->
 
 <netpcd>
