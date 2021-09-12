@@ -164,8 +164,10 @@ NOTE: ARP should be resolved before sending the traffic.
 8. Run the dpdk-pkt_split_app application with two ports(Don't use PCI port):
    $ ./dpdk-pkt_split_app -c 0x6 -n 1 --vdev=net_tap0 -- -p 0x3
 
-   Please check application logs to identify the ports and their IDs.
+   Note: Please check application logs to identify the ports and their IDs.
 
+   Note: Port sequence: First all DPAA ports, then PCI port(s), if any and tap
+	 port at last.
 
 ------------------------------------
 Configure classification information
