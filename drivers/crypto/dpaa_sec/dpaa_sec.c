@@ -26,6 +26,7 @@
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
+#include <rte_hexdump.h>
 
 #include <fsl_usd.h>
 #include <fsl_qman.h>
@@ -43,6 +44,15 @@
 #include <dpaa_sec_event.h>
 #include <dpaa_sec_log.h>
 #include <dpaax_iova_table.h>
+
+/* DPAA_SEC_DP_DUMP levels */
+enum dpaa_sec_dump_levels {
+	DPAA_SEC_DP_NO_DUMP,
+	DPAA_SEC_DP_ERR_DUMP,
+	DPAA_SEC_DP_FULL_DUMP
+};
+
+uint8_t dpaa_sec_dp_dump = DPAA_SEC_DP_ERR_DUMP;
 
 uint8_t dpaa_cryptodev_driver_id;
 
@@ -644,6 +654,139 @@ dpaa_sec_prep_cdb(dpaa_sec_session *ses)
 	return 0;
 }
 
+static void
+dpaa_sec_dump(struct dpaa_sec_op_ctx *ctx, struct dpaa_sec_qp *qp)
+{
+	struct dpaa_sec_job *job = &ctx->job;
+	struct rte_crypto_op *op = ctx->op;
+	dpaa_sec_session *sess = NULL;
+	struct sec_cdb c_cdb, *cdb;
+	uint8_t bufsize;
+	struct rte_crypto_sym_op *sym_op;
+	struct qm_sg_entry sg[2];
+
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION)
+		sess = (dpaa_sec_session *)
+			get_sym_session_private_data(
+					op->sym->session,
+					dpaa_cryptodev_driver_id);
+#ifdef RTE_LIBRTE_SECURITY
+	else if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
+		sess = (dpaa_sec_session *)
+			get_sec_session_private_data(
+					op->sym->sec_session);
+#endif
+	if (sess == NULL) {
+		printf("session is NULL\n");
+		goto mbuf_dump;
+	}
+
+	cdb = &sess->cdb;
+	rte_memcpy(&c_cdb, cdb, sizeof(struct sec_cdb));
+#ifdef RTE_LIBRTE_SECURITY
+	printf("\nsession protocol type = %d\n", sess->proto_alg);
+#endif
+	printf("\n****************************************\n"
+		"session params:\n\tContext type:\t%d\n\tDirection:\t%s\n"
+		"\tCipher alg:\t%d\n\tAuth alg:\t%d\n\tAead alg:\t%d\n"
+		"\tCipher key len:\t%ld\n\tCipher alg:\t%d\n"
+		"\tCipher algmode:\t%d\n", sess->ctxt,
+		(sess->dir == DIR_ENC) ? "DIR_ENC" : "DIR_DEC",
+		sess->cipher_alg, sess->auth_alg, sess->aead_alg,
+		sess->cipher_key.length, sess->cipher_key.alg,
+		sess->cipher_key.algmode);
+		rte_hexdump(stdout, "cipher key", sess->cipher_key.data,
+				sess->cipher_key.length);
+		rte_hexdump(stdout, "auth key", sess->auth_key.data,
+				sess->auth_key.length);
+	printf("\tAuth key len:\t%ld\n\tAuth alg:\t%d\n"
+		"\tAuth algmode:\t%d\n\tIV len:\t\t%d\n\tIV offset:\t%d\n"
+		"\tdigest length:\t%d\n\tauth only len:\t\t%d\n"
+		"\taead cipher text:\t%d\n",
+		sess->auth_key.length, sess->auth_key.alg,
+		sess->auth_key.algmode,
+		sess->iv.length, sess->iv.offset,
+		sess->digest_length, sess->auth_only_len,
+		sess->auth_cipher_text);
+#ifdef RTE_LIBRTE_SECURITY
+	printf("PDCP session params:\n"
+		"\tDomain:\t\t%d\n\tBearer:\t\t%d\n\tpkt_dir:\t%d\n\thfn_ovd:"
+		"\t%d\n\tsn_size:\t%d\n\tsdap_enabled:\t%d\n\thfn_ovd_offset:"
+		"\t%d\n\thfn:\t\t%d\n"
+		"\thfn_threshold:\t0x%x\n", sess->pdcp.domain,
+		sess->pdcp.bearer, sess->pdcp.pkt_dir, sess->pdcp.hfn_ovd,
+		sess->pdcp.sn_size, sess->pdcp.sdap_enabled,
+		sess->pdcp.hfn_ovd_offset, sess->pdcp.hfn,
+		sess->pdcp.hfn_threshold);
+#endif
+	c_cdb.sh_hdr.hi.word = rte_be_to_cpu_32(c_cdb.sh_hdr.hi.word);
+	c_cdb.sh_hdr.lo.word = rte_be_to_cpu_32(c_cdb.sh_hdr.lo.word);
+	bufsize = c_cdb.sh_hdr.hi.field.idlen;
+
+	printf("cdb = %p\n\n", cdb);
+	printf("Descriptor size = %d\n", bufsize);
+	int m;
+	for (m = 0; m < bufsize; m++)
+		printf("0x%x\n", rte_be_to_cpu_32(c_cdb.sh_desc[m]));
+
+	printf("\n");
+mbuf_dump:
+	sym_op = op->sym;
+	if (sym_op->m_src) {
+		printf("Source mbuf:\n");
+		rte_pktmbuf_dump(stdout, sym_op->m_src,
+				 sym_op->m_src->data_len);
+	}
+	if (sym_op->m_dst) {
+		printf("Destination mbuf:\n");
+		rte_pktmbuf_dump(stdout, sym_op->m_dst,
+				 sym_op->m_dst->data_len);
+	}
+
+	printf("Session address = %p\ncipher offset: %d, length: %d\n"
+		"auth offset: %d, length:  %d\n aead offset: %d, length: %d\n",
+		sym_op->session, sym_op->cipher.data.offset,
+		sym_op->cipher.data.length,
+		sym_op->auth.data.offset, sym_op->auth.data.length,
+		sym_op->aead.data.offset, sym_op->aead.data.length);
+	printf("\n");
+
+	printf("******************************************************\n");
+	printf("ctx info:\n");
+	printf("job->sg[0] output info:\n");
+	memcpy(&sg[0], &job->sg[0], sizeof(sg[0]));
+	printf("\taddr = 0x%lx,\n\tlen = %d,\n\tfinal = %d,\n\textention = %d"
+		"\n\tbpid = %d\n\toffset = %d\n",
+		(unsigned long)sg[0].addr, sg[0].length, sg[0].final,
+		sg[0].extension, sg[0].bpid, sg[0].offset);
+	printf("\njob->sg[1] input info:\n");
+	memcpy(&sg[1], &job->sg[1], sizeof(sg[1]));
+	hw_sg_to_cpu(&sg[1]);
+	printf("\taddr = 0x%lx,\n\tlen = %d,\n\tfinal = %d,\n\textention = %d"
+		"\n\tbpid = %d\n\toffset = %d\n",
+		(unsigned long)sg[1].addr, sg[1].length, sg[1].final,
+		sg[1].extension, sg[1].bpid, sg[1].offset);
+
+	printf("\nctx pool addr = %p\n", ctx->ctx_pool);
+	if (ctx->ctx_pool)
+		printf("ctx pool available counts = %d\n",
+			rte_mempool_avail_count(ctx->ctx_pool));
+
+	printf("\nop pool addr = %p\n", op->mempool);
+	if (op->mempool)
+		printf("op pool available counts = %d\n",
+			rte_mempool_avail_count(op->mempool));
+
+	printf("********************************************************\n");
+	printf("Queue data:\n");
+	printf("\tFQID = 0x%x\n\tstate = %d\n\tnb_desc = %d\n"
+		"\tctx_pool = %p\n\trx_pkts = %d\n\ttx_pkts"
+	       "= %d\n\trx_errs = %d\n\ttx_errs = %d\n\n",
+		qp->outq.fqid, qp->outq.state, qp->outq.nb_desc,
+		qp->ctx_pool, qp->rx_pkts, qp->tx_pkts,
+		qp->rx_errs, qp->tx_errs);
+}
+
 /* qp is lockless, should be accessed by only one thread */
 static int
 dpaa_sec_deq(struct dpaa_sec_qp *qp, struct rte_crypto_op **ops, int nb_ops)
@@ -711,7 +854,12 @@ dpaa_sec_deq(struct dpaa_sec_qp *qp, struct rte_crypto_op **ops, int nb_ops)
 		if (!ctx->fd_status) {
 			op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 		} else {
-			DPAA_SEC_DP_WARN("SEC return err:0x%x", ctx->fd_status);
+			if (dpaa_sec_dp_dump > DPAA_SEC_DP_NO_DUMP) {
+				DPAA_SEC_DP_WARN("SEC return err:0x%x\n",
+						  ctx->fd_status);
+				if (dpaa_sec_dp_dump > DPAA_SEC_DP_ERR_DUMP)
+					dpaa_sec_dump(ctx, qp);
+			}
 			op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		}
 		ops[pkts++] = op;
@@ -3539,6 +3687,16 @@ dpaa_sec_dev_init(struct rte_cryptodev *cryptodev)
 		if (unlikely(ret != 0)) {
 			DPAA_SEC_ERR("sec qman_create_fq failed");
 			goto init_error;
+		}
+	}
+
+	if (getenv("DPAA_SEC_DP_DUMP_LEVEL")) {
+		dpaa_sec_dp_dump =
+			atoi(getenv("DPAA_SEC_DP_DUMP_LEVEL"));
+		if (dpaa_sec_dp_dump > DPAA_SEC_DP_FULL_DUMP) {
+			printf("WARN: DPAA_SEC_DP_DUMP_LEVEL is not "
+				"supported, changing to FULL error prints\n");
+			dpaa_sec_dp_dump = DPAA_SEC_DP_FULL_DUMP;
 		}
 	}
 

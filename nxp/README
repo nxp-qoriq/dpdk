@@ -1041,6 +1041,13 @@ DPAA1:
 				If set to 0, this would disable taildrop.
 				(Only applicable for ethernet devices)
 
+3. DPAA_SEC_DP_DUMP_LEVEL	SEC datapath debug messages dump level.
+				0 - No dump.
+				1 - dump only sec error.
+				2 - dump sec error along with useful debugging
+				    information.
+				By default, 1 is configured.
+
 DPAA2:
 ------
 
