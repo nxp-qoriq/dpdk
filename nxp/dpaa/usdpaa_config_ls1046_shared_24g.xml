@@ -18,21 +18,9 @@ In DPDK the ports are detected in order specified in the linux DTS file
 So here we need to specify ports in the order they are present in the linux DTS
 Also, the DPDK port 'X' should have policy as fm_policy_'X'
 -->
-
-<!--
-There is a known bug in current kernel version due to which more than 3 ports
-can't be used in shared mode together. So, we need to disable at least 3 ports
-for this config file to work. Any three ports can be used and it can be done by
-commenting ports which are not required and uncommenting required ports.
-
-In current file, only ports mac6, mac9 and mac10 are enabled.
--->
-
-<!--
 		<port type="MAC" number="3" policy="fm_policy_3"/>
 		<port type="MAC" number="4" policy="fm_policy_4"/>
 		<port type="MAC" number="5" policy="fm_policy_5"/>
--->
 		<port type="MAC" number="6" policy="fm_policy_6"/>
 		<port type="MAC" number="9" policy="fm_policy_9"/>
 		<port type="MAC" number="10" policy="fm_policy_10"/>
