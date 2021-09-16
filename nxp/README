@@ -399,20 +399,34 @@ Following are some pre-requisites:
   For i.mx 8M (FEC) Platform:
   ~~~~~~~~~~~~~~~~~~
 
-  1. Bring up the imx-8mm-evk-rev board with modified kernel and proper bootargs:
-	<bootargs>
-	Enable User space mode of the kernel driver by adding “fec.us=1 isolcpus=1-3”
-	in kernel command line(bootargs).
-  2. Mount the hugetlbfs required for DPDK applications:
+  1. Bring up the imx-8mm-evk-rev board with latest kernel and dtb:
+	Enable User space mode of the kernel driver by using 'imx8mm-evk-dpdk.dtb'.
+	On uboot set the dtb & boot linux using below commands:
+	1. setenv fdt_file imx8mm-evk-dpdk.dtb
+	2. boot
+
+  2. On Linux mount the hugetlbfs required for DPDK applications:
 	1. mkdir -p /dev/hugepages
 	2. mount -t hugetlbfs hugetlbfs /dev/hugepages
 
   3. Manually allocate hugepages
 	e.g. echo 448 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 
+  4. Find DPDK applications(dpdk-l2fwd & dpdk-l3fwd) under the folder
+     '/usr/share/dpdk/examples/' and dpdk-testpmd at '/usr/bin/'.
+
+  5. Run-
+     ./dpdk-l2fwd -c 0x1 -n 1 --vdev 'net_enetfec' -- -p 0x1 -T 0
+     ./dpdk-l3fwd -c 0x1 --vdev='net_enetfec'  -n 1 -- -p 0x1 --config="(0,0,0)" -P --parse-ptype
+
+  6. Run/observe traffic
+     For functional testing, send the traffic from packet generator which is connected to the port.
+
   NOTE: For i.mx 8M platform, For all the applications, user must provide the "--vdev"
 	argument with value "net_enetfec" to enable ethernet device. Maximum supported
 	ethernet is currently 1 only.
+
+
 
   NOTE: For all the applications, the value n must be always 1 for all platforms.
 
@@ -460,7 +474,7 @@ Following are some pre-requisites:
   NOTE: testpmd is not supported on PPFE platform
 
   On i.mx8mm platform
-  ./testpmd -c 0x6 -n 1 --vdev='net_enetfec' -- -i --portmask=0x1 --nb-ports=1 --forward-mode=io
+  ./dpdk-testpmd -c 0x6 -n 1 --vdev='net_enetfec' -- -i --portmask=0x1 --nb-ports=1 --forward-mode=io
 
   'dpdk-test' Application
   ~~~~~~~~~~~~~~~~~~
