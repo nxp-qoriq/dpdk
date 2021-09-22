@@ -422,7 +422,7 @@ parse_fup(struct ptpv2_data_slave_ordinary *ptp_data)
 
 		created_pkt = rte_pktmbuf_alloc(mbuf_pool);
 		pkt_size = sizeof(struct rte_ether_hdr) +
-			sizeof(struct ptp_message);
+			sizeof(struct delay_req_msg);
 		created_pkt->data_len = pkt_size;
 		created_pkt->pkt_len = pkt_size;
 		eth_hdr = rte_pktmbuf_mtod(created_pkt, struct rte_ether_hdr *);
