@@ -771,7 +771,10 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		else
 			bufs[num_rx] = eth_fd_to_mbuf(fd, eth_data->port_id);
 #if defined(RTE_LIBRTE_IEEE1588)
-		priv->rx_timestamp = *dpaa2_timestamp_dynfield(bufs[num_rx]);
+		if (bufs[num_rx]->ol_flags & PKT_RX_IEEE1588_TMST) {
+			priv->rx_timestamp =
+				*dpaa2_timestamp_dynfield(bufs[num_rx]);
+		}
 #endif
 
 		if (eth_data->dev_conf.rxmode.offloads &
@@ -989,7 +992,10 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 							eth_data->port_id);
 
 #if defined(RTE_LIBRTE_IEEE1588)
-		priv->rx_timestamp = *dpaa2_timestamp_dynfield(bufs[num_rx]);
+		if (bufs[num_rx]->ol_flags & PKT_RX_IEEE1588_TMST) {
+			priv->rx_timestamp =
+				*dpaa2_timestamp_dynfield(bufs[num_rx]);
+		}
 #endif
 
 		if (eth_data->dev_conf.rxmode.offloads &
@@ -1027,6 +1033,8 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	struct dpaa2_annot_hdr *annotation;
+	void *v_addr;
+	struct rte_mbuf *mbuf;
 #endif
 
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
@@ -1111,10 +1119,16 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 			num_tx_conf++;
 			num_pulled++;
 #if defined(RTE_LIBRTE_IEEE1588)
-			annotation = (struct dpaa2_annot_hdr *)((size_t)
-				DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd)) +
-				DPAA2_FD_PTA_SIZE);
-			priv->tx_timestamp = annotation->word2;
+			v_addr = DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
+			mbuf = DPAA2_INLINE_MBUF_FROM_BUF(v_addr,
+				rte_dpaa2_bpid_info[DPAA2_GET_FD_BPID(fd)].meta_data_size);
+
+			if (mbuf->ol_flags & PKT_TX_IEEE1588_TMST) {
+				annotation = (struct dpaa2_annot_hdr *)((size_t)
+					DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd)) +
+					DPAA2_FD_PTA_SIZE);
+				priv->tx_timestamp = annotation->word2;
+			}
 #endif
 		} while (pending);
 
@@ -1190,9 +1204,11 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	 * corresponding to last packet transmitted for reading
 	 * the timestamp
 	 */
-	priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
-	dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
-	priv->tx_timestamp = 0;
+	if ((*bufs)->ol_flags & PKT_TX_IEEE1588_TMST) {
+		priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
+		dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
+		priv->tx_timestamp = 0;
+	}
 #endif
 
 	/*Prepare enqueue descriptor*/
