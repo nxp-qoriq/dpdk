@@ -1544,6 +1544,12 @@ main(int argc, char **argv)
 
 		printf("done:\n");
 
+		ret = rte_eth_promiscuous_enable(portid);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_promiscuous_enable:err=%s, port=%u\n",
+				 rte_strerror(-ret), portid);
+
 		/* initialize port stats */
 		memset(&port_statistics, 0, sizeof(port_statistics));
 	}
