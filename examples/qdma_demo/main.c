@@ -75,6 +75,11 @@ struct latency {
 };
 struct latency latency_data[MAX_CORE_COUNT] = {0};
 
+struct addr_t {
+	uint64_t *src;
+	uint64_t *dest;
+};
+
 struct qdma_test_case test_case[] = {
 	{"pci_to_pci", "EP mem to EP mem done from host", PCI_TO_PCI},
 	{"mem_to_pci", "Host mem to EP mem done from host", MEM_TO_PCI},
@@ -91,6 +96,7 @@ int g_rbp_testcase = MEM_TO_PCI;
 uint32_t g_arg_mask;
 uint64_t g_target_pci_addr = TEST_PCICPU_BASE_ADDR;
 uint32_t g_burst = RTE_QDMA_BURST_NB_MAX;
+uint64_t g_target_pci_iova;
 uint64_t g_target_pci_vaddr;
 int g_packet_size = 1024;
 uint64_t g_pci_size = TEST_PCI_SIZE_LIMIT;
@@ -111,6 +117,7 @@ static int test_dma_init(void);
 static void qdma_demo_usage(void);
 static int qdma_parse_long_arg(char *optarg, struct option *lopt);
 static int qdma_demo_validate_args(void);
+struct addr_t qdma_mem_iova2virt(uint64_t src, uint64_t dest);
 
 static void *pci_addr_mmap(void *start, size_t length,
 		int prot, int flags, off_t offset,
@@ -346,6 +353,36 @@ static void calculate_latency(unsigned int lcore_id,
 	rte_delay_ms(1000);
 }
 
+struct addr_t qdma_mem_iova2virt(uint64_t src, uint64_t dest)
+{
+	uint64_t off_s, off_d;
+	struct addr_t addr;
+
+	switch (g_rbp_testcase) {
+	case PCI_TO_MEM:
+		off_s = src - g_target_pci_iova;
+		addr.src = (uint64_t *) (g_target_pci_vaddr + off_s);
+		addr.dest = rte_mem_iova2virt(dest);
+		break;
+	case MEM_TO_PCI:
+		off_d = dest - g_target_pci_iova;
+		addr.src = rte_mem_iova2virt(src);
+		addr.dest = (uint64_t *) (g_target_pci_vaddr + off_d);
+		break;
+	case MEM_TO_MEM:
+		addr.src = rte_mem_iova2virt(src);
+		addr.dest = rte_mem_iova2virt(dest);
+		break;
+	case PCI_TO_PCI:
+		off_s = src - g_target_pci_iova;
+		off_d = dest - g_target_pci_iova;
+		addr.src = (uint64_t *) (g_target_pci_vaddr + off_s);
+		addr.dest = (uint64_t *) (g_target_pci_vaddr + off_d);
+		break;
+	}
+	return addr;
+}
+
 #define MAX_SG_JOB_NB_IN_QDMA 512
 
 static int
@@ -376,8 +413,12 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 		struct rte_qdma_job *job[g_burst];
 		struct rte_qdma_job *job1[g_burst];
 		struct rte_qdma_enqdeq e_context, de_context;
-		int ret, j;
+		struct addr_t addr;
+		int ret, j, i;
 		int job_num = burst_nb;
+		uint64_t *src1, *dest1;
+		uint8_t r_num;
+		uint32_t k;
 
 		if (g_latency) {
 			if (pkt_enquened >= TEST_PACKETS_NUM) {
@@ -407,13 +448,12 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 					 * of dest, after DMA operation is
 					 * performed from src.
 					 */
-					uint8_t r_num = rand() + 1;
+					r_num = rand() + 1;
 
-					for (uint32_t i = 0;
-							i < job[j]->len; i++) {
-						*((uint8_t *)(job[j]->src) + i)
+					for (k = 0; k < job[j]->len; k++) {
+						*((uint8_t *)(job[j]->src) + k)
 							= r_num;
-						*((uint8_t *)(job[j]->dest) + i)
+						*((uint8_t *)(job[j]->dest) + k)
 							= 0;
 					}
 				}
@@ -452,22 +492,20 @@ lcore_qdma_process_loop(__attribute__((unused)) void *arg)
 		e_context.job = job;
 
 		if (g_validate) {
-			for (int i = 0; i < job_num; i++) {
-				uint64_t *src1 =
-					rte_mem_iova2virt(job[i]->src);
-				uint64_t *dest1 =
-					rte_mem_iova2virt(job[i]->dest);
+			for (i = 0; i < job_num; i++) {
+				addr = qdma_mem_iova2virt(job[i]->src, job[i]->dest);
+				src1 = addr.src;
+				dest1 = addr.dest;
 
 				/* Setting random value in the  job[i]->len bits
 				 * at src1 and 0 at dest1 to check data validity
 				 * of entire job[i]->len bits of dest1, after
 				 * DMA operation is performed from src1.
 				 */
-				uint8_t r_num = rand() + 1;
-
-				for (uint32_t j = 0; j < job[i]->len; j++) {
-					*((uint8_t *)(src1) + j) = r_num;
-					*((uint8_t *)(dest1) + j) = 0;
+				r_num = rand() + 1;
+				for (k = 0; k < job[i]->len; k++) {
+					*((uint8_t *)(src1) + k) = r_num;
+					*((uint8_t *)(dest1) + k) = 0;
 				}
 			}
 		}
@@ -496,11 +534,10 @@ dequeue:
 				pkt_cnt++;
 
 				if (g_validate) {
-					uint64_t *src1 =
-					       rte_mem_iova2virt(job1[j]->src);
-					uint64_t *dest1 =
-					       rte_mem_iova2virt(job1[j]->dest);
+					addr = qdma_mem_iova2virt(job[j]->src, job[j]->dest);
 
+					src1 = addr.src;
+					dest1 = addr.dest;
 					err = memcmp((void *)src1,
 						(void *)dest1,
 						job1[j]->len);
@@ -567,10 +604,11 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 				pci_phys);
 			return 0;
 		}
-		g_target_pci_vaddr = pci_phys;
+		g_target_pci_iova = pci_phys;
+		g_target_pci_vaddr = pci_vaddr;
 		/* configure pci virtual address in SMMU via VFIO */
 		rte_fslmc_vfio_mem_dmamap(pci_vaddr,
-					  g_target_pci_vaddr, len);
+					  g_target_pci_iova, len);
 		snprintf(src_name, 16, "src_n-%d", 1);
 		snprintf(dst_name, 16, "dst_n-%d", 1);
 		mz0 = rte_memzone_reserve_aligned(src_name, g_pci_size, 0,
@@ -672,7 +710,7 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 				job->flags = RTE_QDMA_JOB_DEST_PHY;
 			} else {
 				job->dest =
-				(g_target_pci_vaddr + (long) (i * TEST_PACKET_SIZE));
+				(g_target_pci_iova + (long) (i * TEST_PACKET_SIZE));
 			}
 		} else if (g_rbp_testcase == MEM_TO_MEM) {
 			if (g_memcpy) {
@@ -697,9 +735,9 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 					(long) ((i * TEST_PACKET_SIZE)));
 				job->flags = RTE_QDMA_JOB_SRC_PHY | RTE_QDMA_JOB_DEST_PHY;
 			} else {
-				job->dest = (g_target_pci_vaddr + g_pci_size +
+				job->dest = (g_target_pci_iova + g_pci_size +
 					(long) (i * TEST_PACKET_SIZE));
-				job->src = (g_target_pci_vaddr +
+				job->src = (g_target_pci_iova +
 					(long) ((i * TEST_PACKET_SIZE)));
 			}
 		} else if (g_rbp_testcase == PCI_TO_MEM) {
@@ -708,7 +746,7 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 					(long) ((i * TEST_PACKET_SIZE)));
 				job->flags = RTE_QDMA_JOB_SRC_PHY;
 			} else {
-				job->src = (g_target_pci_vaddr +
+				job->src = (g_target_pci_iova +
 					(long) ((i * TEST_PACKET_SIZE)));
 			}
 			if (g_memcpy)
