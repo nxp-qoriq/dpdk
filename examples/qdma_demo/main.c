@@ -558,7 +558,7 @@ dequeue:
 					cycle1 = rte_get_timer_cycles();
 				}
 			}
-		} while (ret);
+		} while ((g_validate && in_dma) || (!g_validate && ret));
 my_memcopy:
 		if (pkt_cnt > (64 * 1024)) {
 			rte_atomic32_add(&dequeue_num, (64 * 1024));
