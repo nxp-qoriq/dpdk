@@ -8,6 +8,7 @@
 
 #include "dpaa2_ethdev.h"
 #include "dpaa2_pmd_logs.h"
+#include <dpaa2_hw_dpio.h>
 
 #define DPAA2_BURST_MAX	(64 * 1024)
 
@@ -103,6 +104,7 @@ dpaa2_capabilities_get(struct rte_eth_dev *dev,
 	cap->sched_wfq_n_children_per_group_max = DPNI_MAX_TC;
 	cap->sched_wfq_n_groups_max = 2;
 	cap->sched_wfq_weight_max = DPAA2_WEIGHT_MAX / 100;
+	cap->stats_mask = RTE_TM_STATS_N_PKTS | RTE_TM_STATS_N_BYTES;
 
 	return 0;
 }
@@ -142,6 +144,8 @@ dpaa2_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->nonleaf.sched_wfq_n_children_per_group_max = 1;
 		cap->nonleaf.sched_wfq_n_groups_max = 1;
 		cap->nonleaf.sched_wfq_weight_max = 1;
+		cap->nonleaf.stats_mask = RTE_TM_STATS_N_PKTS |
+					  RTE_TM_STATS_N_BYTES;
 	} else if (level_id == CHANNEL_LEVEL) { /* channels */
 		cap->n_nodes_max = priv->num_channels;
 		cap->n_nodes_nonleaf_max = priv->num_channels;
@@ -164,6 +168,8 @@ dpaa2_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->leaf_nodes_identical = 1;
 
 		cap->leaf.shaper_private_supported = 0;;
+		cap->leaf.stats_mask = RTE_TM_STATS_N_PKTS |
+				       RTE_TM_STATS_N_BYTES;
 	}
 
 	return 0;
@@ -201,6 +207,8 @@ dpaa2_node_capabilities_get(struct rte_eth_dev *dev, uint32_t node_id,
 		cap->nonleaf.sched_wfq_n_children_per_group_max = 1;
 		cap->nonleaf.sched_wfq_n_groups_max = 1;
 		cap->nonleaf.sched_wfq_weight_max = 1;
+		cap->stats_mask = RTE_TM_STATS_N_PKTS |
+					  RTE_TM_STATS_N_BYTES;
 	} else if (node->level_id == CHANNEL_LEVEL) {
 		cap->shaper_private_supported = 1;
 		cap->shaper_private_dual_rate_supported = 1;
@@ -212,6 +220,9 @@ dpaa2_node_capabilities_get(struct rte_eth_dev *dev, uint32_t node_id,
 		cap->nonleaf.sched_wfq_n_children_per_group_max = priv->num_tx_tc;
 		cap->nonleaf.sched_wfq_n_groups_max = 2;
 		cap->nonleaf.sched_wfq_weight_max = DPAA2_WEIGHT_MAX / 100;
+	} else {
+		cap->stats_mask = RTE_TM_STATS_N_PKTS |
+				       RTE_TM_STATS_N_BYTES;
 	}
 
 	return 0;
@@ -378,21 +389,12 @@ dpaa2_node_check_params(struct rte_eth_dev *dev, uint32_t node_id,
 				RTE_TM_ERROR_TYPE_NODE_PARAMS_N_SHARED_SHAPERS,
 				NULL, "Shared shaper is not supported\n");
 
-	/* verify port (root node) settings */
+	/* verify non leaf nodes settings */
 	if (node_id >= dev->data->nb_tx_queues) {
 		if (params->nonleaf.wfq_weight_mode)
 			return -rte_tm_error_set(error, EINVAL,
 				RTE_TM_ERROR_TYPE_NODE_PARAMS_WFQ_WEIGHT_MODE,
 				NULL, "WFQ weight mode is not supported\n");
-
-		if (params->stats_mask & ~(RTE_TM_STATS_N_PKTS |
-					   RTE_TM_STATS_N_BYTES))
-			return -rte_tm_error_set(error, EINVAL,
-				RTE_TM_ERROR_TYPE_NODE_PARAMS_STATS,
-				NULL,
-				"Requested port stats are not supported\n");
-
-		return 0;
 	} else {
 		if (params->shaper_profile_id != RTE_TM_SHAPER_PROFILE_ID_NONE)
 			return -rte_tm_error_set(error, EINVAL,
@@ -400,20 +402,26 @@ dpaa2_node_check_params(struct rte_eth_dev *dev, uint32_t node_id,
 				NULL, "Private shaper not supported on leaf\n");
 	}
 
-	if (params->stats_mask & ~RTE_TM_STATS_N_PKTS)
-		return -rte_tm_error_set(error, EINVAL,
-			RTE_TM_ERROR_TYPE_NODE_PARAMS_STATS,
-			NULL,
-			"Requested stats are not supported\n");
-
 	/* check leaf node */
 	if (level_id == QUEUE_LEVEL) {
 		if (params->leaf.cman != RTE_TM_CMAN_TAIL_DROP)
 			return -rte_tm_error_set(error, ENODEV,
 					RTE_TM_ERROR_TYPE_NODE_PARAMS_CMAN,
 					NULL, "Only taildrop is supported\n");
+		if (params->stats_mask & ~(RTE_TM_STATS_N_PKTS |
+					   RTE_TM_STATS_N_BYTES))
+			return -rte_tm_error_set(error, EINVAL,
+				RTE_TM_ERROR_TYPE_NODE_PARAMS_STATS,
+				NULL,
+				"Requested port stats are not supported\n");
+	} else if (level_id == LNI_LEVEL) {
+		if (params->stats_mask & ~(RTE_TM_STATS_N_PKTS |
+					   RTE_TM_STATS_N_BYTES))
+			return -rte_tm_error_set(error, EINVAL,
+				RTE_TM_ERROR_TYPE_NODE_PARAMS_STATS,
+				NULL,
+				"Requested port stats are not supported\n");
 	}
-	/* XXX: confirm any check for level 1 (Channels) */
 
 	return 0;
 }
@@ -875,6 +883,81 @@ out:
 	return ret;
 }
 
+static int
+dpaa2_node_stats_read(struct rte_eth_dev *dev, uint32_t node_id,
+		      struct rte_tm_node_stats *stats, uint64_t *stats_mask,
+		      int clear, struct rte_tm_error *error)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct dpaa2_tm_node *node;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
+	union dpni_statistics value;
+	int ret = 0;
+
+	node = dpaa2_node_from_id(priv, node_id);
+	if (!node)
+		return -rte_tm_error_set(error, ENODEV,
+				RTE_TM_ERROR_TYPE_NODE_ID,
+				NULL, "Node id does not exist\n");
+
+	if (stats_mask)
+		*stats_mask = node->stats_mask;
+
+	if (!stats)
+		return 0;
+
+	memset(stats, 0, sizeof(*stats));
+	memset(&value, 0, sizeof(union dpni_statistics));
+
+	if (node->level_id == LNI_LEVEL) {
+		uint8_t page1 = 1;
+
+		ret = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+					  page1, 0, &value);
+		if (ret)
+			return -rte_tm_error_set(error, -ret,
+					RTE_TM_ERROR_TYPE_UNSPECIFIED, NULL,
+					"Failed to read port statistics\n");
+
+		if (node->stats_mask & RTE_TM_STATS_N_PKTS)
+			stats->n_pkts = value.page_1.egress_all_frames;
+
+		if (node->stats_mask & RTE_TM_STATS_N_BYTES)
+			stats->n_bytes = value.page_1.egress_all_bytes;
+
+		if (clear) {
+			ret = dpni_reset_statistics(dpni, CMD_PRI_LOW, priv->token);
+				return -rte_tm_error_set(error, -ret,
+					RTE_TM_ERROR_TYPE_UNSPECIFIED, NULL,
+					"Failed to reset port statistics\n");
+		}
+	} else if (node->level_id == QUEUE_LEVEL) {
+		uint8_t page3 = 3;
+		struct dpaa2_queue *dpaa2_q;
+		dpaa2_q =  (struct dpaa2_queue *)dev->data->tx_queues[node->id];
+
+		ret = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+					  page3,
+					  (node->parent->channel_id << 8 |
+					   dpaa2_q->tc_index), &value);
+		if (ret)
+			return -rte_tm_error_set(error, -ret,
+					RTE_TM_ERROR_TYPE_UNSPECIFIED, NULL,
+					"Failed to read queue statistics\n");
+
+		if (node->stats_mask & RTE_TM_STATS_N_PKTS)
+			stats->n_pkts = value.page_3.ceetm_dequeue_frames;
+		if (node->stats_mask & RTE_TM_STATS_N_BYTES)
+			stats->n_bytes = value.page_3.ceetm_dequeue_bytes;
+	} else {
+		return -rte_tm_error_set(error, -1,
+				RTE_TM_ERROR_TYPE_UNSPECIFIED, NULL,
+				"Failed to read channel statistics\n");
+	}
+
+	return 0;
+}
+
 const struct rte_tm_ops dpaa2_tm_ops = {
 	.node_type_get = dpaa2_node_type_get,
 	.capabilities_get = dpaa2_capabilities_get,
@@ -885,4 +968,5 @@ const struct rte_tm_ops dpaa2_tm_ops = {
 	.node_add = dpaa2_node_add,
 	.node_delete = dpaa2_node_delete,
 	.hierarchy_commit = dpaa2_hierarchy_commit,
+	.node_stats_read = dpaa2_node_stats_read,
 };
