@@ -452,36 +452,42 @@
 	<policy name="fm_policy_3">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac3_dist"/>
+			<distributionref name="default_kernel_queue_mac3"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_4">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac4_dist"/>
+			<distributionref name="default_kernel_queue_mac4"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_5">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac5_dist"/>
+			<distributionref name="default_kernel_queue_mac5"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_6">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac6_dist"/>
+			<distributionref name="default_kernel_queue_mac6"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_9">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac9_dist"/>
+			<distributionref name="default_kernel_queue_mac9"/>
 		</dist_order>
 	</policy>
 
 	<policy name="fm_policy_10">
 		<dist_order>
 			<distributionref name="dpdk_frag_gtp_mac10_dist"/>
+			<distributionref name="default_kernel_queue_mac10"/>
 		</dist_order>
 	</policy>
 </netpcd>
