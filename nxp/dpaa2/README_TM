@@ -4,9 +4,9 @@ DPDK DPAA2 TRAFFIC MANAGEMENT
 Note: Please first read nxp/README.
 
 1.Preparations
-  #Create dpni with 8 TCs
-      export FS_ENTRIES=9
-      export MAX_TCS=8
+  #Create required resources:
+      export FS_ENTRIES=12
+      export MAX_CHANNELS=2
       source dynamic_dpl.sh dpmac.x dpmac.y
 
 2.Testing
@@ -16,26 +16,18 @@ Note: Please first read nxp/README.
   #Prepare and commit TM hierarchy
      *on above command execution, there will be a prompt "testpmd>",
       where user can prepare and commit the TM hierarchy as per the
-      requirements. Below are the few examples:
+      requirements. Example:
 
-     1.One port level shaper and strict priority on all 4 queues of port 0:
-      add port tm node shaper profile 0 1 104857600 64 100 0 0
-      add port tm nonleaf node 0 8 -1 0 1 0 1 1 1 0
-      add port tm leaf node 0 0 8 0 1 1 -1 0 0 0 0
-      add port tm leaf node 0 1 8 1 1 1 -1 0 0 0 0
-      add port tm leaf node 0 2 8 2 1 1 -1 0 0 0 0
-      add port tm leaf node 0 3 8 3 1 1 -1 0 0 0 0
-      port tm hierarchy commit 0 no
-
-	or
-
-     2.One port level shaper and WFQ on all 4 queues of port 0:
-      add port tm node shaper profile 0 1 104857600 64 100 0 0
-      add port tm nonleaf node 0 8 -1 0 1 0 1 1 1 0
-      add port tm leaf node 0 0 8 0 200 1 -1 0 0 0 0
-      add port tm leaf node 0 1 8 0 300 1 -1 0 0 0 0
-      add port tm leaf node 0 2 8 0 400 1 -1 0 0 0 0
-      add port tm leaf node 0 3 8 0 500 1 -1 0 0 0 0
+     1. 2 Channels each having 2 queues in SP mode on port 0:
+      add port tm node shaper profile 0 1 104857600 64 0 0 0 0
+      add port tm node shaper profile 0 2 52428800 64 0 0 0 0
+      add port tm nonleaf node 0 15 -1 0 1 0 1 1 3 0
+      add port tm nonleaf node 0 13 15 0 1 1 2 1 0 0
+      add port tm nonleaf node 0 14 15 0 1 1 2 1 0 0
+      add port tm leaf node 0 0 13 0 1 2 -1 0 0 0x3 0
+      add port tm leaf node 0 1 13 1 1 2 -1 0 0 0x3 0
+      add port tm leaf node 0 2 14 2 1 2 -1 0 0 0x3 0
+      add port tm leaf node 0 3 14 3 1 2 -1 0 0 0x3 0
       port tm hierarchy commit 0 no
 
   #Create flows as per the source IP addresses:
@@ -60,11 +52,12 @@ Note: Please first read nxp/README.
   DPDK TM framework: https://doc.dpdk.org/guides/prog_guide/traffic_management.html
 
   DPAA2 supported features:
-  * Level0 (root node) and Level1 are supported.
-  * 1 private shaper at root node (port level) is supported.
-  * 8 TX queues per port supported (1 channel per port)
+  * Level0(root node), level1 (channels) and level2 (queues) are supported.
+  * Private shapers at level0 and level1 are supported.
+  * 8 TX queues per channel(level1 node) and maximum 15 channels per port supported.
   * Both SP and WFQ scheduling mechanisms are supported on all 8 queues.
+  * Level0 and level2 statistics are supported.
   * Congestion notification is supported. It means if there is congestion on
     the network, DPDK driver will not enqueue any packet (no taildrop or WRED)
 
-  User can also check node, level capabilities using testpmd commands.
+  Please refer node, level capabilities using testpmd commands for more supported features and limitations.
