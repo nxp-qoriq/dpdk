@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020 NXP
+ * Copyright 2020-2021 NXP
  */
 
 #ifndef _FSL_QDMA_H_
@@ -7,6 +7,7 @@
 
 #include <dpaa_list.h>
 #include <rte_atomic.h>
+#include <rte_io.h>
 
 #define u64	uint64_t
 #define u32	uint32_t
@@ -143,30 +144,16 @@
 #define QDMA_QUEUES 8
 #define QDMA_DELAY 1000
 
-#define __arch_getq(a)		(*(volatile u64 *)(a))
-#define __arch_putq(v, a)	(*(volatile u64 *)(a) = (v))
-#define __arch_getq32(a)	(*(volatile u32 *)(a))
-#define __arch_putq32(v, a)	(*(volatile u32 *)(a) = (v))
-#define readq32(c) \
-	({ u32 __v = __arch_getq32(c); rte_io_rmb(); __v; })
-#define writeq32(v, c) \
-	({ u32 __v = v; __arch_putq32(__v, c); __v; })
-#define ioread32(_p)		readq32(_p)
-#define iowrite32(_v, _p)	writeq32(_v, _p)
-
-#define ioread32be(_p)          be32_to_cpu(readq32(_p))
-#define iowrite32be(_v, _p)	writeq32(be32_to_cpu(_v), _p)
-
 #ifdef QDMA_BIG_ENDIAN
-#define QDMA_IN(addr)		ioread32be(addr)
-#define QDMA_OUT(addr, val)	iowrite32be(val, addr)
-#define QDMA_IN_BE(addr)	ioread32(addr)
-#define QDMA_OUT_BE(addr, val)	iowrite32(val, addr)
+#define QDMA_IN(addr)           be32_to_cpu(rte_read32(addr))
+#define QDMA_OUT(addr, val)     rte_write32(be32_to_cpu(val), addr)
+#define QDMA_IN_BE(addr)        rte_read32(addr)
+#define QDMA_OUT_BE(addr, val)  rte_write32(val, addr)
 #else
-#define QDMA_IN(addr)		ioread32(addr)
-#define QDMA_OUT(addr, val)	iowrite32(val, addr)
-#define QDMA_IN_BE(addr)	ioread32be(addr)
-#define QDMA_OUT_BE(addr, val)	iowrite32be(val, addr)
+#define QDMA_IN(addr)           rte_read32(addr)
+#define QDMA_OUT(addr, val)     rte_write32(val, addr)
+#define QDMA_IN_BE(addr)        be32_to_cpu(rte_write32(addr))
+#define QDMA_OUT_BE(addr, val)  rte_write32(be32_to_cpu(val), addr)
 #endif
 
 #define FSL_QDMA_BLOCK_BASE_OFFSET(fsl_qdma_engine, x)			\
