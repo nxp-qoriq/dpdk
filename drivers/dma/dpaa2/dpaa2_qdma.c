@@ -618,8 +618,17 @@ dpaa2_qdma_copy_sg(void *dev_private,
 	struct qbman_fle *fle;
 	struct qdma_sdd *sdd;
 
-	if (unlikely(nb_src != nb_dst))
+	if (unlikely(nb_src != nb_dst)) {
+		DPAA2_QDMA_ERR("SG entry src num(%d) != dst num(%d)",
+			nb_src, nb_dst);
 		return -ENOTSUP;
+	}
+
+	if (unlikely(nb_src > RTE_DPAA2_QDMA_JOB_SUBMIT_MAX)) {
+		DPAA2_QDMA_ERR("SG entry number(%d) > MAX(%d)",
+			nb_src, RTE_DPAA2_QDMA_JOB_SUBMIT_MAX);
+		return -EINVAL;
+	}
 
 	memset(fd, 0, sizeof(struct qbman_fd));
 
