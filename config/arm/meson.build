@@ -368,22 +368,15 @@ soc_dpaa = {
 	# to PCIe as we can map only 1.7Gb memory to PCIe address space.
 	# Flag is applicable only when RTE_LA12XX_SOCKET is enabled.
 	['RTE_LA12XX_SOCKET_MAX_SEG', 1],
-	['RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022', 1]
-    ],
-    'numa': false
-}
+	['RTE_LIBRTE_DPAA_ERRATA_LS1043_A010022', 1],
 
-soc_imx = {
-    'description': 'NXP IMX',
-    'implementer': '0x41',
-    'part_number': '0xd08',
-    'flags': [
-        ['RTE_MACHINE', '"imx"'],
-        ['RTE_USE_NON_CACHE_MEM', 1],
-        ['RTE_MAX_LCORE', 16],
-        ['RTE_MAX_NUMA_NODES', 1],
     ],
-    'numa': false
+    'numa': false,
+	#disable unwanted drivers/libs for DPAA platforms
+        # add disabled drivers
+        # valid values are dir/subdirs in the drivers directory
+        # wildcards are allowed
+     'disable_drivers':'crypto/bcmfs,crypto/ipsec*,crypto/m*,crypto/n*,crypto/octeontx,baseband/fpga*,baseband/acc,baseband/turbo_sw,bus/auxiliary,bus/ifpga,compress/*,event/opdl,event/dsw,net/ark,net/avp,net/bnxt,net/axgbe,net/cxgbe,net/ena,net/gve,net/hinic,net/hns3,/net/iavf,net/igc,net/ice,net/ionic,net/liquidio,net/nfp,net/ngbe,net/netvsc,net/oct*,net/s*,net/thunderx,net/qede,net/vmxnet3,common/c*,common/i*,common/oct*,common/qat,common/sfc*,dma/hi*,raw/ntb*,vdpa/*,gpu/*'
 }
 
 soc_emag = {
