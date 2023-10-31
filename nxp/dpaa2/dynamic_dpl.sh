@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2018-2022 NXP
+# Copyright 2018-2023 NXP
 
 cat > script_help << EOF
 
@@ -281,7 +281,15 @@ get_dpni_parameters() {
 	then
 		MAX_CHANNELS=1
 	fi
-
+	export res_ver=$(restool -v | cut -f2 -d"v" | cut -f1 -d " ")
+	export res_ref=2.4
+	st=$((`echo "$res_ver < $res_ref"| bc`))
+	if [[ $st -eq 1 ]]
+	then
+			ADD_DPNI_OPTIONS=
+	else
+			ADD_DPNI_OPTIONS=" --num-channels=$MAX_CHANNELS"
+	fi
 	if [[ -z "$MAX_CGS" ]]
 	then
 		MAX_CGS=`expr $MAX_QUEUES + 8`
@@ -740,7 +748,7 @@ then
 				PRINT_ONCE=1
 			fi
 		fi
-		DPNI=$(restool -s dpni create --options=$DPNI_OPTIONS --num-tcs=$MAX_TCS --num-channels=$MAX_CHANNELS --num-queues=$MAX_QUEUES --num-opr=$MAX_OPR --fs-entries=$FS_ENTRIES --vlan-entries=16 --qos-entries=$MAX_QOS --num-cgs=$MAX_CGS --container=$DPRC)
+		DPNI=$(restool -s dpni create --options=$DPNI_OPTIONS --num-tcs=$MAX_TCS $ADD_DPNI_OPTIONS --num-queues=$MAX_QUEUES --num-opr=$MAX_OPR --fs-entries=$FS_ENTRIES --vlan-entries=16 --qos-entries=$MAX_QOS --num-cgs=$MAX_CGS --container=$DPRC)
 		restool dprc sync
 		if [[ $TYPE != "dpmac" ]]
 		then
