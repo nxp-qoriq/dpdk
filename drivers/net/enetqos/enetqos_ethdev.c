@@ -18,6 +18,8 @@
 
 #define EXTRACT_CCSR_ADDR(s)	(s + strlen(s) - 8)
 
+#define EXTRACT_CCSR_ADDR(s)	(s + strlen(s) - 8)
+
 static void
 enetqos_free_buffers(struct rte_eth_dev *dev)
 {
