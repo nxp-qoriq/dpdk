@@ -610,7 +610,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 	PMD_INIT_FUNC_TRACE();
 
 	/* Allocate DPAA2 dpdmux handle */
-	dpdmux_dev = rte_malloc(NULL, sizeof(struct dpaa2_dpdmux_dev), 0);
+	dpdmux_dev = rte_zmalloc(NULL, sizeof(struct dpaa2_dpdmux_dev), 0);
 	if (!dpdmux_dev) {
 		DPAA2_PMD_ERR("Memory allocation failed for DPDMUX Device");
 		return -1;
