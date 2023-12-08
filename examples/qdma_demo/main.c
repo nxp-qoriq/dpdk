@@ -790,7 +790,7 @@ lcore_qdma_control_loop(__attribute__((unused)) void *arg)
 				job->src = (TEST_PCIBUS_BASE_ADDR +
 					(long) ((i * TEST_PACKET_SIZE)));
 			} else {
-				job->dest = (g_target_pci_iova + g_pci_size +
+				job->dest = (g_target_pci_iova + (g_pci_size / 2) +
 					(long) (i * TEST_PACKET_SIZE));
 				job->src = (g_target_pci_iova +
 					(long) ((i * TEST_PACKET_SIZE)));
@@ -972,7 +972,7 @@ static void qdma_demo_usage(void)
 	for (i = 0; i < test_case_array_size; i++)
 		printf("		%s - %s\n", test_case[i].name,
 				test_case[i].help);
-	printf("	: --pci_size <bytes>\n");
+	printf("	: --pci_size <bytes in decimal>\n");
 	printf("	: --latency_test\n");
 	printf("	: --memcpy\n");
 	printf("	: --scatter_gather\n");
@@ -1218,7 +1218,10 @@ main(int argc, char *argv[])
 	}
 
 	if (g_rbp_testcase != MEM_TO_MEM) {
-		g_packet_num = g_pci_size / (TEST_PACKET_SIZE);
+		if (g_rbp_testcase != PCI_TO_PCI)
+			g_packet_num = g_pci_size / (TEST_PACKET_SIZE);
+		else
+			g_packet_num = (g_pci_size / 2) / (TEST_PACKET_SIZE);
 		printf("test packet count %d\n", g_packet_num);
 		if (g_pci_size < (unsigned int)(TEST_PACKETS_NUM * TEST_PACKET_SIZE)) {
 			printf("Need to increase host pcie memory space!\n");
