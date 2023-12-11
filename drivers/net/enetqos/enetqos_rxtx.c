@@ -148,15 +148,10 @@ rx_processing_done:
 static void
 enetqos_prepare_tx_desc(struct dma_desc *p, int len, unsigned int tot_pkt_len)
 {
-	unsigned int tdes3 = p->des3;
+	p->des2 = len & ENETQ_TDES2_BUF1_SZ_MASK;
 
-	p->des2 |= len & ENETQ_TDES2_BUF1_SZ_MASK;
-
-	tdes3 |= tot_pkt_len & ENETQ_TDES3_PKT_SZ_MASK;
-	tdes3 |= ENETQ_TDES3_FIRST_DESC;
-	tdes3 |= ENETQ_TDES3_LAST_DESC;
-
-	p->des3 |= tdes3;
+	p->des3	= tot_pkt_len & ENETQ_TDES3_PKT_SZ_MASK;
+	p->des3 |= ENETQ_TDES3_FIRST_DESC | ENETQ_TDES3_LAST_DESC;
 }
 
 static int enetqos_get_tx_status(struct dma_desc *p)
