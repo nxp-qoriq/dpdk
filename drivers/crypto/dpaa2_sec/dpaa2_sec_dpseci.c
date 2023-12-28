@@ -3017,6 +3017,8 @@ dpaa2_sec_ipsec_proto_init(struct rte_crypto_cipher_xform *cipher_xform,
 	case RTE_CRYPTO_AUTH_SHA384_HMAC:
 		authdata->algtype = OP_PCL_IPSEC_HMAC_SHA2_384_192;
 		authdata->algmode = OP_ALG_AAI_HMAC;
+		authdata->key = DPAA2_VADDR_TO_IOVA(authdata->key);
+		authdata->key_type = RTA_DATA_PTR;
 		break;
 	case RTE_CRYPTO_AUTH_SHA512_HMAC:
 		authdata->algtype = OP_PCL_IPSEC_HMAC_SHA2_512_256;
