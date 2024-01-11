@@ -2330,7 +2330,7 @@ test_AES_CBC_HMAC_SHA1_encrypt_digest_ext_buffer(void)
 	ut_params->auth_xform.auth.digest_length = DIGEST_BYTE_LENGTH_SHA1;
 
 	ut_params->sess = rte_cryptodev_sym_session_create(
-			ts_params->valid_devs[0], &ut_params->auth_xform,
+			ts_params->valid_devs[0], &ut_params->cipher_xform,
 			ts_params->session_mpool);
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
