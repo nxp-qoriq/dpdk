@@ -3186,6 +3186,11 @@ dpaa2_sec_set_ipsec_session(struct rte_cryptodev *dev,
 			PDBHMO_ESP_SNR;
 		if (ipsec_xform->options.dec_ttl)
 			encap_pdb.options |= PDBHMO_ESP_ENCAP_DTTL;
+		/* Initializing the sequence number to 1, Security
+		 * engine will choose this sequence number for first packet
+		 * Refer: RFC4303 section: 3.3.3.Sequence Number Generation
+		 */
+		encap_pdb.seq_num = 1;
 		if (ipsec_xform->options.esn) {
 			encap_pdb.options |= PDBOPTS_ESP_ESN;
 			encap_pdb.seq_num_ext_hi = conf->ipsec.esn.hi;
