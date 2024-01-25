@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2021 NXP
+ *   Copyright 2021,2024 NXP
  *
  */
 
@@ -50,11 +50,12 @@ rte_dpaa2_create_dprc_device(int vdev_fd __rte_unused,
 	}
 
 	RTE_TAILQ_FOREACH_SAFE(dev, &rte_fslmc_bus.device_list, next, dev_tmp) {
+		memset(&endpoint1, 0, sizeof(struct dprc_endpoint));
+		memset(&endpoint2, 0, sizeof(struct dprc_endpoint));
+
 		if (dev->dev_type == DPAA2_ETH) {
 			int link_state;
 
-			memset(&endpoint1, 0, sizeof(struct dprc_endpoint));
-			memset(&endpoint2, 0, sizeof(struct dprc_endpoint));
 			strcpy(endpoint1.type, "dpni");
 			endpoint1.id = dev->object_id;
 			ret = dprc_get_connection(&dprc_node->dprc,
@@ -84,6 +85,7 @@ rte_dpaa2_create_dprc_device(int vdev_fd __rte_unused,
 		} else {
 			dev->ep_dev_type = DPAA2_UNKNOWN;
 		}
+
 		sprintf(dev->ep_name, "%s.%d", endpoint2.type, endpoint2.id);
 	}
 
