@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2023 NXP
+ * Copyright 2023-2024 NXP
  */
 
 #include <rte_memzone.h>
@@ -973,6 +973,7 @@ static int pmd_enetqos_probe(struct rte_vdev_device *vdev)
 		if (!dtb_entry) {
 			ENETQOS_PMD_ERR("malloc failed!!");
 			rt = -1;
+			fclose(file);
 			goto err;
 		}
 		cnt = fread(dtb_entry, sizeof(char), MAX_LINE_SIZE, file);

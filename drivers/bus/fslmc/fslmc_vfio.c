@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2015-2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2023 NXP
+ *   Copyright 2016-2024 NXP
  *
  */
 
@@ -323,18 +323,16 @@ fslmc_vfio_open_group_fd(const char *group_name)
 	    mp_reply.nb_received == 1) {
 		mp_rep = &mp_reply.msgs[0];
 		p = (struct vfio_mp_param *)mp_rep->param;
-		if (p->result == SOCKET_OK && mp_rep->num_fds == 1) {
+		if (p->result == SOCKET_OK && mp_rep->num_fds == 1)
 			vfio_group_fd = mp_rep->fds[0];
-		} else if (p->result == SOCKET_NO_FD) {
+		else if (p->result == SOCKET_NO_FD)
 			DPAA2_BUS_ERR("Bad VFIO group fd");
-			vfio_group_fd = 0;
-		}
 	}
 
 	free(mp_reply.msgs);
 
 add_vfio_group:
-	if (vfio_group_fd <= 0) {
+	if (vfio_group_fd < 0) {
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 			DPAA2_BUS_ERR("Open VFIO group(%s) failed(%d)",
 				filename, vfio_group_fd);
@@ -1477,11 +1475,9 @@ fslmc_vfio_setup_group(void)
 	}
 
 	vfio_group_fd = fslmc_vfio_group_fd_by_name(group_name);
-	if (vfio_group_fd <= 0) {
+	if (vfio_group_fd < 0) {
 		vfio_group_fd = fslmc_vfio_open_group_fd(group_name);
-		if (vfio_group_fd <= 0) {
-			if (!vfio_group_fd)
-				close(vfio_group_fd);
+		if (vfio_group_fd < 0) {
 			DPAA2_BUS_ERR("Failed to create MC VFIO group");
 			return -rte_errno;
 		}

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2017-2020,2022-2023 NXP
+ *   Copyright 2017-2020,2022-2024 NXP
  *
  */
 /* System headers */
@@ -255,12 +255,15 @@ dpaa_eth_dev_configure(struct rte_eth_dev *dev)
 		}
 
 		strncpy(ifr.ifr_name, dpaa_intf->name, IFNAMSIZ);
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
 		if (ioctl(socket_fd, SIOCGIFMTU, &ifr) < 0) {
 			DPAA_PMD_ERR("Cannot get interface mtu");
+			close(socket_fd);
 			return -errno;
 		}
 
+		close(socket_fd);
 		DPAA_PMD_INFO("Using kernel configured mtu size(%u)",
 			     ifr.ifr_mtu);
 
