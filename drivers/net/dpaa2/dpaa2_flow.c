@@ -762,70 +762,14 @@ continue_next:
 	}
 }
 
-static uint8_t
-dpaa2_flow_ip_addr_advance(struct dpaa2_dev_priv *priv,
-	enum dpaa2_flow_dist_type dist_type, int tc_id, uint8_t size)
-{
-	uint8_t idx, ip_addr_num = 0, offset;
-	struct dpaa2_key_profile *key_profile;
-
-	if (dist_type == DPAA2_FLOW_QOS_TYPE)
-		key_profile = &priv->extract.qos_key_extract.key_profile;
-	else
-		key_profile = &priv->extract.tc_key_extract[tc_id].key_profile;
-
-	if (key_profile->ip_addr_extracts[0].field &&
-		key_profile->ip_addr_extracts[1].field) {
-		idx = key_profile->num - 2;
-		ip_addr_num = 2;
-	} else if (key_profile->ip_addr_extracts[0].field) {
-		idx = key_profile->num - 1;
-		ip_addr_num = 1;
-	} else {
-		idx = key_profile->num;
-	}
-
-	if (key_profile->ip_addr_extracts[0].field) {
-		if (idx > 0) {
-			offset = key_profile->key_offset[idx - 1] +
-				key_profile->key_size[idx - 1];
-		} else {
-			offset = 0;
-		}
-		if (dist_type == DPAA2_FLOW_QOS_TYPE) {
-			dpaa2_flow_qos_rule_insert_hole(priv,
-					offset, size);
-		} else {
-			dpaa2_flow_fs_rule_insert_hole(priv,
-				offset, size, tc_id);
-		}
-	}
-
-	if (idx > 0) {
-		key_profile->key_offset[idx] =
-		key_profile->key_offset[idx - 1] +
-				key_profile->key_size[idx - 1];
-	} else {
-		key_profile->key_offset[idx] = 0;
-	}
-	key_profile->key_size[idx] = size;
-
-	if (ip_addr_num > 0) {
-		memmove(&key_profile->prot_field[idx + 1],
-			&key_profile->prot_field[idx],
-			sizeof(struct key_prot_field) * ip_addr_num);
-	}
-
-	return idx;
-}
-
 static int
 dpaa2_flow_faf_advance(struct dpaa2_dev_priv *priv,
 	int faf_byte, enum dpaa2_flow_dist_type dist_type, int tc_id,
 	int *insert_offset)
 {
 	struct dpaa2_key_profile *key_profile;
-	uint8_t idx;
+	uint8_t idx, offset = 0xff;
+	struct key_prot_field prot;
 
 	if (dist_type == DPAA2_FLOW_QOS_TYPE)
 		key_profile = &priv->extract.qos_key_extract.key_profile;
@@ -837,16 +781,16 @@ dpaa2_flow_faf_advance(struct dpaa2_dev_priv *priv,
 		return -EINVAL;
 	}
 
-	idx = dpaa2_flow_ip_addr_advance(priv, dist_type, tc_id, 1);
-
-	key_profile->prot_field[idx].type = DPAA2_FAF_KEY;
-	key_profile->prot_field[idx].key_field = faf_byte;
-	key_profile->num++;
-
-	if (insert_offset)
-		*insert_offset = key_profile->key_offset[idx];
-
-	key_profile->key_max_size++;
+	prot.type = DPAA2_FAF_KEY;
+	prot.key_field = faf_byte;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
+		1, &offset, insert_offset, &prot);
+	if (offset != 0xff) {
+		if (dist_type == DPAA2_FLOW_QOS_TYPE)
+			dpaa2_flow_qos_rule_insert_hole(priv, offset, 1);
+		else
+			dpaa2_flow_fs_rule_insert_hole(priv, offset, 1, tc_id);
+	}
 
 	return idx;
 }
@@ -858,7 +802,8 @@ dpaa2_flow_pr_advance(struct dpaa2_dev_priv *priv,
 	int *insert_offset)
 {
 	struct dpaa2_key_profile *key_profile;
-	uint8_t idx;
+	uint8_t idx, offset = 0xff;
+	struct key_prot_field prot;
 
 	if (dist_type == DPAA2_FLOW_QOS_TYPE)
 		key_profile = &priv->extract.qos_key_extract.key_profile;
@@ -870,17 +815,19 @@ dpaa2_flow_pr_advance(struct dpaa2_dev_priv *priv,
 		return -EINVAL;
 	}
 
-	idx = dpaa2_flow_ip_addr_advance(priv, dist_type, tc_id, pr_size);
-
-	key_profile->prot_field[idx].type = DPAA2_PR_KEY;
-	key_profile->prot_field[idx].key_field =
-		(pr_offset << 16) | pr_size;
-	key_profile->num++;
-
-	if (insert_offset)
-		*insert_offset = key_profile->key_offset[idx];
-
-	key_profile->key_max_size += pr_size;
+	prot.type = DPAA2_PR_KEY;
+	prot.key_field = (pr_offset << 16) | pr_size;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
+		pr_size, &offset, insert_offset, &prot);
+	if (offset != 0xff) {
+		if (dist_type == DPAA2_FLOW_QOS_TYPE) {
+			dpaa2_flow_qos_rule_insert_hole(priv, offset,
+				pr_size);
+		} else {
+			dpaa2_flow_fs_rule_insert_hole(priv, offset,
+				pr_size, tc_id);
+		}
+	}
 
 	return idx;
 }
@@ -898,7 +845,8 @@ dpaa2_flow_key_profile_advance(enum net_prot prot,
 	int *insert_offset)
 {
 	struct dpaa2_key_profile *key_profile;
-	uint8_t idx;
+	uint8_t idx, offset = 0xff;
+	struct key_prot_field prot_field;
 
 	if (dpaa2_flow_ip_address_extract(prot, field)) {
 		DPAA2_PMD_ERR("%s only for none IP address extract",
@@ -916,15 +864,20 @@ dpaa2_flow_key_profile_advance(enum net_prot prot,
 		return -EINVAL;
 	}
 
-	idx = dpaa2_flow_ip_addr_advance(priv, dist_type, tc_id, field_size);
-
-	key_profile->prot_field[idx].type = DPAA2_NET_PROT_KEY;
-	key_profile->prot_field[idx].prot = prot;
-	key_profile->prot_field[idx].key_field = field;
-	key_profile->num++;
-
-	if (insert_offset)
-		*insert_offset = key_profile->key_offset[idx];
+	prot_field.type = DPAA2_NET_PROT_KEY;
+	prot_field.prot = prot;
+	prot_field.key_field = field;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
+		field_size, &offset, insert_offset, &prot_field);
+	if (offset != 0xff) {
+		if (dist_type == DPAA2_FLOW_QOS_TYPE) {
+			dpaa2_flow_qos_rule_insert_hole(priv, offset,
+				field_size);
+		} else {
+			dpaa2_flow_fs_rule_insert_hole(priv, offset,
+				field_size, tc_id);
+		}
+	}
 
 	if (dpaa2_flow_l4_src_port_extract(prot, field)) {
 		key_profile->l4_sp_present = 1;
@@ -937,7 +890,6 @@ dpaa2_flow_key_profile_advance(enum net_prot prot,
 		key_profile->l4_dp_key_offset =
 			key_profile->key_offset[idx];
 	}
-	key_profile->key_max_size += field_size;
 
 	return idx;
 }
@@ -948,10 +900,10 @@ dpaa2_flow_faf_add_hdr(int faf_byte,
 	enum dpaa2_flow_dist_type dist_type, int tc_id,
 	int *insert_offset)
 {
-	int extract_idx, i;
+	int extract_idx;
 	struct dpaa2_key_extract *key_extract;
 	struct dpkg_profile_cfg *dpkg;
-	struct dpkg_extract *extracts;
+	struct dpkg_extract extract;
 
 	if (dist_type == DPAA2_FLOW_QOS_TYPE)
 		key_extract = &priv->extract.qos_key_extract;
@@ -959,7 +911,6 @@ dpaa2_flow_faf_add_hdr(int faf_byte,
 		key_extract = &priv->extract.tc_key_extract[tc_id];
 
 	dpkg = &key_extract->dpkg;
-	extracts = dpkg->extracts;
 
 	if (dpkg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
 		DPAA2_PMD_ERR("Number of extracts overflows");
@@ -972,19 +923,11 @@ dpaa2_flow_faf_add_hdr(int faf_byte,
 	if (extract_idx < 0)
 		return extract_idx;
 
-	if (extract_idx != dpkg->num_extracts) {
-		/* Not the last extract index, must have IP address extract.*/
-		for (i = dpkg->num_extracts - 1; i >= extract_idx; i--) {
-			memcpy(&extracts[i + 1],
-				&extracts[i], sizeof(struct dpkg_extract));
-		}
-	}
-
-	extracts[extract_idx].type = DPKG_EXTRACT_FROM_PARSE;
-	extracts[extract_idx].extract.from_parse.offset = faf_byte;
-	extracts[extract_idx].extract.from_parse.size = 1;
-
-	dpkg->num_extracts++;
+	memset(&extract, 0, sizeof(extract));
+	extract.type = DPKG_EXTRACT_FROM_PARSE;
+	extract.extract.from_parse.offset = faf_byte;
+	extract.extract.from_parse.size = 1;
+	dpaa2_dpkg_insert_extract(dpkg, extract_idx, &extract);
 
 	return 0;
 }
@@ -995,10 +938,10 @@ dpaa2_flow_pr_add_hdr(uint32_t pr_offset,
 	enum dpaa2_flow_dist_type dist_type, int tc_id,
 	int *insert_offset)
 {
-	int extract_idx, i;
+	int extract_idx;
 	struct dpaa2_key_extract *key_extract;
 	struct dpkg_profile_cfg *dpkg;
-	struct dpkg_extract *extracts;
+	struct dpkg_extract extract;
 
 	if ((pr_offset + pr_size) > DPAA2_PSR_RESULT_SIZE) {
 		DPAA2_PMD_ERR("PR extracts(%d:%d) overflow",
@@ -1012,7 +955,6 @@ dpaa2_flow_pr_add_hdr(uint32_t pr_offset,
 		key_extract = &priv->extract.tc_key_extract[tc_id];
 
 	dpkg = &key_extract->dpkg;
-	extracts = dpkg->extracts;
 
 	if (dpkg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
 		DPAA2_PMD_ERR("Number of extracts overflows");
@@ -1025,19 +967,11 @@ dpaa2_flow_pr_add_hdr(uint32_t pr_offset,
 	if (extract_idx < 0)
 		return extract_idx;
 
-	if (extract_idx != dpkg->num_extracts) {
-		/* Not the last extract index, must have IP address extract.*/
-		for (i = dpkg->num_extracts - 1; i >= extract_idx; i--) {
-			memcpy(&extracts[i + 1],
-				&extracts[i], sizeof(struct dpkg_extract));
-		}
-	}
-
-	extracts[extract_idx].type = DPKG_EXTRACT_FROM_PARSE;
-	extracts[extract_idx].extract.from_parse.offset = pr_offset;
-	extracts[extract_idx].extract.from_parse.size = pr_size;
-
-	dpkg->num_extracts++;
+	memset(&extract, 0, sizeof(extract));
+	extract.type = DPKG_EXTRACT_FROM_PARSE;
+	extract.extract.from_parse.offset = pr_offset;
+	extract.extract.from_parse.size = pr_size;
+	dpaa2_dpkg_insert_extract(dpkg, extract_idx, &extract);
 
 	return 0;
 }
@@ -1049,10 +983,10 @@ dpaa2_flow_extract_add_hdr(enum net_prot prot,
 	enum dpaa2_flow_dist_type dist_type, int tc_id,
 	int *insert_offset)
 {
-	int extract_idx, i;
+	int extract_idx;
 	struct dpaa2_key_extract *key_extract;
 	struct dpkg_profile_cfg *dpkg;
-	struct dpkg_extract *extracts;
+	struct dpkg_extract extract;
 
 	if (dist_type == DPAA2_FLOW_QOS_TYPE)
 		key_extract = &priv->extract.qos_key_extract;
@@ -1060,7 +994,6 @@ dpaa2_flow_extract_add_hdr(enum net_prot prot,
 		key_extract = &priv->extract.tc_key_extract[tc_id];
 
 	dpkg = &key_extract->dpkg;
-	extracts = dpkg->extracts;
 
 	if (dpaa2_flow_ip_address_extract(prot, field)) {
 		DPAA2_PMD_ERR("%s only for none IP address extract",
@@ -1080,20 +1013,12 @@ dpaa2_flow_extract_add_hdr(enum net_prot prot,
 	if (extract_idx < 0)
 		return extract_idx;
 
-	if (extract_idx != dpkg->num_extracts) {
-		/* Not the last extract index, must have IP address extract.*/
-		for (i = dpkg->num_extracts - 1; i >= extract_idx; i--) {
-			memcpy(&extracts[i + 1],
-				&extracts[i], sizeof(struct dpkg_extract));
-		}
-	}
-
-	extracts[extract_idx].type = DPKG_EXTRACT_FROM_HDR;
-	extracts[extract_idx].extract.from_hdr.prot = prot;
-	extracts[extract_idx].extract.from_hdr.type = DPKG_FULL_FIELD;
-	extracts[extract_idx].extract.from_hdr.field = field;
-
-	dpkg->num_extracts++;
+	memset(&extract, 0, sizeof(extract));
+	extract.type = DPKG_EXTRACT_FROM_HDR;
+	extract.extract.from_hdr.prot = prot;
+	extract.extract.from_hdr.type = DPKG_FULL_FIELD;
+	extract.extract.from_hdr.field = field;
+	dpaa2_dpkg_insert_extract(dpkg, extract_idx, &extract);
 
 	return 0;
 }

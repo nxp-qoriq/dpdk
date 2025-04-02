@@ -531,8 +531,7 @@ dpaa2_dump_dpkg(const struct dpkg_profile_cfg *dpkg)
 		if (type == DPKG_EXTRACT_FROM_HDR) {
 			prot = extract->extract.from_hdr.prot;
 			field = extract->extract.from_hdr.field;
-			dpaa2_prot_field_string(prot, field,
-				string);
+			dpaa2_prot_field_string(prot, field, string);
 		} else if (type == DPKG_EXTRACT_FROM_DATA) {
 			sprintf(string, "raw offset/len: %d/%d",
 				extract->extract.from_data.offset,
@@ -622,6 +621,79 @@ dpaa2_extract_ip_addr_add(uint32_t field,
 	key_profile->key_max_size = max_size_save;
 
 	return 0;
+}
+
+static inline uint8_t
+dpaa2_profile_insert_no_ipaddr_extract(struct dpaa2_key_profile *profile,
+	uint8_t size, uint8_t *poffset, int *ppos,
+	const struct key_prot_field *prot)
+{
+	uint8_t idx, ip_addr_num = 0, offset = 0xff;
+
+	if (profile->ip_addr_extracts[0].field &&
+		profile->ip_addr_extracts[1].field) {
+		idx = profile->num - 2;
+		ip_addr_num = 2;
+	} else if (profile->ip_addr_extracts[0].field) {
+		idx = profile->num - 1;
+		ip_addr_num = 1;
+	} else {
+		idx = profile->num;
+	}
+
+	if (profile->ip_addr_extracts[0].field) {
+		if (idx > 0) {
+			offset = profile->key_offset[idx - 1] +
+				profile->key_size[idx - 1];
+		} else {
+			offset = 0;
+		}
+	}
+
+	if (idx > 0) {
+		profile->key_offset[idx] =
+			profile->key_offset[idx - 1] + profile->key_size[idx - 1];
+	} else {
+		profile->key_offset[idx] = 0;
+	}
+	if (ppos)
+		*ppos = profile->key_offset[idx];
+	profile->key_size[idx] = size;
+	profile->key_max_size += size;
+	profile->num++;
+
+	if (ip_addr_num > 0) {
+		memmove(&profile->prot_field[idx + 1],
+			&profile->prot_field[idx],
+			sizeof(struct key_prot_field) * ip_addr_num);
+	}
+	if (poffset)
+		*poffset = offset;
+
+	if (prot) {
+		rte_memcpy(&profile->prot_field[idx], prot,
+			sizeof(struct key_prot_field));
+	}
+
+	return idx;
+}
+
+static inline void
+dpaa2_dpkg_insert_extract(struct dpkg_profile_cfg *kg_cfg,
+	int idx, const struct dpkg_extract *extract)
+{
+	int i;
+
+	if (idx != kg_cfg->num_extracts) {
+		/* Not the last extract index, must have IP address extract.*/
+		for (i = kg_cfg->num_extracts - 1; i >= idx; i--) {
+			rte_memcpy(&kg_cfg->extracts[i + 1],
+				&kg_cfg->extracts[i], sizeof(struct dpkg_extract));
+		}
+	}
+
+	rte_memcpy(&kg_cfg->extracts[idx], extract, sizeof(struct dpkg_extract));
+	kg_cfg->num_extracts++;
 }
 
 int dpaa2_distset_to_dpkg_profile_cfg(uint64_t req_dist_set,

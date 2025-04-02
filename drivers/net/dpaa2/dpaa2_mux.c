@@ -30,6 +30,9 @@ struct dpaa2_mux_flow {
 	struct dpdmux_rule_cfg rule;
 	uint8_t *key_addr;
 	uint8_t *mask_addr;
+	uint8_t *update_key;
+	uint8_t *update_mask;
+	uint8_t update_size;
 	enum net_prot ip_key;
 	struct dpdmux_cls_action action;
 };
@@ -113,6 +116,38 @@ get_dpdmux_from_id(uint32_t dpdmux_id)
 	return dpdmux_dev;
 }
 
+static void
+dpaa2_mux_rule_insert_hole(uint8_t *addr,
+	int offset, int hole_size, int max_size)
+{
+	if (offset < max_size) {
+		memmove(addr + offset + hole_size,
+			addr + offset,
+			max_size - offset);
+		memset(addr + offset, 0, hole_size);
+	}
+}
+
+static void
+dpaa2_mux_flows_insert_hole(struct dpaa2_dpdmux_dev *dpdmux_dev,
+	int offset, int hole_size)
+{
+	struct dpaa2_mux_flow *flow = NULL;
+
+	flow = LIST_FIRST(&dpdmux_dev->flows);
+	while (flow) {
+		dpaa2_mux_rule_insert_hole(flow->update_key, offset,
+			hole_size, flow->update_size);
+		dpaa2_mux_rule_insert_hole(flow->update_mask, offset,
+			hole_size, flow->update_size);
+		if (offset < flow->update_size)
+			flow->update_size += hole_size;
+		else
+			flow->update_size = offset + hole_size;
+		flow = LIST_NEXT(flow, next);
+	}
+}
+
 static inline int
 _dpaa2_mux_add_parser_extract(struct dpkg_extract *extract,
 	enum dpaa2_parser_protocol_id protocol,
@@ -153,66 +188,75 @@ dpaa2_mux_find_extract(struct dpaa2_key_extract *key_ext,
 }
 
 static inline int
-dpaa2_mux_add_parser_extract(struct dpaa2_key_extract *key_ext,
+dpaa2_mux_add_parser_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 	enum dpaa2_parser_protocol_id protocol,
-	uint8_t *key_va, uint8_t *mask_va, int *extract_update)
+	struct dpaa2_mux_flow *flow, int *extract_update)
 {
 	int ret, pos;
-	struct dpkg_extract *extract;
-	struct dpkg_extract local_extract;
-	uint8_t local_key, local_mask;
+	struct dpaa2_key_extract *key_ext = &dpdmux_dev->key_extract;
+	struct dpkg_extract extract;
+	uint8_t local_key, local_mask, offset = 0xff, idx;
 	struct dpkg_profile_cfg *kg_cfg = &key_ext->dpkg;
 	struct dpaa2_key_profile *profile = &key_ext->key_profile;
+	uint8_t *key_va = flow->key_addr, *mask_va = flow->mask_addr;
+	struct key_prot_field prot;
 
 	if (kg_cfg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
 		DPAA2_PMD_ERR("Too many extracts(%d)",
 			kg_cfg->num_extracts);
 		return -ENOTSUP;
 	}
-	memset(&local_extract, 0, sizeof(struct dpkg_extract));
+	memset(&extract, 0, sizeof(struct dpkg_extract));
 
-	ret = _dpaa2_mux_add_parser_extract(&local_extract, protocol,
+	ret = _dpaa2_mux_add_parser_extract(&extract, protocol,
 			&local_key, &local_mask);
 	if (ret)
 		return ret;
 
-	pos = dpaa2_mux_find_extract(key_ext, &local_extract);
-	if (pos < 0) {
-		extract = &kg_cfg->extracts[kg_cfg->num_extracts];
-		rte_memcpy(extract, &local_extract, sizeof(local_extract));
-		kg_cfg->num_extracts++;
+	pos = dpaa2_mux_find_extract(key_ext, &extract);
+	if (pos >= 0)
+		goto set_rule;
 
-		if (profile->num > 0) {
-			pos = profile->key_offset[profile->num - 1] +
-				profile->key_size[profile->num - 1];
-		} else {
-			pos = 0;
-		}
-		profile->key_offset[profile->num] = pos;
-		profile->key_size[profile->num] = sizeof(uint8_t);
-		profile->key_max_size += sizeof(uint8_t);
-		profile->num++;
-
-		*extract_update = 1;
+	prot.type = DPAA2_PR_KEY;
+	prot.key_field = (extract.extract.from_parse.offset << 16) |
+		extract.extract.from_parse.size;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
+		sizeof(uint8_t), &offset, &pos, &prot);
+	if (offset != 0xff) {
+		dpaa2_mux_rule_insert_hole(key_va, offset,
+			sizeof(uint8_t), profile->key_max_size);
+		dpaa2_mux_rule_insert_hole(mask_va, offset,
+			sizeof(uint8_t), profile->key_max_size);
+		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, sizeof(uint8_t));
 	}
 
+	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
+	*extract_update = 1;
+
+set_rule:
 	key_va[pos] = local_key;
 	mask_va[pos] = local_mask;
+	if ((pos + sizeof(uint8_t)) > flow->rule.key_size)
+		flow->rule.key_size = pos + sizeof(uint8_t);
+	dpaa2_mux_flow_rule_log(flow, "After adding parser extract");
 
 	return 0;
 }
 
 static inline int
-dpaa2_mux_add_hdr_extract(struct dpaa2_key_extract *key_ext,
+dpaa2_mux_add_hdr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 	enum net_prot prot, uint32_t field, uint32_t field_size,
 	const void *field_data, const void *field_mask,
-	uint8_t *key_va, uint8_t *mask_va, int *extract_update)
+	struct dpaa2_mux_flow *flow, int *extract_update)
 {
 	int pos;
-	struct dpkg_extract *extract;
-	struct dpkg_extract local_extract;
+	uint8_t offset = 0xff, idx;
+	struct dpaa2_key_extract *key_ext = &dpdmux_dev->key_extract;
+	struct dpkg_extract extract;
 	struct dpkg_profile_cfg *kg_cfg = &key_ext->dpkg;
 	struct dpaa2_key_profile *profile = &key_ext->key_profile;
+	uint8_t *key_va = flow->key_addr, *mask_va = flow->mask_addr;
+	struct key_prot_field prot_field;
 
 	if (kg_cfg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
 		DPAA2_PMD_ERR("Too many extracts(%d)",
@@ -220,29 +264,30 @@ dpaa2_mux_add_hdr_extract(struct dpaa2_key_extract *key_ext,
 		return -ENOTSUP;
 	}
 
-	memset(&local_extract, 0, sizeof(struct dpkg_extract));
-	local_extract.type = DPKG_EXTRACT_FROM_HDR;
-	local_extract.extract.from_hdr.prot = prot;
-	local_extract.extract.from_hdr.field = field;
-	local_extract.extract.from_hdr.type = DPKG_FULL_FIELD;
+	memset(&extract, 0, sizeof(struct dpkg_extract));
+	extract.type = DPKG_EXTRACT_FROM_HDR;
+	extract.extract.from_hdr.prot = prot;
+	extract.extract.from_hdr.field = field;
+	extract.extract.from_hdr.type = DPKG_FULL_FIELD;
 
-	pos = dpaa2_mux_find_extract(key_ext, &local_extract);
+	pos = dpaa2_mux_find_extract(key_ext, &extract);
 	if (pos >= 0)
 		goto set_rule;
 
-	extract = &kg_cfg->extracts[kg_cfg->num_extracts];
-	rte_memcpy(extract, &local_extract, sizeof(local_extract));
-	kg_cfg->num_extracts++;
-	if (profile->num > 0) {
-		pos = profile->key_offset[profile->num - 1] +
-			profile->key_size[profile->num - 1];
-	} else {
-		pos = 0;
+	prot_field.type = DPAA2_NET_PROT_KEY;
+	prot_field.prot = prot;
+	prot_field.key_field = field;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
+		field_size, &offset, &pos, &prot_field);
+	if (offset != 0xff) {
+		dpaa2_mux_rule_insert_hole(key_va, offset,
+			field_size, profile->key_max_size);
+		dpaa2_mux_rule_insert_hole(mask_va, offset,
+			field_size, profile->key_max_size);
+		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, field_size);
 	}
-	profile->key_offset[profile->num] = pos;
-	profile->key_size[profile->num] = field_size;
-	profile->key_max_size += field_size;
-	profile->num++;
+
+	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
 
 set_rule:
@@ -252,6 +297,9 @@ set_rule:
 		rte_memcpy(&mask_va[pos], field_mask, field_size);
 	else
 		memset(&mask_va[pos], 0xff, field_size);
+	if ((pos + field_size) > flow->rule.key_size)
+		flow->rule.key_size = pos + field_size;
+	dpaa2_mux_flow_rule_log(flow, "After adding header extract");
 
 	return 0;
 }
@@ -260,12 +308,13 @@ static int
 dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
 	enum net_prot prot, uint32_t field, uint32_t field_size,
 	const void *field_data, const void *field_mask,
-	uint8_t *key_va, uint8_t *mask_va, int *extract_update)
+	struct dpaa2_mux_flow *flow, int *extract_update)
 {
-	int ret, pos = 0;
+	int ret, pos = 0, local_ext = 0;
 	struct dpaa2_key_profile *key_profile;
 	struct dpkg_profile_cfg *dpkg;
 	uint8_t num, ip_addr_offset = 0;
+	uint8_t *key_va = flow->key_addr, *mask_va = flow->mask_addr;
 
 	if (prot != NET_PROT_IPV4 && prot != NET_PROT_IPV6) {
 		DPAA2_PMD_ERR("%s: Invalid protocol(%d)",
@@ -337,7 +386,7 @@ dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
 	}
 
 	ret = dpaa2_extract_ip_addr_add(field, key_profile,
-		field_size, extract_update, &pos);
+		field_size, &local_ext, &pos);
 	if (ret) {
 		DPAA2_PMD_ERR("Add IP address extract failed(%d)", ret);
 		return ret;
@@ -346,7 +395,7 @@ dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
 		DPAA2_PMD_ERR("Invalid IP address extract position(%d)", pos);
 		return -EINVAL;
 	}
-	if (*extract_update) {
+	if (local_ext) {
 		key_profile->num++;
 		key_profile->prot_field[num].type = DPAA2_NET_PROT_KEY;
 		key_profile->prot_field[num].prot = prot;
@@ -365,25 +414,35 @@ dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
 	if (pos == 0) {
 		rte_memcpy(key_va, field_data, field_size);
 		rte_memcpy(mask_va, field_mask, field_size);
+		if ((ip_addr_offset + field_size) > flow->rule.key_size)
+			flow->rule.key_size = ip_addr_offset + field_size;
 	} else {
 		rte_memcpy(key_va + field_size, field_data, field_size);
 		rte_memcpy(mask_va + field_size, field_mask, field_size);
+		if ((ip_addr_offset + 2 * field_size) > flow->rule.key_size)
+			flow->rule.key_size = ip_addr_offset + 2 * field_size;
 	}
+	if (extract_update)
+		*extract_update |= local_ext;
+	dpaa2_mux_flow_rule_log(flow, "After adding IP address extract");
 
 	return 0;
 }
 
 static inline int
-dpaa2_mux_add_non_hdr_extract(struct dpaa2_key_extract *key_ext,
-	uint8_t offset, uint8_t size, enum dpkg_extract_type type,
+dpaa2_mux_add_non_hdr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
+	uint8_t hdr_offset, uint8_t size, enum dpkg_extract_type type,
 	const void *field_data, const void *field_mask,
-	uint8_t *key_va, uint8_t *mask_va, int *extract_update)
+	struct dpaa2_mux_flow *flow, int *extract_update)
 {
 	int pos;
-	struct dpkg_extract *extract;
-	struct dpkg_extract local_extract;
+	struct dpaa2_key_extract *key_ext = &dpdmux_dev->key_extract;
+	struct dpkg_extract extract;
 	struct dpkg_profile_cfg *kg_cfg = &key_ext->dpkg;
 	struct dpaa2_key_profile *profile = &key_ext->key_profile;
+	uint8_t offset = 0xff, idx;
+	uint8_t *key_va = flow->key_addr, *mask_va = flow->mask_addr;
+	struct key_prot_field prot;
 
 	if (kg_cfg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
 		DPAA2_PMD_ERR("Too many extracts(%d)",
@@ -391,39 +450,41 @@ dpaa2_mux_add_non_hdr_extract(struct dpaa2_key_extract *key_ext,
 		return -ENOTSUP;
 	}
 
-	memset(&local_extract, 0, sizeof(struct dpkg_extract));
-	if (type == DPKG_EXTRACT_FROM_DATA) {
-		local_extract.type = DPKG_EXTRACT_FROM_DATA;
-		local_extract.extract.from_data.offset = offset;
-		local_extract.extract.from_data.size = size;
-	} else if (type == DPKG_EXTRACT_FROM_PARSE) {
-		local_extract.type = DPKG_EXTRACT_FROM_PARSE;
-		local_extract.extract.from_parse.offset = offset;
-		local_extract.extract.from_parse.size = size;
-	} else {
+	if (type != DPKG_EXTRACT_FROM_DATA &&
+		type != DPKG_EXTRACT_FROM_PARSE) {
 		DPAA2_PMD_ERR("%s: Invalid extract type(%d)",
 			__func__, type);
 		return -EINVAL;
 	}
+	memset(&extract, 0, sizeof(struct dpkg_extract));
+	extract.type = type;
+	extract.extract.from_parse.offset = hdr_offset;
+	extract.extract.from_parse.size = size;
 
-	pos = dpaa2_mux_find_extract(key_ext, &local_extract);
+	pos = dpaa2_mux_find_extract(key_ext, &extract);
 	if (pos >= 0)
 		goto set_rule;
 
-	extract = &kg_cfg->extracts[kg_cfg->num_extracts];
-	rte_memcpy(extract, &local_extract, sizeof(local_extract));
-	kg_cfg->num_extracts++;
-	if (profile->num > 0) {
-		pos = profile->key_offset[profile->num - 1] +
-			profile->key_size[profile->num - 1];
+	if (type == DPKG_EXTRACT_FROM_DATA) {
+		prot.type = DPAA2_NET_PROT_KEY;
+		prot.prot = NET_PROT_PAYLOAD;
+		prot.key_field = (((uint32_t)hdr_offset) << 16) | size;
 	} else {
-		pos = 0;
+		prot.type = DPAA2_FAF_KEY;
+		prot.key_field = hdr_offset;
 	}
-	profile->key_offset[profile->num] = pos;
-	profile->key_size[profile->num] = size;
-	profile->num++;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
+		size, &offset, &pos, &prot);
+	if (offset != 0xff) {
+		dpaa2_mux_rule_insert_hole(key_va, offset,
+			size, profile->key_max_size);
+		dpaa2_mux_rule_insert_hole(mask_va, offset,
+			size, profile->key_max_size);
+		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, size);
+	}
+
+	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
-	profile->key_max_size += size;
 
 set_rule:
 
@@ -432,6 +493,9 @@ set_rule:
 		rte_memcpy(&mask_va[pos], field_mask, size);
 	else
 		memset(&mask_va[pos], 0xff, size);
+	if ((pos + size) > flow->rule.key_size)
+		flow->rule.key_size = pos + size;
+	dpaa2_mux_flow_rule_log(flow, "After adding Non header extract");
 
 	return 0;
 }
@@ -543,34 +607,26 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			spec = pattern[loop].spec;
 			mask = pattern[loop].mask;
 
-			if (!spec || (mask && !memcmp(mask, zero_cmp,
-				sizeof(struct rte_flow_item_ipv4)))) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
-						DPAA2_PARSER_IPV4_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
-				if (ret)
-					goto creation_error;
-			}
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+				DPAA2_PARSER_IPV4_ID, flow, &extract_update);
+			if (ret)
+				goto creation_error;
 
-			/** Following extraction supports both IPv4 and IPv6*/
 			if (spec && mask && mask->hdr.next_proto_id) {
-				ret = dpaa2_mux_add_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_IP, NH_FLD_IP_PROTO,
 					sizeof(uint8_t),
 					&spec->hdr.next_proto_id,
 					&mask->hdr.next_proto_id,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
 
 			if (spec && mask && mask->hdr.fragment_offset) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_IP_FRAG_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -581,8 +637,7 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 					sizeof(rte_be32_t),
 					&spec->hdr.src_addr,
 					&mask->hdr.src_addr,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -592,8 +647,7 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 					sizeof(rte_be32_t),
 					&spec->hdr.dst_addr,
 					&mask->hdr.dst_addr,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -612,21 +666,19 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 
 			if (!spec || (mask && !memcmp(zero_cmp, mask,
 				sizeof(struct rte_flow_item_vlan)))) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_VLAN_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
 
 			if (spec && mask && mask->tci) {
-				ret = dpaa2_mux_add_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_VLAN, NH_FLD_VLAN_TCI,
 					sizeof(uint16_t),
 					&spec->tci, &mask->tci,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -642,10 +694,9 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			mask = pattern[loop].mask;
 			if (!spec ||
 				(mask && (!mask->hdr.spi && !mask->hdr.seq))) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_IPSEC_ESP_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -663,10 +714,9 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			mask = pattern[loop].mask;
 			if (!spec || (mask && !memcmp(zero_cmp, mask,
 				sizeof(struct rte_flow_item_gtp)))) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_GTP_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -685,32 +735,29 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			mask = pattern[loop].mask;
 
 			/** For L4 protocol, we must specify UDP.*/
-			ret = dpaa2_mux_add_parser_extract(key_extract,
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 					DPAA2_PARSER_UDP_ID,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 			if (ret)
 				goto creation_error;
 
 			if (spec && mask && mask->hdr.src_port) {
-				ret = dpaa2_mux_add_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_UDP, NH_FLD_UDP_PORT_SRC,
 					sizeof(rte_be16_t),
 					&spec->hdr.src_port,
 					&mask->hdr.src_port,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
 			if (spec && mask && mask->hdr.dst_port) {
-				ret = dpaa2_mux_add_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_UDP, NH_FLD_UDP_PORT_DST,
 					sizeof(rte_be16_t),
 					&spec->hdr.dst_port,
 					&mask->hdr.dst_port,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -728,21 +775,19 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 
 			if (!spec || (mask && !memcmp(zero_cmp, mask,
 				sizeof(struct rte_flow_item_eth)))) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_MAC_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
 
 			if (spec && mask && mask->type) {
-				ret = dpaa2_mux_add_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_ETH, NH_FLD_ETH_TYPE,
 					sizeof(rte_be16_t),
 					&spec->type, &mask->type,
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -758,12 +803,11 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			spec = pattern[loop].spec;
 			mask = pattern[loop].mask;
 
-			ret = dpaa2_mux_add_non_hdr_extract(key_extract,
+			ret = dpaa2_mux_add_non_hdr_extract(dpdmux_dev,
 				spec->offset, spec->length,
 				DPKG_EXTRACT_FROM_DATA,
 				spec->pattern, mask->pattern,
-				flow->key_addr, flow->mask_addr,
-				&extract_update);
+				flow, &extract_update);
 			if (ret)
 				goto creation_error;
 		}
@@ -789,10 +833,9 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			}
 
 			if (!spec) {
-				ret = dpaa2_mux_add_parser_extract(key_extract,
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 						DPAA2_PARSER_ECPRI_ID,
-						flow->key_addr, flow->mask_addr,
-						&extract_update);
+						flow, &extract_update);
 				if (ret)
 					goto creation_error;
 
@@ -811,12 +854,11 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 				goto creation_error;
 			}
 			for (i = 0; i < extract_nb; i++) {
-				ret = dpaa2_mux_add_non_hdr_extract(key_extract,
+				ret = dpaa2_mux_add_non_hdr_extract(dpdmux_dev,
 					extract_off[i], extract_size[i],
 					DPKG_EXTRACT_FROM_PARSE,
 					&rule_data[i], &mask_data[i],
-					flow->key_addr, flow->mask_addr,
-					&extract_update);
+					flow, &extract_update);
 				if (ret)
 					goto creation_error;
 			}
@@ -837,7 +879,7 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 
 	_flow = LIST_FIRST(&dpdmux_dev->flows);
 	while (_flow) {
-		dpaa2_mux_flow_rule_log(_flow, "remove");
+		dpaa2_mux_flow_rule_log(_flow, "Remove before update");
 		ret = dpdmux_remove_custom_cls_entry(&dpdmux_dev->dpdmux,
 			CMD_PRI_LOW, dpdmux_dev->token,
 			&_flow->rule);
@@ -863,8 +905,12 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	}
 	_flow = LIST_FIRST(&dpdmux_dev->flows);
 	while (_flow) {
-		_flow->rule.key_size = key_extract->key_profile.key_max_size;
-		dpaa2_mux_flow_rule_log(_flow, "update");
+		_flow->rule.key_size = _flow->update_size;
+		rte_memcpy(_flow->key_addr, _flow->update_key,
+			_flow->rule.key_size);
+		rte_memcpy(_flow->mask_addr, _flow->update_mask,
+			_flow->rule.key_size);
+		dpaa2_mux_flow_rule_log(_flow, "Update");
 		ret = dpdmux_add_custom_cls_entry(&dpdmux_dev->dpdmux,
 			CMD_PRI_LOW, dpdmux_dev->token,
 			&_flow->rule, &_flow->action);
@@ -882,8 +928,18 @@ add_entry:
 	 * the rule.
 	 */
 	flow->rule.entry_index = dpdmux_dev->flow_num;
-	flow->rule.key_size = key_extract->key_profile.key_max_size;
-	dpaa2_mux_flow_rule_log(flow, "new");
+	dpaa2_mux_flow_rule_log(flow, "New");
+	flow->update_key = rte_zmalloc(NULL,
+		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, 0);
+	if (!flow->update_key)
+		goto creation_error;
+	flow->update_mask = rte_zmalloc(NULL,
+		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, 0);
+	if (!flow->update_mask)
+		goto creation_error;
+	flow->update_size = flow->rule.key_size;
+	rte_memcpy(flow->update_key, flow->key_addr, flow->update_size);
+	rte_memcpy(flow->update_mask, flow->mask_addr, flow->update_size);
 	ret = dpdmux_add_custom_cls_entry(&dpdmux_dev->dpdmux,
 			CMD_PRI_LOW, dpdmux_dev->token,
 			&flow->rule, &flow->action);
@@ -903,6 +959,10 @@ creation_error:
 	if (flow) {
 		rte_free(flow->key_addr);
 		rte_free(flow->mask_addr);
+		if (flow->update_key)
+			rte_free(flow->update_key);
+		if (flow->update_mask)
+			rte_free(flow->update_mask);
 	}
 	rte_free(flow);
 
@@ -932,7 +992,7 @@ rte_pmd_dpaa2_mux_flow_destroy(uint32_t dpdmux_id,
 			flow = next;
 			continue;
 		}
-		dpaa2_mux_flow_rule_log(flow, "remove");
+		dpaa2_mux_flow_rule_log(flow, "Remove");
 		ret = dpdmux_remove_custom_cls_entry(&dpdmux_dev->dpdmux,
 				CMD_PRI_LOW, dpdmux_dev->token,
 				&flow->rule);
@@ -945,6 +1005,8 @@ rte_pmd_dpaa2_mux_flow_destroy(uint32_t dpdmux_id,
 		LIST_REMOVE(flow, next);
 		rte_free(flow->key_addr);
 		rte_free(flow->mask_addr);
+		rte_free(flow->update_key);
+		rte_free(flow->update_mask);
 		rte_free(flow);
 		rte_spinlock_unlock(&dpdmux_dev->lock);
 
@@ -1344,7 +1406,7 @@ dpaa2_close_dpdmux_device(int object_id)
 	flow = LIST_FIRST(&dpdmux_dev->flows);
 	while (flow) {
 		next = LIST_NEXT(flow, next);
-		dpaa2_mux_flow_rule_log(flow, "remove");
+		dpaa2_mux_flow_rule_log(flow, "Remove");
 		ret = dpdmux_remove_custom_cls_entry(&dpdmux_dev->dpdmux,
 				CMD_PRI_LOW, dpdmux_dev->token,
 				&flow->rule);
@@ -1353,6 +1415,8 @@ dpaa2_close_dpdmux_device(int object_id)
 		LIST_REMOVE(flow, next);
 		rte_free(flow->key_addr);
 		rte_free(flow->mask_addr);
+		rte_free(flow->update_key);
+		rte_free(flow->update_mask);
 		rte_free(flow);
 		flow = next;
 	}
