@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020-2023 NXP
+ * Copyright 2020-2023, 2025 NXP
  */
 
 #include <stdio.h>
@@ -95,6 +95,8 @@ static unsigned int l2fwd_rx_queue_per_lcore = 1;
 /* LGW traffic */
 struct rte_pmd_dpaa_lgw_info_s lgw_subnets;
 
+static uint8_t s_split_5tup;
+
 struct mbuf_table {
 	uint32_t len;
 	uint32_t head;
@@ -158,6 +160,8 @@ uint16_t gtp_udp_port[MAX_NUM_PORTS];
 uint8_t num_ports;
 
 #define CMD_LINE_OPT_TRAFFIC_SPLIT_CONFIG "dpaa2-traffic-split-config"
+#define CMD_LINE_OPT_5TUP_SPLIT "5tup-split"
+#define CMD_LINE_OPT_5TUP_COUNT_SPLIT "5tup-count-split"
 
 #define GTP_U 2152
 #define GTP_C 2123
@@ -613,7 +617,9 @@ l2fwd_usage(const char *prgname)
 	       "  -s PORTID: split port id. Use this option when Ethernet port is split port.\n"
 	       "  -f user data file: Absolute path of user data file. default file name is data.input\n"
 	       "                     Valid only when using OL port as split port\n"
-	       "  --dpaa2-traffic-split-config: (type,val,mux_conn_id)\n",
+	       "  --dpaa2-traffic-split-config: (type,val,mux_conn_id)\n"
+	       "  --5tup-split: (l3,l3_src,l3_dst,l4,l4_src,l4_dst,vf_id)\n"
+	       "  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n",
 	       prgname);
 }
 
@@ -667,11 +673,15 @@ enum {
 	 */
 	CMD_LINE_OPT_MIN_NUM = 256,
 	CMD_LINE_OPT_PARSE_TRAFFIC_SPLIT_CONFIG,
+	CMD_LINE_OPT_5TUP_SPLIT_NUM,
+	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM
 };
 
 static const struct option lgopts[] = {
 	{CMD_LINE_OPT_TRAFFIC_SPLIT_CONFIG, 1, 0,
 		CMD_LINE_OPT_PARSE_TRAFFIC_SPLIT_CONFIG},
+	{CMD_LINE_OPT_5TUP_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_SPLIT_NUM},
+	{CMD_LINE_OPT_5TUP_COUNT_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -765,6 +775,26 @@ l2fwd_parse_args(int argc, char **argv)
 				l2fwd_usage(prgname);
 				return ret;
 			}
+			break;
+
+		case CMD_LINE_OPT_5TUP_SPLIT_NUM:
+			ret = parse_5_tuple_multi_flow_config(optarg);
+			if (ret < 0) {
+				l2fwd_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_5tup = true;
+			break;
+
+		case CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM:
+			ret = parse_5_tuple_count_flow_config(optarg);
+			if (ret < 0) {
+				l2fwd_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_5tup = true;
 			break;
 
 		default:
@@ -1598,9 +1628,15 @@ main(int argc, char **argv)
 		if (ret)
 			rte_exit(EXIT_FAILURE, "Unable to split traffic;\n");
 	} else if (rte_dpaa2_mux_demo_split_eth_ip()) {
-		rte_dpaa2_mux_demo_config_ip_eth_split();
+		ret = rte_dpaa2_mux_demo_config_ip_eth_split();
 		if (ret)
 			rte_exit(EXIT_FAILURE, "Unable to split traffic;\n");
+	} else if (s_split_5tup) {
+		ret = rte_dpaa2_mux_demo_add_multi_5tup_flows();
+		if (ret <= 0) {
+			rte_exit(EXIT_FAILURE,
+				"Unable to split traffic by 5tups\n");
+		}
 	}
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
@@ -1635,6 +1671,9 @@ main(int argc, char **argv)
 			printf("WARN: LGW config. reset failed\n");
 	}
 	print_stats();
+
+	if (s_split_5tup)
+		rte_dpaa2_mux_demo_del_multi_5tup_flows();
 
 	RTE_ETH_FOREACH_DEV(portid) {
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)

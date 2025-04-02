@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2010-2021 Intel Corporation
- * Copyright 2023 NXP
+ * Copyright 2023, 2025 NXP
  */
 
 #include <stdio.h>
@@ -86,7 +86,8 @@ static int parse_ptype; /**< Parse packet type using rx callback, and */
 			/**< disabled by default */
 static int per_port_pool = 1; /**< Use separate buffer pools per port */
 				/**< Set to 0 as default - disabled */
-uint8_t enable_flow;
+static uint8_t enable_flow;
+static uint8_t s_split_5tup;
 
 volatile bool force_quit;
 
@@ -473,7 +474,9 @@ print_usage(const char *prgname)
 		"                    One is ACL entry at while line leads with character '%c',\n"
 		"                    another is route entry at while line leads with character '%c'.\n"
 		"  --rule_ipv6=FILE: Specify the ipv6 rules entries file.\n"
-		"  --alg: ACL classify method to use, one of: %s.\n\n",
+		"  --alg: ACL classify method to use, one of: %s.\n"
+		"  --5tup-split: (l3,l3_src,l3_dst,l4,l4_src,l4_dst,vf_id)\n"
+		"  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n\n",
 		prgname, RX_DESC_DEFAULT, TX_DESC_DEFAULT,
 		ACL_LEAD_CHAR, ROUTE_LEAD_CHAR, alg);
 }
@@ -738,6 +741,8 @@ static const char short_options[] =
 #define CMD_LINE_OPT_RULE_IPV4 "rule_ipv4"
 #define CMD_LINE_OPT_RULE_IPV6 "rule_ipv6"
 #define CMD_LINE_OPT_ALG "alg"
+#define CMD_LINE_OPT_5TUP_SPLIT "5tup-split"
+#define CMD_LINE_OPT_5TUP_COUNT_SPLIT "5tup-count-split"
 
 enum {
 	/* long options mapped to a short option */
@@ -767,7 +772,9 @@ enum {
 	CMD_LINE_OPT_LOOKUP_NUM,
 	CMD_LINE_OPT_ENABLE_VECTOR_NUM,
 	CMD_LINE_OPT_VECTOR_SIZE_NUM,
-	CMD_LINE_OPT_VECTOR_TMO_NS_NUM
+	CMD_LINE_OPT_VECTOR_TMO_NS_NUM,
+	CMD_LINE_OPT_5TUP_SPLIT_NUM,
+	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM
 };
 
 static const struct option lgopts[] = {
@@ -793,9 +800,11 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_ENABLE_VECTOR, 0, 0, CMD_LINE_OPT_ENABLE_VECTOR_NUM},
 	{CMD_LINE_OPT_VECTOR_SIZE, 1, 0, CMD_LINE_OPT_VECTOR_SIZE_NUM},
 	{CMD_LINE_OPT_VECTOR_TMO_NS, 1, 0, CMD_LINE_OPT_VECTOR_TMO_NS_NUM},
-	{CMD_LINE_OPT_RULE_IPV4,   1, 0, CMD_LINE_OPT_RULE_IPV4_NUM},
-	{CMD_LINE_OPT_RULE_IPV6,   1, 0, CMD_LINE_OPT_RULE_IPV6_NUM},
-	{CMD_LINE_OPT_ALG,   1, 0, CMD_LINE_OPT_ALG_NUM},
+	{CMD_LINE_OPT_RULE_IPV4, 1, 0, CMD_LINE_OPT_RULE_IPV4_NUM},
+	{CMD_LINE_OPT_RULE_IPV6, 1, 0, CMD_LINE_OPT_RULE_IPV6_NUM},
+	{CMD_LINE_OPT_ALG, 1, 0, CMD_LINE_OPT_ALG_NUM},
+	{CMD_LINE_OPT_5TUP_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_SPLIT_NUM},
+	{CMD_LINE_OPT_5TUP_COUNT_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -1004,6 +1013,26 @@ parse_args(int argc, char **argv)
 
 		case CMD_LINE_OPT_ENABLE_FLOW_CTL:
 			enable_flow = (unsigned int)atoi(optarg);
+			break;
+
+		case CMD_LINE_OPT_5TUP_SPLIT_NUM:
+			ret = parse_5_tuple_multi_flow_config(optarg);
+			if (ret < 0) {
+				print_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_5tup = true;
+			break;
+
+		case CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM:
+			ret = parse_5_tuple_count_flow_config(optarg);
+			if (ret < 0) {
+				print_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_5tup = true;
 			break;
 
 		default:
@@ -1763,6 +1792,12 @@ main(int argc, char **argv)
 		ret = rte_dpaa2_mux_demo_config_ip_eth_split();
 		if (ret)
 			rte_exit(EXIT_FAILURE, "Unable to split traffic;\n");
+	} else if (s_split_5tup) {
+		ret = rte_dpaa2_mux_demo_add_multi_5tup_flows();
+		if (ret <= 0) {
+			rte_exit(EXIT_FAILURE,
+				"Unable to split traffic by 5tups\n");
+		}
 	}
 
 	check_all_ports_link_status(enabled_port_mask);
@@ -1815,6 +1850,9 @@ main(int argc, char **argv)
 
 	/* clean up config file routes */
 	l3fwd_lkp.free_routes();
+
+	if (s_split_5tup)
+		rte_dpaa2_mux_demo_del_multi_5tup_flows();
 
 	/* clean up the EAL */
 	rte_eal_cleanup();
