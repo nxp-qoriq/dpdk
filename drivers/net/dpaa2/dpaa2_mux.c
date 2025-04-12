@@ -656,6 +656,47 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 		}
 		break;
 
+		case RTE_FLOW_ITEM_TYPE_IPV6:
+		{
+			const struct rte_flow_item_ipv6 *spec;
+			const struct rte_flow_item_ipv6 *mask;
+
+			spec = pattern[loop].spec;
+			mask = pattern[loop].mask;
+
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+				DPAA2_PARSER_IPV6_ID, flow, &extract_update);
+			if (ret)
+				goto creation_error;
+
+			if (memcmp(mask->hdr.src_addr, zero_cmp,
+				NH_FLD_IPV6_ADDR_SIZE)) {
+				ret = dpaa2_mux_add_ipaddr_extract(key_extract,
+					NET_PROT_IPV6, NH_FLD_IPV6_SRC_IP,
+					NH_FLD_IPV6_ADDR_SIZE,
+					&spec->hdr.src_addr,
+					&mask->hdr.src_addr,
+					flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
+			if (memcmp(mask->hdr.dst_addr, zero_cmp,
+				NH_FLD_IPV6_ADDR_SIZE)) {
+				ret = dpaa2_mux_add_ipaddr_extract(key_extract,
+					NET_PROT_IPV6, NH_FLD_IPV6_DST_IP,
+					NH_FLD_IPV6_ADDR_SIZE,
+					&spec->hdr.dst_addr,
+					&mask->hdr.dst_addr,
+					flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
+			/**TO DO*/
+		}
+		break;
+
 		case RTE_FLOW_ITEM_TYPE_VLAN:
 		{
 			const struct rte_flow_item_vlan *spec;
