@@ -305,6 +305,61 @@ set_rule:
 }
 
 static int
+dpaa2_mux_add_spr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
+	uint32_t spr_offset, uint32_t spr_size,
+	const void *key, const void *mask,
+	struct dpaa2_mux_flow *flow, int *extract_update)
+{
+	int pos;
+	uint8_t offset = 0xff, idx;
+	struct dpaa2_key_extract *key_ext = &dpdmux_dev->key_extract;
+	struct dpkg_extract extract;
+	struct dpkg_profile_cfg *kg_cfg = &key_ext->dpkg;
+	struct dpaa2_key_profile *profile = &key_ext->key_profile;
+	uint8_t *key_va = flow->key_addr, *mask_va = flow->mask_addr;
+	struct key_prot_field prot_field;
+
+	if (kg_cfg->num_extracts >= DPKG_MAX_NUM_OF_EXTRACTS) {
+		DPAA2_PMD_ERR("Too many extracts(%d)",
+			kg_cfg->num_extracts);
+		return -ENOTSUP;
+	}
+
+	memset(&extract, 0, sizeof(struct dpkg_extract));
+	extract.type = DPKG_EXTRACT_FROM_PARSE;
+	extract.extract.from_parse.size = spr_size;
+	extract.extract.from_parse.offset = spr_offset;
+
+	pos = dpaa2_mux_find_extract(key_ext, &extract);
+	if (pos >= 0)
+		goto set_rule;
+
+	prot_field.type = DPAA2_PR_KEY;
+	prot_field.key_field = (spr_offset << 16) | spr_size;
+	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
+		spr_size, &offset, &pos, &prot_field);
+	if (offset != 0xff) {
+		dpaa2_mux_rule_insert_hole(key_va, offset,
+			spr_size, profile->key_max_size);
+		dpaa2_mux_rule_insert_hole(mask_va, offset,
+			spr_size, profile->key_max_size);
+		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, spr_size);
+	}
+
+	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
+	*extract_update = 1;
+
+set_rule:
+	rte_memcpy(&key_va[pos], key, spr_size);
+	rte_memcpy(&mask_va[pos], mask, spr_size);
+	if ((pos + spr_size) > flow->rule.key_size)
+		flow->rule.key_size = pos + spr_size;
+	dpaa2_mux_flow_rule_log(flow, "After adding soft parser extract");
+
+	return 0;
+}
+
+static int
 dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
 	enum net_prot prot, uint32_t field, uint32_t field_size,
 	const void *field_data, const void *field_mask,
@@ -836,6 +891,35 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 		}
 		break;
 
+		case RTE_FLOW_ITEM_TYPE_GRE:
+		{
+			const struct rte_flow_item_gre *spec;
+			const struct rte_flow_item_gre *mask;
+
+			spec = pattern[loop].spec;
+			mask = pattern[loop].mask;
+
+			if (!spec || (mask && !memcmp(zero_cmp, mask,
+				sizeof(struct rte_flow_item_gre)))) {
+				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+						DPAA2_PARSER_GRE_ID,
+						flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
+			if (spec && mask && mask->protocol) {
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
+					NET_PROT_GRE, NH_FLD_GRE_TYPE,
+					sizeof(rte_be16_t),
+					&spec->protocol, &mask->protocol,
+					flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+		}
+		break;
+
 		case RTE_FLOW_ITEM_TYPE_RAW:
 		{
 			const struct rte_flow_item_raw *spec;
@@ -851,6 +935,62 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 				flow, &extract_update);
 			if (ret)
 				goto creation_error;
+		}
+		break;
+
+		case RTE_FLOW_ITEM_TYPE_VXLAN:
+		{
+			const struct rte_flow_item_vxlan *spec;
+			const struct rte_flow_item_vxlan *mask;
+
+			spec = pattern[loop].spec;
+			mask = pattern[loop].mask;
+
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+					DPAA2_PARSER_VXLAN_ID,
+					flow, &extract_update);
+			if (ret)
+				goto creation_error;
+
+			if (!spec || !mask)
+				break;
+
+			if (mask->vni[0] || mask->vni[1] || mask->vni[2]) {
+				ret = dpaa2_mux_add_spr_extract(dpdmux_dev,
+					DPAA2_VXLAN_VNI_OFFSET,
+					sizeof(mask->vni), spec->vni,
+					mask->vni, flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+		}
+		break;
+
+		case RTE_FLOW_ITEM_TYPE_GENEVE:
+		{
+			const struct rte_flow_item_geneve *spec;
+			const struct rte_flow_item_geneve *mask;
+
+			spec = pattern[loop].spec;
+			mask = pattern[loop].mask;
+
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+					DPAA2_PARSER_GENEVE_ID,
+					flow, &extract_update);
+			if (ret)
+				goto creation_error;
+
+			if (!spec || !mask)
+				break;
+
+			if (mask->vni[0] || mask->vni[1] || mask->vni[2]) {
+				ret = dpaa2_mux_add_spr_extract(dpdmux_dev,
+					DPAA2_GENEVE_VNI_OFFSET,
+					sizeof(mask->vni), spec->vni,
+					mask->vni, flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
 		}
 		break;
 
@@ -873,15 +1013,14 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 				goto creation_error;
 			}
 
-			if (!spec) {
-				ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
-						DPAA2_PARSER_ECPRI_ID,
-						flow, &extract_update);
-				if (ret)
-					goto creation_error;
+			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
+					DPAA2_PARSER_ECPRI_ID,
+					flow, &extract_update);
+			if (ret)
+				goto creation_error;
 
+			if (!spec || !mask)
 				break;
-			}
 
 			extract_nb = dpaa2_parser_ecpri_extract(spec, mask,
 				rule_data, mask_data, extract_size, extract_off,
