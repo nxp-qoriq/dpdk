@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- SP configuration file -->
+<!-- optional: this configuration file is optional  -->
+<spconfig>
+
+	<!-- SoC configuration  -->
+	<!-- optional  -->
+	<soc name="LX2160A" rev="2.0" />
+
+	<!-- optional  -->
+	<!-- TODO: not implemented: 1 default bytecode section is used with all protocols -->
+	<memorymap>
+		<!-- bytecode section  -->
+		<bytecode offset="0x40" >
+			<!-- load this bytecode section on parsers  -->
+			<load-on-parser name="wriop_ingress" />
+
+			<!-- protocols to be included in this bytecode section  -->
+			<load-protocol name="sp_id" />
+			<load-protocol name="ethecpri" />
+			<load-protocol name="vlecpri" />
+			<load-protocol name="udpafter" />
+			<load-protocol name="vxtunnel" />
+		</bytecode>
+	</memorymap>
+
+	<!-- optional: by default all protocols are disabled on all parsers -->
+	<device>
+		<parser name="wriop_ingress">
+			<enable-on-init protocol="sp_id" />
+			<enable-on-init protocol="ethecpri" />
+			<enable-on-init protocol="vlecpri" />
+			<enable-on-init protocol="udpafter" />
+			<enable-on-init protocol="vxtunnel" />
+		</parser>
+	</device>
+</spconfig>

@@ -1,0 +1,603 @@
+<?xml version="1.0" encoding="utf-8"?>
+<netpdl name="NetPDL custom protocol" description="NetPDL custom protocol">
+	<protocol name="sp_id" longname="sp maigc id" prevproto="pppoe">
+		<execute-code>
+			<before>
+				<if expr="pppoe.hlen == 0xabcd">
+					<if-true>
+						<!-- Do nothing, just for generating magic number of this SP. -->
+					</if-true>
+				</if>
+			</before>
+		</execute-code>
+	</protocol>
+	<protocol name="ethecpri" longname="ecpri after eth" prevproto="ethernet">
+		<!-- Describe the header format -->
+		<format>
+			<fields>
+				<field type="fixed" name="rev_c" size="1"/>
+				<field type="fixed" name="type" size="1"/>
+				<field type="fixed" name="size" size="2"/>
+				<field type="fixed" name="msg" size="4"/>
+				<field type="fixed" name="addr" size="6"/>
+				<field type="fixed" name="len" size="2"/>
+			</fields>
+		</format>
+
+		<!-- Here goes the code that should be executed for the protocol -->
+		<execute-code>
+			<before>
+				<!-- eCPRI after ethernet header. -->
+				<if expr="ethernet.type == 0xaefe">
+					<if-true>
+						<if expr="($prevProtoOffset + 14 + 16) gt $fdlength">
+						<if-true>
+							<assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+						</if-true>
+						<if-false>
+						</if-false>
+						</if>
+					</if-true>
+					<if-false>
+						<!-- return to HXS -->
+						<action type="exit" advance="yes" nextproto="after_ethernet"/>
+					</if-false>
+				</if>
+			</before>
+			<!-- Before the protocol header is parsed by the soft parser and frame window still points to the previous protocol -->
+			<after>
+				<!-- Next header offset = ecpri offset + ecpri size (variable according to message type)-->
+
+				<assign-variable name="$nxthdrfragoffset" value="ethecpri.type"/>
+				<assign-variable name="$shimoffset_1" value="ethecpri.size"/>
+				<set faf="custom_0"/>
+
+				<assign-variable name="$softparsectx[0:4]" value="ethecpri.msg"/>
+				<switch expr="ethecpri.type">
+				<case value="0x0">
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x1">
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x2">
+					<set faf="custom_4"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x3">
+					<set faf="custom_4"/>
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 12"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x4">
+					<set faf="custom_5"/>
+					<assign-variable name="$llc_snapoffset" value="ethecpri.addr"/>
+					<assign-variable name="$ipoffset_n" value="ethecpri.len"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 16"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x5">
+					<set faf="custom_3"/>
+					<set faf="custom_5"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 6"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x6">
+					<set faf="custom_4"/>
+					<set faf="custom_5"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 7"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x7">
+					<set faf="custom_5"/>
+					<set faf="custom_4"/>
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<default>
+					<action type="exit" advance="no" nextproto="return"/>
+				</default>
+				</switch>
+				<action type="exit" advance="no" nextproto="return"/>
+			</after>
+		</execute-code>
+	</protocol>
+
+	<protocol name="vlecpri" longname="ecpri after vlan" prevproto="vlan">
+		<!-- Describe the header format -->
+		<format>
+			<fields>
+				<field type="fixed" name="rev_c" size="1"/>
+				<field type="fixed" name="type" size="1"/>
+				<field type="fixed" name="size" size="2"/>
+				<field type="fixed" name="msg" size="4"/>
+				<field type="fixed" name="addr" size="6"/>
+				<field type="fixed" name="len" size="2"/>
+			</fields>
+		</format>
+
+		<!-- Here goes the code that should be executed for the protocol -->
+		<execute-code>
+			<before>
+				<!-- eCPRI after vlan header. -->
+				<if expr="vlan.type == 0xaefe">
+					<if-true>
+						<if expr="($prevProtoOffset + 2 + 16) gt $fdlength">
+                                                <if-true>
+                                                        <assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+                                                </if-true>
+                                                <if-false>
+                                                </if-false>
+                                                </if>
+					</if-true>
+					<if-false>
+						<!-- return to HXS -->
+						<action type="exit" advance="yes" nextproto="after_ethernet"/>
+					</if-false>
+				</if>
+			</before>
+			<!-- Before the protocol header is parsed by the soft parser and frame window still points to the previous protocol -->
+			<after>
+				<assign-variable name="$nxthdrfragoffset" value="vlecpri.type"/>
+				<assign-variable name="$shimoffset_1" value="vlecpri.size"/>
+				<set faf="custom_0"/>
+
+				<assign-variable name="$softparsectx[0:4]" value="vlecpri.msg"/>
+				<switch expr="vlecpri.type">
+				<case value="0x0">
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x1">
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x2">
+					<set faf="custom_4"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x3">
+					<set faf="custom_4"/>
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 12"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x4">
+					<set faf="custom_5"/>
+					<assign-variable name="$llc_snapoffset" value="vlecpri.addr"/>
+					<assign-variable name="$ipoffset_n" value="vlecpri.len"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 16"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x5">
+					<set faf="custom_3"/>
+					<set faf="custom_5"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 6"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x6">
+					<set faf="custom_4"/>
+					<set faf="custom_5"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 7"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="0x7">
+					<set faf="custom_5"/>
+					<set faf="custom_4"/>
+					<set faf="custom_3"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<default>
+					<action type="exit" advance="no" nextproto="return"/>
+				</default>
+				</switch>
+				<action type="exit" advance="no" nextproto="return"/>
+			</after>
+		</execute-code>
+	</protocol>
+
+	<protocol name="udpafter" longname="ecpri or rocev2 or geneve after udp" prevproto="udp">
+		<!-- Describe the header format -->
+		<format>
+			<fields>
+				<field type="fixed" name="byte0" size="1"/>
+				<field type="fixed" name="byte1" size="1"/>
+				<field type="fixed" name="dual_bytes2" size="2"/>
+				<field type="fixed" name="byte3" size="1"/>
+				<field type="fixed" name="tri_bytes4_1" size="2"/>
+				<field type="fixed" name="tri_bytes4_2" size="1"/>
+				<field type="fixed" name="byte5" size="1"/>
+				<field type="fixed" name="tri_bytes6" size="3"/>
+				<field type="fixed" name="dual_bytes7" size="2"/>
+				<field type="fixed" name="dual_bytes8" size="2"/>
+
+				<!-- field type="fixed" name="rev_c" size="1"/-->
+				<!-- field type="fixed" name="type" size="1"/-->
+				<!-- field type="fixed" name="size" size="2"/-->
+				<!-- field type="fixed" name="msg" size="4"/-->
+				<!-- field type="fixed" name="addr" size="6"/-->
+				<!-- field type="fixed" name="len" size="2"/-->
+
+				<!-- field type="fixed" name="opcode" size="1"/-->
+				<!-- field type="fixed" name="s_m_p_tv" size="1"/-->
+				<!-- field type="fixed" name="part_key" size="2"/-->
+				<!-- field type="fixed" name="rsvd" size="1"/-->
+				<!-- field type="fixed" name="dst_QP" size="3"/-->
+				<!-- field type="fixed" name="A_rsvd" size="1"/-->
+				<!-- field type="fixed" name="PSN" size="3"/-->
+
+				<!-- field type="fixed" name="ver_opt" size="1"/-->
+				<!-- field type="fixed" name="oam_cri" size="1"/-->
+				<!-- field type="fixed" name="protocol" size="2"/-->
+				<!-- field type="fixed" name="vni" size="3"/-->
+				<!-- field type="fixed" name="rsv" size="1"/-->
+			</fields>
+		</format>
+
+		<!-- Here goes the code that should be executed for the protocol -->
+		<execute-code>
+			<before>
+				<!-- eCPRI after udp header. -->
+				<switch expr="udp.dport">
+				<case value="0x1234">
+					<!-- eCPRI after udp header. -->
+					<if expr="($prevProtoOffset + 8 + 16) gt $fdlength">
+                                        <if-true>
+						<assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+					</if-true>
+					<if-false>
+					</if-false>
+					</if>
+					<assign-variable name="$GPR1[1:1]" value="1"/>
+				</case>
+				<case value="0x12b7">
+					<!-- ROCEv2 after udp header. -->
+                                        <if expr="($prevProtoOffset + 8 + 12) gt $fdlength">
+					<if-true>
+						<assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+					</if-true>
+					<if-false>
+					</if-false>
+					</if>
+					<assign-variable name="$GPR1[1:1]" value="2"/>
+				</case>
+				<case value="0x17c1">
+					<assign-variable name="$GPR1[2:1]" value="$FW[66:6] shl 2"/>
+					<!-- GENEVE after udp header. -->
+					<!-- udp header size + geneve header size + opt len. -->
+					<if expr="($prevProtoOffset + 16 + $GPR1[2:1]) gt $fdlength">
+					<if-true>
+						<assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+					</if-true>
+					<if-false>
+					</if-false>
+					</if>
+					<!-- geneve protocol = ethernet -->
+					<if expr="$FW[80:16] == 0x6558">
+					<if-true>
+						<!-- udp header size + geneve header size + opt len + eth header size. -->
+						<if expr="($prevProtoOffset + 16 + $GPR1[2:1] + 14) gt $fdlength">
+						<if-true>
+							<assign-variable name="$parseerrstat" value="$parseerrstat bitwor 0x20"/>
+						</if-true>
+						<if-false>
+						</if-false>
+						</if>
+
+						<!-- No TLV -opt len == 0. -->
+						<if expr="$GPR1[2:1] == 0">
+						<if-true>
+							<assign-variable name="$llc_snapoffset" value="$FW[128:8]"/>
+							<assign-variable name="$vlantcioffset_n" value="$FW[136:8]"/>
+							<assign-variable name="$pppoeoffset" value="$FW[144:8]"/>
+							<assign-variable name="$mplsoffset_1" value="$FW[152:8]"/>
+							<assign-variable name="$mplsoffset_n" value="$FW[160:8]"/>
+							<assign-variable name="$ipoffset_n" value="$FW[168:8]"/>
+
+							<assign-variable name="$greoffset" value="$FW[176:8]"/>
+							<assign-variable name="$routhdroffset1" value="$FW[184:8]"/>
+							<assign-variable name="$routhdroffset2" value="$FW[192:8]"/>
+							<assign-variable name="$fragoffset" value="$FW[200:8]"/>
+							<assign-variable name="$nxthdrfragoffset" value="$FW[208:8]"/>
+							<assign-variable name="$ipnpidoffset" value="$FW[216:8]"/>
+
+							<switch expr="$FW[224:16]">
+							<case value="0x8100">
+								<set faf="custom_7"/>
+								<switch expr="$FW[256:16]">
+								<case value="0x0800">
+									<set faf="custom_3"/>
+									<switch expr="$FW[344:8]">
+									<case value="17">
+										<set faf="custom_6"/>
+									</case>
+									<case value="6">
+										<set faf="custom_5"/>
+									</case>
+									<default>
+									</default>
+									</switch>
+								</case>
+								<case value="0x86dd">
+									<set faf="custom_4"/>
+									<switch expr="$FW[320:8]">
+									<case value="17">
+										<set faf="custom_6"/>
+									</case>
+									<case value="6">
+										<set faf="custom_5"/>
+									</case>
+									<default>
+									</default>
+									</switch>
+								</case>
+								<default>
+								</default>
+								</switch>
+							</case>
+							<case value="0x0800">
+								<set faf="custom_3"/>
+								<switch expr="$FW[312:8]">
+								<case value="17">
+									<set faf="custom_6"/>
+								</case>
+								<case value="6">
+									<set faf="custom_5"/>
+								</case>
+								<default>
+								</default>
+								</switch>
+							</case>
+							<case value="0x86dd">
+								<set faf="custom_4"/>
+								<switch expr="$FW[288:8]">
+								<case value="17">
+									<set faf="custom_6"/>
+								</case>
+								<case value="6">
+									<set faf="custom_5"/>
+								</case>
+								<default>
+								</default>
+								</switch>
+							</case>
+							<default>
+							</default>
+							</switch>
+						</if-true>
+						<if-false>
+						</if-false>
+						</if>
+					</if-true>
+					<if-false>
+					</if-false>
+					</if>
+					<assign-variable name="$GPR1[1:1]" value="3"/>
+				</case>
+				<default>
+					<action type="exit" advance="yes" nextproto="after_udp"/>
+				</default>
+				</switch>
+			</before>
+			<!-- Before the protocol header is parsed by the soft parser and frame window still points to the previous protocol -->
+			<after>
+				<switch expr="$GPR1[1:1]">
+				<case value="1">
+				<!-- Parse eCPRI header. -->
+					<assign-variable name="$nxthdrfragoffset" value="udpafter.byte1"/>
+					<assign-variable name="$shimoffset_1" value="udpafter.dual_bytes2"/>
+					<set faf="custom_0"/>
+
+					<assign-variable name="$softparsectx[0:1]" value="udpafter.byte3"/>
+					<assign-variable name="$softparsectx[1:2]" value="udpafter.tri_bytes4_1"/>
+					<assign-variable name="$softparsectx[3:1]" value="udpafter.tri_bytes4_2"/>
+					<switch expr="udpafter.byte1">
+					<case value="0x0">
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x1">
+						<set faf="custom_3"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x2">
+						<set faf="custom_4"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x3">
+						<set faf="custom_4"/>
+						<set faf="custom_3"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 12"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x4">
+						<set faf="custom_5"/>
+						<assign-variable name="$llc_snapoffset" value="udpafter.byte5"/>
+						<assign-variable name="$vlantcioffset_1" value="udpafter.tri_bytes6"/>
+						<assign-variable name="$pppoeoffset" value="udpafter.dual_bytes7"/>
+
+						<assign-variable name="$ipoffset_n" value="udpafter.dual_bytes8"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 16"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x5">
+						<set faf="custom_3"/>
+						<set faf="custom_5"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 6"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x6">
+						<set faf="custom_4"/>
+						<set faf="custom_5"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 7"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<case value="0x7">
+						<set faf="custom_5"/>
+						<set faf="custom_4"/>
+						<set faf="custom_3"/>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8"/>
+						<action type="exit" advance="no" nextproto="return"/>
+					</case>
+					<default>
+						<action type="exit" advance="no" nextproto="return"/>
+					</default>
+					</switch>
+				</case>
+				<case value="2">
+				<!-- Parse ROCEv2 header. -->
+					<set faf="custom_1"/>
+					<assign-variable name="$softparsectx[0:1]" value="udpafter.byte0"/>
+					<assign-variable name="$softparsectx[1:2]" value="udpafter.tri_bytes4_1"/>
+					<assign-variable name="$softparsectx[3:1]" value="udpafter.tri_bytes4_2"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 12"/>
+					<action type="exit" advance="no" nextproto="return"/>
+				</case>
+				<case value="3">
+				<!-- Parse GENEVE header. -->
+					<set faf="custom_2"/>
+					<assign-variable name="$shimoffset_1" value="udpafter.byte0"/>
+					<assign-variable name="$shimoffset_2" value="udpafter.byte1"/>
+					<assign-variable name="$softparsectx[0:2]" value="udpafter.dual_bytes2"/>
+					<assign-variable name="$softparsectx[2:1]" value="udpafter.byte3"/>
+					<assign-variable name="$softparsectx[3:2]" value="udpafter.tri_bytes4_1"/>
+					<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 8 + $shimoffset_1"/>
+					<if expr="$softparsectx[3:2] == 0x6558">
+					<if-true>
+						<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 14"/>
+					</if-true>
+					<if-false>
+					</if-false>
+					</if>
+				</case>
+				</switch>
+			</after>
+		</execute-code>
+	</protocol>
+
+	<protocol name="vxtunnel" longname="vxlan payload" prevproto="vxlan">
+		<!-- Describe the header format -->
+		<format>
+			<fields>
+				<field type="fixed" name="da" size="6"/>
+				<field type="fixed" name="sa" size="6"/>
+				<field type="fixed" name="type" size="2"/>
+				<field type="fixed" name="after_eth" size="24"/>
+			</fields>
+		</format>
+
+		<!-- Here goes the code that should be executed for the protocol -->
+		<execute-code>
+			<!-- Before the protocol header is parsed by the soft parser and frame window still points to the previous protocol -->
+			<before>
+				<if faf="VxLAN_parsing_error">
+				<if-true>
+					<action type="exit" advance="no" nextproto="return"/>
+				</if-true>
+				<if-false>
+				</if-false>
+				</if>
+				<!-- Next header inner eth offset = udp offset + udp(8) + vxlan(8)-->
+				<assign-variable name="$softparsectx[0:3]" value="vxlan.vnid"/>
+
+				<assign-variable name="$llc_snapoffset" value="$FW[64:8]"/>
+				<assign-variable name="$vlantcioffset_n" value="$FW[72:8]"/>
+				<assign-variable name="$pppoeoffset" value="$FW[80:8]"/>
+				<assign-variable name="$mplsoffset_1" value="$FW[88:8]"/>
+				<assign-variable name="$mplsoffset_n" value="$FW[96:8]"/>
+				<assign-variable name="$ipoffset_n" value="$FW[104:8]"/>
+
+				<assign-variable name="$greoffset" value="$FW[112:8]"/>
+				<assign-variable name="$routhdroffset1" value="$FW[120:8]"/>
+				<assign-variable name="$routhdroffset2" value="$FW[128:8]"/>
+				<assign-variable name="$fragoffset" value="$FW[136:8]"/>
+				<assign-variable name="$nxthdrfragoffset" value="$FW[144:8]"/>
+				<assign-variable name="$ipnpidoffset" value="$FW[152:8]"/>
+
+				<assign-variable name="$softparsectx[3:2]" value="$FW[160:16]"/>
+
+
+				<switch expr="$FW[160:16]">
+				<case value="0x8100">
+					<set faf="custom_7"/>
+					<assign-variable name="$shimoffset_1" value="$FW[176:8]"/>
+					<assign-variable name="$shimoffset_2" value="$FW[184:8]"/>
+					<switch expr="$FW[192:16]">
+					<case value="0x0800">
+						<set faf="custom_3"/>
+						<switch expr="$FW[280:8]">
+						<case value="17">
+							<set faf="custom_6"/>
+						</case>
+						<case value="6">
+							<set faf="custom_5"/>
+						</case>
+						<default>
+						</default>
+						</switch>
+					</case>
+					<case value="0x86dd">
+						<set faf="custom_4"/>
+						<switch expr="$FW[256:8]">
+						<case value="17">
+							<set faf="custom_6"/>
+						</case>
+						<case value="6">
+							<set faf="custom_5"/>
+						</case>
+						<default>
+						</default>
+						</switch>
+					</case>
+					<default>
+					</default>
+					</switch>
+				</case>
+				<case value="0x0800">
+					<set faf="custom_3"/>
+					<switch expr="$FW[248:8]">
+					<case value="17">
+						<set faf="custom_6"/>
+					</case>
+					<case value="6">
+						<set faf="custom_5"/>
+					</case>
+					<default>
+					</default>
+					</switch>
+				</case>
+				<case value="0x86dd">
+					<set faf="custom_4"/>
+					<switch expr="$FW[224:8]">
+					<case value="17">
+						<set faf="custom_6"/>
+					</case>
+					<case value="6">
+						<set faf="custom_5"/>
+					</case>
+					<default>
+					</default>
+					</switch>
+				</case>
+				<default>
+				</default>
+				</switch>
+			</before>
+			<after>
+				<assign-variable name="$NxtHdrOffset" value="$NxtHdrOffset + 14"/>
+				<action type="exit" advance="no" nextproto="return"/>
+			</after>
+		</execute-code>
+	</protocol>
+</netpdl>
