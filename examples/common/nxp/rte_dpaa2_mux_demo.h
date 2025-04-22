@@ -93,37 +93,44 @@ static uint16_t s_mux_5tups_num;
 struct dpaa2_mux_demo_tunnel s_mux_tunnels[DPAA2_MUX_MAX_TUNNEL_FLOWS];
 static uint16_t s_mux_tunnels_num;
 
+#define DPAA2_MUX_DEMO_MAX_NUM 16
+static uint32_t s_mux_ids[DPAA2_MUX_DEMO_MAX_NUM];
+static uint8_t s_mux_max_num;
+
 #ifndef RTE_LOGTYPE_dpaa2_mux_demo
 #define RTE_LOGTYPE_dpaa2_mux_demo RTE_LOGTYPE_USER1
 #endif
 
 static int
-dpaa2_mux_demo_get_mux_id(void)
+dpaa2_mux_demo_enum_mux_ids(void)
 {
-	int dpdmux_id = -ENODEV, ret, offset = 0;
-	FILE *fp;
-	char nm[1024];
+	char *env = getenv("DPAA2_MUX_MAX_NUM");
+	uint8_t num;
+	char dpdmux_info[1024];
+	int offset;
 
-	offset += sprintf(&nm[offset], "restool dprc show $DPRC ");
-	offset += sprintf(&nm[offset], "| grep dpdmux ");
-	offset += sprintf(&nm[offset], "| cut -f 1 | cut -d . -f 2");
-	/* Get the dpdmux ID from environment */
-	fp = popen(nm, "r");
-	if (!fp) {
-		RTE_LOG(ERR, dpaa2_mux_demo,
-			"Error in getting dpdmux id\n");
-		return -ENODEV;
+	if (env)
+		num = atoi(env);
+	else
+		num = 1;
+	if (num > DPAA2_MUX_DEMO_MAX_NUM)
+		num = DPAA2_MUX_DEMO_MAX_NUM;
+
+	num = rte_pmd_dpaa2_mux_multi_enum(num, s_mux_ids);
+	if (!num) {
+		RTE_LOG(ERR, dpaa2_mux_demo, "No DPDMUX available\n");
+		return -EINVAL;
 	}
-
-	ret = fscanf(fp, "%d", &dpdmux_id);
-	if (ret != 1) {
-		RTE_LOG(ERR, dpaa2_mux_demo,
-			"Failed to get dpdmux id\n");
-		dpdmux_id = -ENODEV;
+	s_mux_max_num = num;
+	offset = sprintf(dpdmux_info, "Enum %d DPDMUX(s): ", num);
+	for (num = 0; num < s_mux_max_num; num++) {
+		offset += sprintf(&dpdmux_info[offset],
+			"dpdmux.%d%s", s_mux_ids[num],
+			(num == (s_mux_max_num - 1)) ? "\r\n" : ",");
 	}
-	pclose(fp);
+	RTE_LOG(INFO, dpaa2_mux_demo, "%s", dpdmux_info);
 
-	return dpdmux_id;
+	return s_mux_max_num;
 }
 
 static int
@@ -140,10 +147,8 @@ parse_traffic_split_config(const char *q_arg)
 	};
 	unsigned long int_fld[_NUM_FLD];
 	char *str_fld[_NUM_FLD];
-	int i;
+	int i, ret;
 	unsigned int size;
-	int dpdmux_id;;
-	char mux_ep_nm[64];
 
 	p = strchr(p0, '(');
 	++p;
@@ -174,17 +179,9 @@ parse_traffic_split_config(const char *q_arg)
 	s_mux_val = int_fld[FLD_SPLIT_VAL];
 	s_mux_ep_id = (uint8_t)int_fld[FLD_MUX_CONN_ID];
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(ERR, dpaa2_mux_demo,
-			"get mux ID failed(%d)\n", dpdmux_id);
-		return dpdmux_id;
-	}
-	sprintf(mux_ep_nm, "dpdmux.%d.%d", dpdmux_id, s_mux_ep_id);
-
-	RTE_LOG(INFO, dpaa2_mux_demo,
-		"Splitting MUX traffic on type:%d with val:%d on %s\n",
-		s_mux_type, s_mux_val, mux_ep_nm);
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
@@ -278,6 +275,42 @@ enum mux_eth_tunnel_field {
 	FLD_ETH_TUNNEL_FLOW_NUM_FLD
 };
 
+static void
+_5_tuple_count_flow_config(int dpdmux_id,
+	uint32_t src_ip_base, uint32_t dst_ip_base,
+	uint16_t src_cpu_port, uint16_t dst_cpu_port,
+	uint32_t src_cnt, uint32_t dst_cnt, uint8_t ep_id,
+	uint32_t *flow_num)
+{
+	uint32_t i, j;
+	rte_be16_t src_port, dst_port;
+	rte_be32_t src_ip, dst_ip;
+
+	src_port = rte_cpu_to_be_16(src_cpu_port);
+	dst_port = rte_cpu_to_be_16(dst_cpu_port);
+
+	for (i = 0; i < src_cnt; i++) {
+		for (j = 0; j < dst_cnt; j++) {
+			src_ip = rte_cpu_to_be_32(src_ip_base + i);
+			dst_ip = rte_cpu_to_be_32(dst_ip_base + j);
+			RTE_ASSERT((*flow_num) < DPAA2_MUX_MAX_5T_FLOWS);
+			s_mux_5tups[*flow_num].dpdmux_id = dpdmux_id;
+			s_mux_5tups[*flow_num].ep_id = ep_id;
+			s_mux_5tups[*flow_num].l3 = DPAA2_MUX_DEMO_IPv4;
+			s_mux_5tups[*flow_num].l4 = DPAA2_MUX_DEMO_UDP;
+			s_mux_5tups[*flow_num].ipv4_hdr.src_addr = src_ip;
+			s_mux_5tups[*flow_num].ipv4_hdr.dst_addr = dst_ip;
+			s_mux_5tups[*flow_num].ipv4_mask.src_addr = 0xffffffff;
+			s_mux_5tups[*flow_num].ipv4_mask.dst_addr = 0xffffffff;
+			s_mux_5tups[*flow_num].udp_hdr.src_port = src_port;
+			s_mux_5tups[*flow_num].udp_hdr.dst_port = dst_port;
+			s_mux_5tups[*flow_num].udp_mask.src_port = 0xffff;
+			s_mux_5tups[*flow_num].udp_mask.dst_port = 0xffff;
+			(*flow_num)++;
+		}
+	}
+}
+
 static int
 parse_5_tuple_count_flow_config(const char *q_arg)
 {
@@ -286,17 +319,12 @@ parse_5_tuple_count_flow_config(const char *q_arg)
 	char *end;
 	uint64_t ul_fld[FLD_5_TUP_COUNT_FLOW_NUM_FLD];
 	char *str_fld[FLD_5_TUP_COUNT_FLOW_NUM_FLD];
-	int flow_num = 0, dpdmux_id;
-	uint32_t src_cnt, dst_cnt, src_ip_base, dst_ip_base, size, i, j;
-	rte_be16_t src_port, dst_port;
-	rte_be32_t src_ip, dst_ip;
+	int ret;
+	uint32_t src_cnt, dst_cnt, size, i, flow_num = 0;
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(INFO, dpaa2_mux_demo,
-			"%s: No DPDMUX created.\n", __func__);
-		return dpdmux_id;
-	}
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	p = strchr(p0, '(');
 	if (!p)
@@ -323,32 +351,18 @@ parse_5_tuple_count_flow_config(const char *q_arg)
 	}
 	src_cnt = ul_fld[FLD_5_TUP_SRC_COUNT];
 	dst_cnt = ul_fld[FLD_5_TUP_DST_COUNT];
-	if ((src_cnt * dst_cnt) > DPAA2_MUX_MAX_5T_FLOWS ||
+	if ((src_cnt * dst_cnt * s_mux_max_num) > DPAA2_MUX_MAX_5T_FLOWS ||
 		!(src_cnt && dst_cnt))
 		return -EINVAL;
 
-	src_ip_base = ul_fld[FLD_5_TUP_L3_SRC_BASE];
-	dst_ip_base = ul_fld[FLD_5_TUP_L3_DST_BASE];
-	src_port = rte_cpu_to_be_16(ul_fld[FLD_5_TUP_L4_SRC_PORT]);
-	dst_port = rte_cpu_to_be_16(ul_fld[FLD_5_TUP_L4_DST_PORT]);
-	for (i = 0; i < src_cnt; i++) {
-		for (j = 0; j < dst_cnt; j++) {
-			src_ip = rte_cpu_to_be_32(src_ip_base + i);
-			dst_ip = rte_cpu_to_be_32(dst_ip_base + j);
-			s_mux_5tups[flow_num].dpdmux_id = dpdmux_id;
-			s_mux_5tups[flow_num].ep_id = ul_fld[FLD_5_TUP_COUNT_FLOW_EP];
-			s_mux_5tups[flow_num].l3 = DPAA2_MUX_DEMO_IPv4;
-			s_mux_5tups[flow_num].l4 = DPAA2_MUX_DEMO_UDP;
-			s_mux_5tups[flow_num].ipv4_hdr.src_addr = src_ip;
-			s_mux_5tups[flow_num].ipv4_hdr.dst_addr = dst_ip;
-			s_mux_5tups[flow_num].ipv4_mask.src_addr = 0xffffffff;
-			s_mux_5tups[flow_num].ipv4_mask.dst_addr = 0xffffffff;
-			s_mux_5tups[flow_num].udp_hdr.src_port = src_port;
-			s_mux_5tups[flow_num].udp_hdr.dst_port = dst_port;
-			s_mux_5tups[flow_num].udp_mask.src_port = 0xffff;
-			s_mux_5tups[flow_num].udp_mask.dst_port = 0xffff;
-			flow_num++;
-		}
+	for (i = 0; i < s_mux_max_num; i++) {
+		_5_tuple_count_flow_config(s_mux_ids[i],
+			(uint32_t)ul_fld[FLD_5_TUP_L3_SRC_BASE],
+			(uint32_t)ul_fld[FLD_5_TUP_L3_DST_BASE],
+			(uint16_t)ul_fld[FLD_5_TUP_L4_SRC_PORT],
+			(uint16_t)ul_fld[FLD_5_TUP_L4_DST_PORT],
+			src_cnt, dst_cnt,
+			(uint8_t)ul_fld[FLD_5_TUP_COUNT_FLOW_EP], &flow_num);
 	}
 
 	s_mux_5tups_num = flow_num;
@@ -390,15 +404,12 @@ parse_5_tuple_multi_flow_config(const char *q_arg)
 	uint8_t ip_src[16], ip_dst[16], ip_zero[16];
 	uint64_t ul_fld[FLD_5_TUP_NUM_FLD];
 	char *str_fld[FLD_5_TUP_NUM_FLD];
-	int i, flow_num = 0, dpdmux_id, ret;
+	int i, flow_num = 0, ret, dpdmux_id, idx = 0;
 	uint32_t size;
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(INFO, dpaa2_mux_demo,
-			"%s: No DPDMUX created.\n", __func__);
-		return dpdmux_id;
-	}
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	memset(ip_zero, 0, 16);
 
@@ -453,6 +464,15 @@ parse_next_flow:
 		}
 	}
 
+	idx = 0;
+next_dpdmux:
+	dpdmux_id = s_mux_ids[idx];
+	if (flow_num >= DPAA2_MUX_MAX_5T_FLOWS) {
+		s_mux_5tups_num = flow_num;
+		RTE_LOG(WARNING, dpaa2_mux_demo,
+			"%s: Too many flows\n", __func__);
+		return s_mux_5tups_num;
+	}
 	s_mux_5tups[flow_num].l3 = ul_fld[FLD_5_TUP_L3];
 	if (s_mux_5tups[flow_num].l3 == DPAA2_MUX_DEMO_IPv4) {
 		if (memcmp(ip_zero, ip_src, sizeof(rte_be32_t))) {
@@ -529,6 +549,9 @@ parse_next_flow:
 	s_mux_5tups[flow_num].dpdmux_id = dpdmux_id;
 	s_mux_5tups[flow_num].ep_id = ul_fld[FLD_5_TUP_EP];
 	flow_num++;
+	idx++;
+	if (idx < s_mux_max_num)
+		goto next_dpdmux;
 	s_mux_5tups_num = flow_num;
 
 	goto parse_next_flow;
@@ -565,16 +588,13 @@ parse_eth_tunnel_multi_flow_config(const char *q_arg)
 	uint64_t ul_fld;
 	uint8_t *vni;
 	char *str_fld[FLD_ETH_TUNNEL_FLOW_NUM_FLD];
-	int i, flow_num = 0, dpdmux_id, ret;
-	uint32_t size;
+	int i, flow_num = 0, ret, idx;
+	uint32_t size, dpdmux_id;
 	struct dpaa2_mux_demo_tunnel *tunnel;
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(INFO, dpaa2_mux_demo,
-			"%s: No DPDMUX created.\n", __func__);
-		return dpdmux_id;
-	}
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	tunnel = s_mux_tunnels;
 
@@ -591,12 +611,6 @@ parse_next_flow:
 		return s_mux_tunnels_num;
 	}
 
-	if (flow_num > DPAA2_MUX_MAX_TUNNEL_FLOWS) {
-		RTE_LOG(INFO, dpaa2_mux_demo,
-			"%s: Too many flows\n", __func__);
-		return -EINVAL;
-	}
-
 	size = p0 - p;
 	if (size >= sizeof(s))
 		return -EINVAL;
@@ -605,6 +619,10 @@ parse_next_flow:
 	if (rte_strsplit(s, sizeof(s), str_fld,
 		FLD_ETH_TUNNEL_FLOW_NUM_FLD, ',') != FLD_ETH_TUNNEL_FLOW_NUM_FLD)
 		return -EINVAL;
+
+	idx = 0;
+next_dpdmux:
+	dpdmux_id = s_mux_ids[idx];
 
 	for (i = 0; i < FLD_ETH_TUNNEL_FLOW_NUM_FLD; i++) {
 		if (i == FLD_ETH_TUNNEL_ETH) {
@@ -674,8 +692,18 @@ parse_next_flow:
 			tunnel->ep_id = strtoul(str_fld[i], &end, 10);
 		}
 	}
+	tunnel->dpdmux_id = dpdmux_id;
 	tunnel++;
 	flow_num++;
+	if (flow_num >= DPAA2_MUX_MAX_TUNNEL_FLOWS) {
+		RTE_LOG(WARNING, dpaa2_mux_demo,
+			"%s: Too many flows\n", __func__);
+		s_mux_tunnels_num = flow_num;
+		return s_mux_tunnels_num;
+	}
+	idx++;
+	if (idx < s_mux_max_num)
+		goto next_dpdmux;
 
 	goto parse_next_flow;
 
@@ -696,12 +724,20 @@ rte_dpaa2_mux_demo_add_multi_5tup_flows(void)
 	struct rte_flow_item_ipv6 ipv6_mask;
 	struct rte_flow_item_udp umask;
 	struct rte_flow_item_tcp tmask;
-	int dpdmux_id, flow_num = 0, ret, i, created = 0;
+	int dpdmux_id, flow_num = 0, ret, i, created = 0, idx = 0;
 	__uint128_t *ipv6_src, *ipv6_dst;
 
+next_dpdmux:
+	dpdmux_id = s_mux_ids[idx];
+	idx++;
+	flow_num = 0;
+
 create_next_flow:
-	if (flow_num >= s_mux_5tups_num)
-		return created;
+	if (flow_num >= s_mux_5tups_num) {
+		if (idx >= s_mux_max_num)
+			return created;
+		goto next_dpdmux;
+	}
 	memset(&ipv4_item, 0, sizeof(ipv4_item));
 	memset(&ipv6_item, 0, sizeof(ipv6_item));
 	memset(&uitem, 0, sizeof(uitem));
@@ -810,6 +846,7 @@ create_next_flow:
 	} else {
 		created++;
 	}
+	s_mux_5tups[flow_num].dpdmux_id = dpdmux_id;
 	s_mux_5tups[flow_num].flow_idx = ret;
 	flow_num++;
 	goto create_next_flow;
@@ -829,11 +866,13 @@ rte_dpaa2_mux_demo_del_multi_5tup_flows(void)
 				s_mux_5tups[i].flow_idx);
 		if (ret) {
 			RTE_LOG(ERR, dpaa2_mux_demo,
-				"%s: Destroy mux flow%d failed(%d)\n",
-				__func__, i, ret);
+				"%s: Destroy mux%d flow%d failed(%d)\n",
+				__func__, s_mux_5tups[i].dpdmux_id,
+				s_mux_5tups[i].flow_idx, ret);
 		}
 		s_mux_5tups[i].flow_idx = -1;
 	}
+
 	s_mux_5tups_num = 0;
 }
 
@@ -916,11 +955,12 @@ rte_dpaa2_mux_demo_del_multi_tunnel_flows(void)
 		if (s_mux_tunnels[i].flow_idx < 0)
 			continue;
 		ret = rte_pmd_dpaa2_mux_flow_destroy(s_mux_tunnels[i].dpdmux_id,
-				s_mux_tunnels[i].flow_idx);
+			s_mux_tunnels[i].flow_idx);
 		if (ret) {
 			RTE_LOG(ERR, dpaa2_mux_demo,
-				"%s: Destroy mux flow%d failed(%d)\n",
-				__func__, i, ret);
+				"%s: Destroy mux%d flow%d failed(%d)\n",
+				__func__, s_mux_tunnels[i].dpdmux_id,
+				s_mux_tunnels[i].flow_idx, ret);
 		}
 		s_mux_tunnels[i].flow_idx = -1;
 	}
@@ -952,7 +992,7 @@ rte_dpaa2_mux_demo_split_eth_ip(void)
 static int
 rte_dpaa2_mux_demo_config_ip_eth_split(void)
 {
-	int ret;
+	int ret, idx = 0, dpdmux_id;
 	struct rte_flow_item pattern[2];
 	struct rte_flow_action actions[1];
 	struct rte_flow_action_vf vf;
@@ -960,22 +1000,20 @@ rte_dpaa2_mux_demo_config_ip_eth_split(void)
 	struct rte_flow_item_eth eitem;
 	struct rte_flow_item_ipv4 ipv4_mask;
 	struct rte_flow_item_eth emask;
-	int dpdmux_id;
 
 	memset(&ipv4_item, 0, sizeof(ipv4_item));
 	memset(&eitem, 0, sizeof(eitem));
 	memset(&ipv4_mask, 0, sizeof(ipv4_mask));
 	memset(&emask, 0, sizeof(emask));
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(ERR, dpaa2_mux_demo,
-			"get mux ID failed(%d)\n", dpdmux_id);
-		return dpdmux_id;
-	}
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	vf.id = s_mux_ep_id;
 
+next_dpdmux:
+	dpdmux_id = s_mux_ids[idx];
 	if (s_mux_demo_proto) {
 		ipv4_item.hdr.next_proto_id = s_mux_demo_proto;
 		ipv4_mask.hdr.next_proto_id = 0xff;
@@ -1000,6 +1038,9 @@ rte_dpaa2_mux_demo_config_ip_eth_split(void)
 		RTE_LOG(ERR, dpaa2_mux_demo,
 			"%s: Create mux flow failed(%d)\n", __func__, ret);
 	}
+	idx++;
+	if (idx < s_mux_max_num)
+		goto next_dpdmux;
 
 	return ret;
 }
@@ -1008,7 +1049,7 @@ rte_dpaa2_mux_demo_config_ip_eth_split(void)
 static int
 rte_dpaa2_mux_demo_config_split_traffic(void)
 {
-	int ret, dpdmux_id, flow_nb = 0, start = 0;
+	int ret, dpdmux_id, flow_nb = 0, start = 0, idx = 0;
 	struct rte_flow_item pattern[MAX_PATTERN_NUM];
 	struct rte_flow_action actions[1];
 	struct rte_flow_action_vf vf;
@@ -1039,14 +1080,13 @@ rte_dpaa2_mux_demo_config_split_traffic(void)
 	memset(vlan_mask, 0, sizeof(vlan_mask));
 	memset(ecpri_mask, 0, sizeof(ecpri_mask));
 
-	dpdmux_id = dpaa2_mux_demo_get_mux_id();
-	if (dpdmux_id < 0) {
-		RTE_LOG(ERR, dpaa2_mux_demo,
-			"get mux ID failed(%d)\n", dpdmux_id);
-		return dpdmux_id;
-	}
+	ret = dpaa2_mux_demo_enum_mux_ids();
+	if (ret < 0)
+		return ret;
 
 	vf.id = s_mux_ep_id;
+next_dpdmux:
+	dpdmux_id = s_mux_ids[idx];
 
 	switch (s_mux_type) {
 	case TRAFFIC_SPLIT_NONE:
@@ -1196,6 +1236,12 @@ rte_dpaa2_mux_demo_config_split_traffic(void)
 		}
 	}
 
-	return ret >= 0 ? 0 : ret;
+	if (ret < 0)
+		return ret;
+	idx++;
+	if (idx < s_mux_max_num)
+		goto next_dpdmux;
+
+	return 0;
 }
 #endif
