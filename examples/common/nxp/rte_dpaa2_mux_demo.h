@@ -63,9 +63,35 @@ struct dpaa2_mux_demo_5tups {
 	int flow_idx;
 };
 
+enum dpaa2_mux_demo_eth_tunnel {
+	DPAA2_MUX_DEMO_ETH = (1 << 0),
+	DPAA2_MUX_DEMO_GRE = (1 << 1),
+	DPAA2_MUX_DEMO_VXLAN = (1 << 2),
+	DPAA2_MUX_DEMO_GENEVE = (1 << 3)
+};
+
+struct dpaa2_mux_demo_tunnel {
+	int dpdmux_id;
+	uint8_t ep_id;
+	enum dpaa2_mux_demo_eth_tunnel tunnel_type;
+	struct rte_ether_hdr eth_hdr;
+	struct rte_ether_hdr eth_mask;
+	struct rte_flow_item_gre gre_hdr;
+	struct rte_flow_item_gre gre_mask;
+	struct rte_vxlan_hdr vxlan_hdr;
+	struct rte_vxlan_hdr vxlan_mask;
+	struct rte_flow_item_geneve geneve_hdr;
+	struct rte_flow_item_geneve geneve_mask;
+	int flow_idx;
+};
+
 #define DPAA2_MUX_MAX_5T_FLOWS 128
 struct dpaa2_mux_demo_5tups s_mux_5tups[DPAA2_MUX_MAX_5T_FLOWS];
 static uint16_t s_mux_5tups_num;
+
+#define DPAA2_MUX_MAX_TUNNEL_FLOWS 128
+struct dpaa2_mux_demo_tunnel s_mux_tunnels[DPAA2_MUX_MAX_TUNNEL_FLOWS];
+static uint16_t s_mux_tunnels_num;
 
 #ifndef RTE_LOGTYPE_dpaa2_mux_demo
 #define RTE_LOGTYPE_dpaa2_mux_demo RTE_LOGTYPE_USER1
@@ -236,6 +262,20 @@ enum mux_5_tup_count_flow_field {
 	FLD_5_TUP_L4_DST_PORT,
 	FLD_5_TUP_COUNT_FLOW_EP,
 	FLD_5_TUP_COUNT_FLOW_NUM_FLD
+};
+
+enum mux_eth_tunnel_field {
+	FLD_ETH_TUNNEL_ETH = 0,
+	FLD_ETH_TUNNEL_ETH_SRC,
+	FLD_ETH_TUNNEL_ETH_DST,
+	FLD_ETH_TUNNEL_GRE,
+	FLD_ETH_TUNNEL_GRE_PROTOCOL,
+	FLD_ETH_TUNNEL_VXLAN,
+	FLD_ETH_TUNNEL_VXLAN_VNI,
+	FLD_ETH_TUNNEL_GENEVE,
+	FLD_ETH_TUNNEL_GENEVE_VNI,
+	FLD_ETH_TUNNEL_FLOW_EP,
+	FLD_ETH_TUNNEL_FLOW_NUM_FLD
 };
 
 static int
@@ -497,6 +537,152 @@ parse_next_flow:
 }
 
 static int
+parse_mac_str2addr(char *str, uint8_t mac[])
+{
+	char *token;
+	int i = 0;
+	uint32_t value;
+
+	token = strtok(str, ":");
+	while (token && i < RTE_ETHER_ADDR_LEN) {
+		if (sscanf(token, "%x", &value) != 1)
+			return -EINVAL;
+
+		mac[i] = value;
+		i++;
+		token = strtok(NULL, ":");
+	}
+
+	return i == RTE_ETHER_ADDR_LEN ? 0 : -EINVAL;
+}
+
+static int
+parse_eth_tunnel_multi_flow_config(const char *q_arg)
+{
+	char s[256];
+	const char *p, *p0 = q_arg;
+	char *end;
+	uint64_t ul_fld;
+	uint8_t *vni;
+	char *str_fld[FLD_ETH_TUNNEL_FLOW_NUM_FLD];
+	int i, flow_num = 0, dpdmux_id, ret;
+	uint32_t size;
+	struct dpaa2_mux_demo_tunnel *tunnel;
+
+	dpdmux_id = dpaa2_mux_demo_get_mux_id();
+	if (dpdmux_id < 0) {
+		RTE_LOG(INFO, dpaa2_mux_demo,
+			"%s: No DPDMUX created.\n", __func__);
+		return dpdmux_id;
+	}
+
+	tunnel = s_mux_tunnels;
+
+parse_next_flow:
+	p = strchr(p0, '(');
+	if (!p) {
+		s_mux_tunnels_num = flow_num;
+		return s_mux_tunnels_num;
+	}
+	++p;
+	p0 = strchr(p, ')');
+	if (!p0) {
+		s_mux_tunnels_num = flow_num;
+		return s_mux_tunnels_num;
+	}
+
+	if (flow_num > DPAA2_MUX_MAX_TUNNEL_FLOWS) {
+		RTE_LOG(INFO, dpaa2_mux_demo,
+			"%s: Too many flows\n", __func__);
+		return -EINVAL;
+	}
+
+	size = p0 - p;
+	if (size >= sizeof(s))
+		return -EINVAL;
+
+	snprintf(s, sizeof(s), "%.*s", size, p);
+	if (rte_strsplit(s, sizeof(s), str_fld,
+		FLD_ETH_TUNNEL_FLOW_NUM_FLD, ',') != FLD_ETH_TUNNEL_FLOW_NUM_FLD)
+		return -EINVAL;
+
+	for (i = 0; i < FLD_ETH_TUNNEL_FLOW_NUM_FLD; i++) {
+		if (i == FLD_ETH_TUNNEL_ETH) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld)
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_ETH;
+		} else if (i == FLD_ETH_TUNNEL_ETH_SRC) {
+			ret = parse_mac_str2addr(str_fld[i],
+				tunnel->eth_hdr.src_addr.addr_bytes);
+			if (!ret) {
+				memset(tunnel->eth_mask.src_addr.addr_bytes,
+					0xff, RTE_ETHER_ADDR_LEN);
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_ETH;
+			}
+		} else if (i == FLD_ETH_TUNNEL_ETH_DST) {
+			ret = parse_mac_str2addr(str_fld[i],
+				tunnel->eth_hdr.dst_addr.addr_bytes);
+			if (!ret) {
+				memset(tunnel->eth_mask.dst_addr.addr_bytes,
+					0xff, RTE_ETHER_ADDR_LEN);
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_ETH;
+			}
+		} else if (i == FLD_ETH_TUNNEL_GRE) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld)
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_GRE;
+		} else if (i == FLD_ETH_TUNNEL_GRE_PROTOCOL) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld) {
+				tunnel->gre_hdr.protocol = rte_cpu_to_be_16(ul_fld);
+				tunnel->gre_hdr.protocol = 0xffff;
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_GRE;
+			}
+		} else if (i == FLD_ETH_TUNNEL_VXLAN) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld)
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_VXLAN;
+		} else if (i == FLD_ETH_TUNNEL_VXLAN_VNI) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld) {
+				vni = (void *)&tunnel->vxlan_hdr.vx_vni;
+				vni[0] = ul_fld >> 16;
+				vni[1] = (uint8_t)(ul_fld >> 8);
+				vni[2] = (uint8_t)ul_fld;
+				vni = (void *)&tunnel->vxlan_mask.vx_vni;
+				vni[0] = 0xff;
+				vni[1] = 0xff;
+				vni[2] = 0xff;
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_VXLAN;
+			}
+		} else if (i == FLD_ETH_TUNNEL_GENEVE) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld)
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_GENEVE;
+		} else if (i == FLD_ETH_TUNNEL_GENEVE_VNI) {
+			ul_fld = strtoul(str_fld[i], &end, 10);
+			if (ul_fld) {
+				tunnel->geneve_hdr.vni[0] = ul_fld >> 16;
+				tunnel->geneve_hdr.vni[1] = (uint8_t)(ul_fld >> 8);
+				tunnel->geneve_hdr.vni[2] = (uint8_t)ul_fld;
+				tunnel->geneve_mask.vni[0] = 0xff;
+				tunnel->geneve_mask.vni[1] = 0xff;
+				tunnel->geneve_mask.vni[2] = 0xff;
+				tunnel->tunnel_type |= DPAA2_MUX_DEMO_GENEVE;
+			}
+		} else if (i == FLD_ETH_TUNNEL_FLOW_EP) {
+			tunnel->ep_id = strtoul(str_fld[i], &end, 10);
+		}
+	}
+	tunnel++;
+	flow_num++;
+
+	goto parse_next_flow;
+
+	return 0;
+}
+
+static int
 rte_dpaa2_mux_demo_add_multi_5tup_flows(void)
 {
 	struct rte_flow_item pattern[3];
@@ -649,6 +835,96 @@ rte_dpaa2_mux_demo_del_multi_5tup_flows(void)
 		s_mux_5tups[i].flow_idx = -1;
 	}
 	s_mux_5tups_num = 0;
+}
+
+static int
+rte_dpaa2_mux_demo_add_multi_tunnel_flows(void)
+{
+	struct rte_flow_item pattern[16];
+	struct rte_flow_action actions[2];
+	struct rte_flow_action_vf vf;
+	int dpdmux_id, flow_num = 0, ret, i, created = 0;
+
+create_next_flow:
+	if (flow_num >= s_mux_tunnels_num)
+		return created;
+
+	dpdmux_id = s_mux_tunnels[flow_num].dpdmux_id;
+	vf.id = s_mux_tunnels[flow_num].ep_id;
+	i = 0;
+	if (s_mux_tunnels[flow_num].tunnel_type & DPAA2_MUX_DEMO_ETH) {
+		pattern[i].type = RTE_FLOW_ITEM_TYPE_ETH;
+		pattern[i].spec = &s_mux_tunnels[flow_num].eth_hdr;
+		pattern[i].mask = &s_mux_tunnels[flow_num].eth_mask;
+		i++;
+	}
+	if (s_mux_tunnels[flow_num].tunnel_type & DPAA2_MUX_DEMO_GRE) {
+		pattern[i].type = RTE_FLOW_ITEM_TYPE_GRE;
+		pattern[i].spec = &s_mux_tunnels[flow_num].gre_hdr;
+		pattern[i].mask = &s_mux_tunnels[flow_num].gre_mask;
+		i++;
+	}
+	if (s_mux_tunnels[flow_num].tunnel_type & DPAA2_MUX_DEMO_VXLAN) {
+		pattern[i].type = RTE_FLOW_ITEM_TYPE_VXLAN;
+		pattern[i].spec = &s_mux_tunnels[flow_num].vxlan_hdr;
+		pattern[i].mask = &s_mux_tunnels[flow_num].vxlan_mask;
+		i++;
+	}
+	if (s_mux_tunnels[flow_num].tunnel_type & DPAA2_MUX_DEMO_GENEVE) {
+		pattern[i].type = RTE_FLOW_ITEM_TYPE_GENEVE;
+		pattern[i].spec = &s_mux_tunnels[flow_num].geneve_hdr;
+		pattern[i].mask = &s_mux_tunnels[flow_num].geneve_mask;
+		i++;
+	}
+
+	if (!i) {
+		RTE_LOG(WARNING, dpaa2_mux_demo,
+			"%s: Mux flow%d has no pattern\n", __func__,
+			flow_num);
+		s_mux_tunnels[flow_num].flow_idx = -1;
+		flow_num++;
+		goto create_next_flow;
+	}
+	pattern[i].type = RTE_FLOW_ITEM_TYPE_END;
+
+	actions[0].type = RTE_FLOW_ACTION_TYPE_VF;
+	actions[0].conf = &vf;
+	actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	ret = rte_pmd_dpaa2_mux_flow_create(dpdmux_id, pattern,
+			actions);
+	if (ret < 0) {
+		RTE_LOG(ERR, dpaa2_mux_demo,
+			"%s: Create mux flow%d failed(%d)\n",
+			__func__, flow_num, ret);
+	} else {
+		created++;
+	}
+	s_mux_tunnels[flow_num].flow_idx = ret;
+	flow_num++;
+	goto create_next_flow;
+
+	return 0;
+}
+
+static void
+rte_dpaa2_mux_demo_del_multi_tunnel_flows(void)
+{
+	int i, ret;
+
+	for (i = 0; i < s_mux_tunnels_num; i++) {
+		if (s_mux_tunnels[i].flow_idx < 0)
+			continue;
+		ret = rte_pmd_dpaa2_mux_flow_destroy(s_mux_tunnels[i].dpdmux_id,
+				s_mux_tunnels[i].flow_idx);
+		if (ret) {
+			RTE_LOG(ERR, dpaa2_mux_demo,
+				"%s: Destroy mux flow%d failed(%d)\n",
+				__func__, i, ret);
+		}
+		s_mux_tunnels[i].flow_idx = -1;
+	}
+	s_mux_tunnels_num = 0;
 }
 
 static inline int

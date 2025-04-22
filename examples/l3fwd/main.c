@@ -88,6 +88,7 @@ static int per_port_pool = 1; /**< Use separate buffer pools per port */
 				/**< Set to 0 as default - disabled */
 static uint8_t enable_flow;
 static uint8_t s_split_5tup;
+static uint8_t s_split_tunnel;
 
 volatile bool force_quit;
 
@@ -476,7 +477,8 @@ print_usage(const char *prgname)
 		"  --rule_ipv6=FILE: Specify the ipv6 rules entries file.\n"
 		"  --alg: ACL classify method to use, one of: %s.\n"
 		"  --5tup-split: (l3,l3_src,l3_dst,l4,l4_src,l4_dst,vf_id)\n"
-		"  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n\n",
+		"  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n"
+		"  --tunnel-split: (eth,eth_src,eth_dst,gre,gre_protocol,vxlan,vxlan_vni,geneve,geneve_vni,vf_id)\n\n",
 		prgname, RX_DESC_DEFAULT, TX_DESC_DEFAULT,
 		ACL_LEAD_CHAR, ROUTE_LEAD_CHAR, alg);
 }
@@ -743,6 +745,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_ALG "alg"
 #define CMD_LINE_OPT_5TUP_SPLIT "5tup-split"
 #define CMD_LINE_OPT_5TUP_COUNT_SPLIT "5tup-count-split"
+#define CMD_LINE_OPT_TUNNEL_SPLIT "tunnel-split"
 
 enum {
 	/* long options mapped to a short option */
@@ -774,7 +777,8 @@ enum {
 	CMD_LINE_OPT_VECTOR_SIZE_NUM,
 	CMD_LINE_OPT_VECTOR_TMO_NS_NUM,
 	CMD_LINE_OPT_5TUP_SPLIT_NUM,
-	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM
+	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM,
+	CMD_LINE_OPT_TUNNEL_SPLIT_NUM
 };
 
 static const struct option lgopts[] = {
@@ -805,6 +809,7 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_ALG, 1, 0, CMD_LINE_OPT_ALG_NUM},
 	{CMD_LINE_OPT_5TUP_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_SPLIT_NUM},
 	{CMD_LINE_OPT_5TUP_COUNT_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM},
+	{CMD_LINE_OPT_TUNNEL_SPLIT, 1, 0, CMD_LINE_OPT_TUNNEL_SPLIT_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -1033,6 +1038,16 @@ parse_args(int argc, char **argv)
 			}
 			if (ret > 0)
 				s_split_5tup = true;
+			break;
+
+		case CMD_LINE_OPT_TUNNEL_SPLIT_NUM:
+			ret = parse_eth_tunnel_multi_flow_config(optarg);
+			if (ret < 0) {
+				print_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_tunnel = true;
 			break;
 
 		default:
@@ -1798,6 +1813,12 @@ main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE,
 				"Unable to split traffic by 5tups\n");
 		}
+	} else if (s_split_tunnel) {
+		ret = rte_dpaa2_mux_demo_add_multi_tunnel_flows();
+		if (ret <= 0) {
+			rte_exit(EXIT_FAILURE,
+				"Unable to split traffic by tunnel\n");
+		}
 	}
 
 	check_all_ports_link_status(enabled_port_mask);
@@ -1853,6 +1874,8 @@ main(int argc, char **argv)
 
 	if (s_split_5tup)
 		rte_dpaa2_mux_demo_del_multi_5tup_flows();
+	if (s_split_tunnel)
+		rte_dpaa2_mux_demo_del_multi_tunnel_flows();
 
 	/* clean up the EAL */
 	rte_eal_cleanup();

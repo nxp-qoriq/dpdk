@@ -96,6 +96,7 @@ static unsigned int l2fwd_rx_queue_per_lcore = 1;
 struct rte_pmd_dpaa_lgw_info_s lgw_subnets;
 
 static uint8_t s_split_5tup;
+static uint8_t s_split_tunnel;
 
 struct mbuf_table {
 	uint32_t len;
@@ -162,6 +163,7 @@ uint8_t num_ports;
 #define CMD_LINE_OPT_TRAFFIC_SPLIT_CONFIG "dpaa2-traffic-split-config"
 #define CMD_LINE_OPT_5TUP_SPLIT "5tup-split"
 #define CMD_LINE_OPT_5TUP_COUNT_SPLIT "5tup-count-split"
+#define CMD_LINE_OPT_TUNNEL_SPLIT "tunnel-split"
 
 #define GTP_U 2152
 #define GTP_C 2123
@@ -619,7 +621,8 @@ l2fwd_usage(const char *prgname)
 	       "                     Valid only when using OL port as split port\n"
 	       "  --dpaa2-traffic-split-config: (type,val,mux_conn_id)\n"
 	       "  --5tup-split: (l3,l3_src,l3_dst,l4,l4_src,l4_dst,vf_id)\n"
-	       "  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n",
+	       "  --5tup-count-split: (l3_src_base,l3_dst_base,src_count,dst_count,l4_src,l4_dst,vf_id)\n"
+	       "  --tunnel-split: (eth,eth_src,eth_dst,gre,gre_protocol,vxlan,vxlan_vni,geneve,geneve_vni,vf_id)\n",
 	       prgname);
 }
 
@@ -674,7 +677,8 @@ enum {
 	CMD_LINE_OPT_MIN_NUM = 256,
 	CMD_LINE_OPT_PARSE_TRAFFIC_SPLIT_CONFIG,
 	CMD_LINE_OPT_5TUP_SPLIT_NUM,
-	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM
+	CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM,
+	CMD_LINE_OPT_TUNNEL_SPLIT_NUM
 };
 
 static const struct option lgopts[] = {
@@ -682,6 +686,7 @@ static const struct option lgopts[] = {
 		CMD_LINE_OPT_PARSE_TRAFFIC_SPLIT_CONFIG},
 	{CMD_LINE_OPT_5TUP_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_SPLIT_NUM},
 	{CMD_LINE_OPT_5TUP_COUNT_SPLIT, 1, 0, CMD_LINE_OPT_5TUP_COUNT_SPLIT_NUM},
+	{CMD_LINE_OPT_TUNNEL_SPLIT, 1, 0, CMD_LINE_OPT_TUNNEL_SPLIT_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -795,6 +800,16 @@ l2fwd_parse_args(int argc, char **argv)
 			}
 			if (ret > 0)
 				s_split_5tup = true;
+			break;
+
+		case CMD_LINE_OPT_TUNNEL_SPLIT_NUM:
+			ret = parse_eth_tunnel_multi_flow_config(optarg);
+			if (ret < 0) {
+				l2fwd_usage(prgname);
+				return ret;
+			}
+			if (ret > 0)
+				s_split_tunnel = true;
 			break;
 
 		default:
@@ -1637,6 +1652,12 @@ main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE,
 				"Unable to split traffic by 5tups\n");
 		}
+	} else if (s_split_tunnel) {
+		ret = rte_dpaa2_mux_demo_add_multi_tunnel_flows();
+		if (ret <= 0) {
+			rte_exit(EXIT_FAILURE,
+				"Unable to split traffic by tunnel\n");
+		}
 	}
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
@@ -1674,6 +1695,8 @@ main(int argc, char **argv)
 
 	if (s_split_5tup)
 		rte_dpaa2_mux_demo_del_multi_5tup_flows();
+	if (s_split_tunnel)
+		rte_dpaa2_mux_demo_del_multi_tunnel_flows();
 
 	RTE_ETH_FOREACH_DEV(portid) {
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
