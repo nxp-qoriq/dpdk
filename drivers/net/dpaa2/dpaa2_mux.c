@@ -878,6 +878,26 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 					goto creation_error;
 			}
 
+			if (spec && mask && memcmp(zero_cmp, mask->dst.addr_bytes,
+				RTE_ETHER_ADDR_LEN)) {
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
+					NET_PROT_ETH, NH_FLD_ETH_DA,
+					RTE_ETHER_ADDR_LEN, &spec->dst, &mask->dst,
+					flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
+			if (spec && mask && memcmp(zero_cmp, mask->src.addr_bytes,
+				RTE_ETHER_ADDR_LEN)) {
+				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
+					NET_PROT_ETH, NH_FLD_ETH_SA,
+					RTE_ETHER_ADDR_LEN, &spec->src, &mask->src,
+					flow, &extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
 			if (spec && mask && mask->type) {
 				ret = dpaa2_mux_add_hdr_extract(dpdmux_dev,
 					NET_PROT_ETH, NH_FLD_ETH_TYPE,
