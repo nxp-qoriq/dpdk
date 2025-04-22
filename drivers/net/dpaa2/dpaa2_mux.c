@@ -555,6 +555,22 @@ set_rule:
 	return 0;
 }
 
+uint8_t
+rte_pmd_dpaa2_mux_multi_enum(uint8_t num, uint32_t ids[])
+{
+	struct dpaa2_dpdmux_dev *dpdmux_dev = NULL;
+	uint8_t i = 0;
+
+	TAILQ_FOREACH(dpdmux_dev, &dpdmux_dev_list, next) {
+		if (i >= num)
+			break;
+		ids[i] = dpdmux_dev->dpdmux_id;
+		i++;
+	}
+
+	return i;
+}
+
 int
 rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	struct rte_flow_item pattern[],
@@ -1623,8 +1639,9 @@ dpaa2_close_dpdmux_device(int object_id)
 
 	if (dpdmux_dev) {
 		dpdmux_close(&dpdmux_dev->dpdmux, CMD_PRI_LOW,
-			     dpdmux_dev->token);
+			dpdmux_dev->token);
 		TAILQ_REMOVE(&dpdmux_dev_list, dpdmux_dev, next);
+		rte_free(dpdmux_dev->mux_eps);
 		rte_free(dpdmux_dev);
 	}
 }

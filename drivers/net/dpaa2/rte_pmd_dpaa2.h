@@ -40,6 +40,9 @@ int
 rte_pmd_dpaa2_mux_flow_l2(uint32_t dpdmux_id,
 	uint8_t mac_addr[6], uint16_t vlan_id, int dest_if);
 
+uint8_t
+rte_pmd_dpaa2_mux_multi_enum(uint8_t num, uint32_t ids[]);
+
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
