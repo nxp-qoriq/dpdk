@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2024 NXP
+ * Copyright 2019-2025 NXP
  * Code was mostly borrowed from examples/l3fwd/main.c
  * See examples/l3fwd/main.c for additional Copyrights.
  */
@@ -48,6 +48,7 @@
 #include <rte_malloc.h>
 #include <rte_pmd_dpaa2.h>
 #include <rte_pmd_dpaa.h>
+#include <rte_mbuf_pool_ops.h>
 
 #include <cmdline_parse.h>
 #include <cmdline_parse_etheraddr.h>
@@ -130,7 +131,7 @@ static int rx_seg_port[RTE_MAX_ETHPORTS];
 static struct rte_mempool *pktmbuf_pool;
 static struct rte_mempool *pktmbuf_pools[RTE_ETH_DPAA_RX_MAX_MPOOLS];
 
-static struct rte_mempool *default_pktmbuf_pool;
+static struct rte_mempool *pktmbuf_pool_tx_only;
 
 #define RTE_MAX_QUEUES 128
 static uint16_t s_pq_map[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES];
@@ -141,6 +142,9 @@ static uint64_t min_mbuf_addr = (~((uint64_t)0));
 static int s_dump_mbuf;
 static int s_inject;
 static uint16_t s_inject_pkt_size = 64;
+
+static uint16_t s_tx_seg = 1;
+
 /** DPAA1 platform support only now.*/
 static int s_mpool_select_by_size;
 static int s_mpool_select_by_size_debug;
@@ -152,6 +156,24 @@ static uint8_t s_inject_pkt_base[] = {
 	0xED, 0x40, 0xC0, 0xA8, 0x0B, 0x02, 0x01, 0x01,
 	0x01, 0x01
 };
+
+#define PORT_FWD_EXTBUF_ZONE_SIZE \
+	(RTE_PGSIZE_2M - 4 * RTE_CACHE_LINE_SIZE)
+
+struct port_fwd_extmem_init_ctx {
+	const struct rte_pktmbuf_extmem *ext_mem; /* descriptor array. */
+	uint32_t ext_num; /* number of descriptors in array. */
+	uint32_t ext; /* loop descriptor index. */
+	size_t off; /* loop buffer offset. */
+};
+
+enum {
+	PORT_FWD_TX_BUF_PLATFORM,
+	PORT_FWD_TX_BUF_DEFAULT,
+	PORT_FWD_TX_BUF_EXT
+};
+
+static int s_port_fwd_tx_buf_type = PORT_FWD_TX_BUF_PLATFORM;
 
 struct loop_mode {
 	int (*parse_fwd_dst)(int portid);
@@ -243,25 +265,325 @@ drain_again:
 	}
 }
 
+static uint32_t
+port_fwd_setup_extbuf(uint32_t nb_mbufs, uint16_t mbuf_sz,
+	uint32_t socket_id, char *pool_name,
+	struct rte_pktmbuf_extmem **ext_mem)
+{
+	struct rte_pktmbuf_extmem *xmem;
+	unsigned int ext_num, zone_num, elt_num;
+	uint16_t elt_size;
+
+	elt_size = RTE_ALIGN_CEIL(mbuf_sz, RTE_CACHE_LINE_SIZE);
+	elt_num = PORT_FWD_EXTBUF_ZONE_SIZE / elt_size;
+	zone_num = (nb_mbufs + elt_num - 1) / elt_num;
+
+	xmem = malloc(sizeof(struct rte_pktmbuf_extmem) * zone_num);
+	if (xmem == NULL) {
+		RTE_LOG(ERR, port_fwd, "malloc size=%ld failed\n",
+			sizeof(struct rte_pktmbuf_extmem) * zone_num);
+		*ext_mem = NULL;
+		return 0;
+	}
+	for (ext_num = 0; ext_num < zone_num; ext_num++) {
+		struct rte_pktmbuf_extmem *xseg = xmem + ext_num;
+		const struct rte_memzone *mz;
+		char mz_name[RTE_MEMZONE_NAMESIZE];
+		int ret;
+
+		ret = snprintf(mz_name, sizeof(mz_name),
+			RTE_MEMPOOL_MZ_FORMAT "_xb_%u", pool_name, ext_num);
+		if (ret < 0 || ret >= (int)sizeof(mz_name)) {
+			errno = ENAMETOOLONG;
+			ext_num = 0;
+			break;
+		}
+		mz = rte_memzone_reserve(mz_name, PORT_FWD_EXTBUF_ZONE_SIZE,
+			socket_id, RTE_MEMZONE_IOVA_CONTIG | RTE_MEMZONE_1GB |
+			RTE_MEMZONE_SIZE_HINT_ONLY);
+		if (mz == NULL) {
+			/*
+			 * The caller exits on external buffer creation
+			 * error, so there is no need to free memzones.
+			 */
+			errno = ENOMEM;
+			ext_num = 0;
+			break;
+		}
+		xseg->buf_ptr = mz->addr;
+		xseg->buf_iova = mz->iova;
+		xseg->buf_len = PORT_FWD_EXTBUF_ZONE_SIZE;
+		xseg->elt_size = elt_size;
+	}
+	if (ext_num == 0 && xmem != NULL) {
+		free(xmem);
+		xmem = NULL;
+	}
+	*ext_mem = xmem;
+	return ext_num;
+}
+
+static void
+port_fwd_pktmbuf_free_pinned_extmem(void *addr, void *opaque)
+{
+	struct rte_mbuf *m = opaque;
+
+	RTE_SET_USED(addr);
+	RTE_ASSERT(RTE_MBUF_HAS_EXTBUF(m));
+	RTE_ASSERT(RTE_MBUF_HAS_PINNED_EXTBUF(m));
+	RTE_ASSERT(m->shinfo->fcb_opaque == m);
+
+	rte_mbuf_ext_refcnt_set(m->shinfo, 1);
+	m->ol_flags = RTE_MBUF_F_EXTERNAL;
+	if (m->next != NULL)
+		m->next = NULL;
+	if (m->nb_segs != 1)
+		m->nb_segs = 1;
+	rte_mbuf_raw_free(m);
+}
+
+static void
+port_fwd_pktmbuf_init_extmem(struct rte_mempool *mp,
+	void *opaque_arg, void *_m, __rte_unused uint32_t i)
+{
+	struct rte_mbuf *m = _m;
+	struct port_fwd_extmem_init_ctx *ctx = opaque_arg;
+	const struct rte_pktmbuf_extmem *ext_mem;
+	uint32_t mbuf_size, buf_len, priv_size;
+	struct rte_mbuf_ext_shared_info *shinfo;
+
+	priv_size = rte_pktmbuf_priv_size(mp);
+	mbuf_size = sizeof(struct rte_mbuf) + priv_size;
+	buf_len = rte_pktmbuf_data_room_size(mp);
+
+	RTE_ASSERT(RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) == priv_size);
+	RTE_ASSERT(mp->elt_size >= mbuf_size);
+	RTE_ASSERT(buf_len <= UINT16_MAX);
+
+	memset(m, 0, mbuf_size);
+	m->priv_size = priv_size;
+	m->buf_len = (uint16_t)buf_len;
+
+	/* set the data buffer pointers to external memory */
+	ext_mem = ctx->ext_mem + ctx->ext;
+
+	RTE_ASSERT(ctx->ext < ctx->ext_num);
+	RTE_ASSERT(ctx->off + ext_mem->elt_size <= ext_mem->buf_len);
+
+	m->buf_addr = RTE_PTR_ADD(ext_mem->buf_ptr, ctx->off);
+	rte_mbuf_iova_set(m, ext_mem->buf_iova ==
+		RTE_BAD_IOVA ? RTE_BAD_IOVA : (ext_mem->buf_iova + ctx->off));
+
+	ctx->off += ext_mem->elt_size;
+	if (ctx->off + ext_mem->elt_size > ext_mem->buf_len) {
+		ctx->off = 0;
+		++ctx->ext;
+	}
+	/* keep some headroom between start of buffer and data */
+	m->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)m->buf_len);
+
+	/* init some constant fields */
+	m->pool = mp;
+	m->nb_segs = 1;
+	m->port = RTE_MBUF_PORT_INVALID;
+	m->ol_flags = RTE_MBUF_F_EXTERNAL;
+	rte_mbuf_refcnt_set(m, 1);
+	m->next = NULL;
+
+	/* init external buffer shared info items */
+	shinfo = RTE_PTR_ADD(m, mbuf_size);
+	m->shinfo = shinfo;
+	shinfo->free_cb = port_fwd_pktmbuf_free_pinned_extmem;
+	shinfo->fcb_opaque = m;
+	rte_mbuf_ext_refcnt_set(shinfo, 1);
+}
+
+static struct rte_mempool *
+port_fwd_pktmbuf_pool_create_extbuf(const char *name, uint32_t n,
+	uint32_t cache_size, uint16_t priv_size, uint16_t data_room_size,
+	int socket_id, const struct rte_pktmbuf_extmem *ext_mem,
+	uint32_t ext_num, const char *mp_ops_name)
+{
+	struct rte_mempool *mp;
+	struct rte_pktmbuf_pool_private mbp_priv;
+	struct port_fwd_extmem_init_ctx init_ctx;
+	uint32_t elt_size, i, n_elts = 0;
+	int ret;
+
+	if (RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) != priv_size) {
+		RTE_LOG(ERR, port_fwd, "mbuf priv_size=%u is not aligned\n",
+			priv_size);
+		rte_errno = EINVAL;
+		return NULL;
+	}
+	/* Check the external memory descriptors. */
+	for (i = 0; i < ext_num; i++) {
+		const struct rte_pktmbuf_extmem *extm = ext_mem + i;
+
+		if (!extm->elt_size || !extm->buf_len || !extm->buf_ptr) {
+			RTE_LOG(ERR, port_fwd, "invalid extmem descriptor\n");
+			rte_errno = EINVAL;
+			return NULL;
+		}
+		if (data_room_size > extm->elt_size) {
+			RTE_LOG(ERR, port_fwd, "ext elt_size=%u is too small\n",
+				priv_size);
+			rte_errno = EINVAL;
+			return NULL;
+		}
+		n_elts += extm->buf_len / extm->elt_size;
+	}
+	/* Check whether enough external memory provided. */
+	if (n_elts < n) {
+		RTE_LOG(ERR, port_fwd, "not enough extmem\n");
+		rte_errno = ENOMEM;
+		return NULL;
+	}
+	elt_size = sizeof(struct rte_mbuf) + priv_size +
+		sizeof(struct rte_mbuf_ext_shared_info);
+
+	memset(&mbp_priv, 0, sizeof(mbp_priv));
+	mbp_priv.mbuf_data_room_size = data_room_size;
+	mbp_priv.mbuf_priv_size = priv_size;
+	mbp_priv.flags = RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF;
+
+	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
+		 sizeof(struct rte_pktmbuf_pool_private), socket_id, 0);
+	if (!mp)
+		return NULL;
+
+	if (!mp_ops_name)
+		mp_ops_name = rte_mbuf_best_mempool_ops();
+	ret = rte_mempool_set_ops_byname(mp, mp_ops_name, NULL);
+	if (ret) {
+		RTE_LOG(ERR, port_fwd, "error setting mempool handler\n");
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+	rte_pktmbuf_pool_init(mp, &mbp_priv);
+
+	ret = rte_mempool_populate_default(mp);
+	if (ret < 0) {
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+
+	memset(&init_ctx, 0, sizeof(struct port_fwd_extmem_init_ctx));
+	init_ctx.ext_mem = ext_mem;
+	init_ctx.ext_num = ext_num;
+
+	rte_mempool_obj_iter(mp, port_fwd_pktmbuf_init_extmem, &init_ctx);
+
+	return mp;
+}
+
+static struct rte_mempool *
+port_fwd_create_ext_pool(char *nm, uint32_t nb_mbufs,
+	uint16_t mbuf_sz, uint16_t cache_sz)
+{
+	struct rte_pktmbuf_extmem *ext_mem;
+	uint32_t ext_num;
+	struct rte_mempool *mp;
+
+	ext_num = port_fwd_setup_extbuf(nb_mbufs, mbuf_sz,
+		0, nm, &ext_mem);
+	if (!ext_num) {
+		rte_exit(EXIT_FAILURE,
+			"Can't create pinned data buffers\n");
+	}
+
+	mp = port_fwd_pktmbuf_pool_create_extbuf(nm, nb_mbufs, cache_sz,
+		0, mbuf_sz, 0, ext_mem, ext_num, RTE_MBUF_DEFAULT_MEMPOOL_OPS);
+	free(ext_mem);
+
+	return mp;
+}
+
+static int
+port_fwd_alloc_seg_mbufs(struct rte_mempool *pools[],
+	struct rte_mbuf **mbuf_hdr)
+{
+	uint16_t i;
+	int ret = 0, same_pool = true;
+	struct rte_mbuf *mbuf_segs[s_tx_seg], *mbuf;
+
+	for (i = 1; i < s_tx_seg; i++) {
+		if (pools[0] != pools[i]) {
+			same_pool = false;
+			break;
+		}
+	}
+	memset(mbuf_segs, 0, sizeof(struct rte_mbuf *) * s_tx_seg);
+
+	if (same_pool) {
+		ret = rte_pktmbuf_alloc_bulk(pools[0], mbuf_segs, s_tx_seg);
+	} else {
+		for (i = 0; i < s_tx_seg; i++) {
+			mbuf_segs[i] = rte_pktmbuf_alloc(pools[i]);
+			if (!mbuf_segs[i]) {
+				ret = -ENOMEM;
+				break;
+			}
+		}
+	}
+	if (ret) {
+		for (i = 0; i < s_tx_seg; i++) {
+			if (mbuf_segs[i])
+				rte_pktmbuf_free(mbuf_segs[i]);
+		}
+		return ret;
+	}
+	mbuf = mbuf_segs[0];
+	mbuf->nb_segs = s_tx_seg;
+	for (i = 1; i < s_tx_seg; i++) {
+		mbuf->next = mbuf_segs[i];
+		mbuf = mbuf_segs[i];
+	}
+	mbuf->next = NULL; /* Last segment of packet. */
+	*mbuf_hdr = mbuf_segs[0];
+
+	return 0;
+}
+
 static uint16_t
 port_fwd_dup_mbufs(uint32_t eth_id,
 	uint16_t txq_id, struct rte_mbuf *mbuf_to[],
 	struct rte_mbuf *mbuf_from[], uint16_t count)
 {
-	uint16_t tx_clean, clean_count, alloc_count, i;
+	uint16_t tx_clean, clean_count, alloc_count, i, start = 0;
 	int ret;
-	struct rte_mempool *pool;
+	struct rte_mempool *pools[s_tx_seg];
 
-	pool = default_pktmbuf_pool ?
-		default_pktmbuf_pool : pktmbuf_pool;
+	for (i = 0; i < s_tx_seg; i++) {
+		if (!(i % 2)) {
+			pools[i] = pktmbuf_pool_tx_only ?
+				pktmbuf_pool_tx_only : pktmbuf_pool;
+		} else {
+			pools[i] = pktmbuf_pool;
+		}
+	}
 
 	if (!mbuf_from) {
 		alloc_count = 0;
 alloc_again:
-		if (alloc_count > 10)
+		if (alloc_count > 10) {
+			for (i = 0; i < start; i++)
+				rte_pktmbuf_free(mbuf_to[i]);
 			return 0;
-		ret = rte_pktmbuf_alloc_bulk(pool,
-				mbuf_to, count);
+		}
+		ret = 0;
+		if (s_tx_seg > 1) {
+			for (i = start; i < count; i++) {
+				ret = port_fwd_alloc_seg_mbufs(pools, &mbuf_to[i]);
+				if (ret)
+					break;
+			}
+			start = i;
+		} else {
+			ret = rte_pktmbuf_alloc_bulk(pools[0], mbuf_to, count);
+		}
 		if (ret) {
 			clean_count = 0;
 alloc_clean_again:
@@ -285,7 +607,7 @@ copy_again:
 		if (alloc_count > 10)
 			break;
 		mbuf_to[i] = rte_pktmbuf_copy(mbuf_from[i],
-			pool, 0,
+			pools[0], 0,
 			mbuf_from[i]->pkt_len);
 		if (!mbuf_to[i]) {
 			clean_count = 0;
@@ -309,7 +631,7 @@ copy_clean_again:
 static int
 main_injection_test_loop(void)
 {
-	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+	struct rte_mbuf *pkts_burst[MAX_PKT_BURST], *pkt;
 	uint16_t tx_len[MAX_PKT_BURST];
 	unsigned int lcore_id;
 	int i, nb_rx, j;
@@ -319,7 +641,7 @@ main_injection_test_loop(void)
 	uint8_t queueid;
 	struct lcore_conf *qconf;
 	char *penv;
-	uint16_t burst_size = MAX_PKT_BURST;
+	uint16_t burst_size = MAX_PKT_BURST, total;
 	uint16_t inject_size = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
 
 	penv = getenv("PORT_FWD_INJECTION_BURST_SIZE");
@@ -360,7 +682,7 @@ main_injection_test_loop(void)
 			portid = qconf->rx_queue_list[i].port_id;
 			queueid = qconf->rx_queue_list[i].queue_id;
 
-			dstportid = port_fwd_dst_port(portid);
+			dstportid = portid;
 
 			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst,
 				MAX_PKT_BURST);
@@ -384,18 +706,26 @@ main_injection_test_loop(void)
 
 			rte_pktmbuf_free_bulk(pkts_burst, nb_rx);
 
-			burst_size = port_fwd_dup_mbufs(dstportid,
+			nb_tx = port_fwd_dup_mbufs(dstportid,
 				qconf->tx_queue_id[dstportid],
 				pkts_burst, NULL, burst_size);
-			if (!burst_size)
+			if (!nb_tx)
 				continue;
 
-			nb_tx = burst_size;
-
 			for (j = 0; j < nb_tx; j++) {
+				total = 0;
 				pkts_burst[j]->data_off = RTE_PKTMBUF_HEADROOM;
 				pkts_burst[j]->pkt_len = inject_size;
-				pkts_burst[j]->data_len = inject_size;
+				pkts_burst[j]->data_len = inject_size / s_tx_seg;
+				total += pkts_burst[j]->data_len;
+				pkt = pkts_burst[j];
+				while (pkt->next) {
+					pkt = pkt->next;
+					pkt->data_off = RTE_PKTMBUF_HEADROOM;
+					pkt->data_len = pkt->next ?
+						(inject_size / s_tx_seg) : (inject_size - total);
+					total += pkt->data_len;
+				}
 				tx_len[j] = inject_size;
 			}
 
@@ -413,10 +743,8 @@ main_injection_test_loop(void)
 			qconf->tx_statistic[dstportid].packets += sent;
 
 			/* Free any unsent packets. */
-			if (unlikely(sent < nb_tx)) {
-				rte_pktmbuf_free_bulk(&pkts_burst[sent],
-					nb_tx - sent);
-			}
+			for (j = sent; j < nb_tx; j++)
+				rte_pktmbuf_free(pkts_burst[j]);
 		}
 	}
 
@@ -425,7 +753,7 @@ main_injection_test_loop(void)
 		qconf->dump_buf = NULL;
 	}
 
-	if (default_pktmbuf_pool)
+	if (pktmbuf_pool_tx_only)
 		port_fwd_drain_tx_cnf(qconf);
 
 	return 0;
@@ -788,7 +1116,7 @@ port_forwarding:
 			}
 
 			tx_pkts = tx_burst;
-			if (default_pktmbuf_pool) {
+			if (pktmbuf_pool_tx_only) {
 				rx_left = port_fwd_dup_mbufs(dstportid,
 					qconf->tx_queue_id[dstportid],
 					tx_burst_dup, tx_burst, rx_left);
@@ -815,7 +1143,7 @@ port_forwarding:
 		}
 	}
 
-	if (default_pktmbuf_pool)
+	if (pktmbuf_pool_tx_only)
 		port_fwd_drain_tx_cnf(qconf);
 
 	if (qconf->dump_buf) {
@@ -1163,6 +1491,10 @@ static const char short_options[] =
 #define CMD_LINE_OPT_DIRECT_DEF_CONFIG "direct-def"
 
 #define CMD_LINE_OPT_PER_PORT_POOL "enable-per-port-pool"
+#define CMD_LINE_OPT_TX_ONLY "tx-only"
+#define CMD_LINE_OPT_TX_ONLY_SEG "tx-only-seg"
+#define CMD_LINE_OPT_TX_ONLY_BUF_TYPE "tx-only-buf"
+
 enum {
 	/* long options mapped to a short option */
 
@@ -1174,6 +1506,9 @@ enum {
 	CMD_LINE_OPT_DIRECT_RSP_CONFIG_NUM,
 	CMD_LINE_OPT_DIRECT_REMOTE_CONFIG_NUM,
 	CMD_LINE_OPT_DIRECT_DEF_CONFIG_NUM,
+	CMD_LINE_OPT_TX_ONLY_NUM,
+	CMD_LINE_OPT_TX_ONLY_SEG_NUM,
+	CMD_LINE_OPT_TX_ONLY_BUF_TYPE_NUM
 };
 
 static const struct option lgopts[] = {
@@ -1185,6 +1520,12 @@ static const struct option lgopts[] = {
 		CMD_LINE_OPT_DIRECT_REMOTE_CONFIG_NUM},
 	{CMD_LINE_OPT_DIRECT_DEF_CONFIG, 1, 0,
 		CMD_LINE_OPT_DIRECT_DEF_CONFIG_NUM},
+	{CMD_LINE_OPT_TX_ONLY_BUF_TYPE, 1, 0,
+		CMD_LINE_OPT_TX_ONLY_BUF_TYPE_NUM},
+	{CMD_LINE_OPT_TX_ONLY_SEG, 1, 0,
+		CMD_LINE_OPT_TX_ONLY_SEG_NUM},
+	{CMD_LINE_OPT_TX_ONLY, 0, 0,
+		CMD_LINE_OPT_TX_ONLY_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -1255,6 +1596,23 @@ parse_args(int argc, char **argv)
 					"Invalid default direct config\n");
 				return ret;
 			}
+			break;
+		case CMD_LINE_OPT_TX_ONLY_BUF_TYPE_NUM:
+			if (!strcmp(optarg, "native") ||
+				!strcmp(optarg, "platform"))
+				s_port_fwd_tx_buf_type = PORT_FWD_TX_BUF_PLATFORM;
+			else if (!strcmp(optarg, "default"))
+				s_port_fwd_tx_buf_type = PORT_FWD_TX_BUF_DEFAULT;
+			else if (!strcmp(optarg, "ext"))
+				s_port_fwd_tx_buf_type = PORT_FWD_TX_BUF_EXT;
+			else
+				return -EINVAL;
+			break;
+		case CMD_LINE_OPT_TX_ONLY_NUM:
+			s_inject = true;
+			break;
+		case CMD_LINE_OPT_TX_ONLY_SEG_NUM:
+			s_tx_seg = atoi(optarg);
 			break;
 
 		default:
@@ -1341,16 +1699,11 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 	char s[64];
 	char s_tx[64];
 	char s_2nd[64];
-	char s_tx_2nd[64];
-	char s_generic[64];
-	char *penv;
 	int i, max_pool_size;
 
 	snprintf(s, sizeof(s), "port_fwd_mbuf_pool");
 	snprintf(s_tx, sizeof(s_tx), "port_fwd_mbuf_tx_pool");
 	snprintf(s_2nd, sizeof(s_2nd), "port_fwd_2nd_mbuf_pool");
-	snprintf(s_tx_2nd, sizeof(s_tx_2nd), "port_fwd_2nd_mbuf_tx_pool");
-	snprintf(s_generic, sizeof(s_generic), "port_fwd_generic_pool");
 
 	if (s_proc_type == proc_attach_secondary) {
 		pktmbuf_pool = rte_mempool_lookup(s_2nd);
@@ -1406,26 +1759,25 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 		}
 	}
 
-	penv = getenv("TX_FROM_DEFAULT_BUF_POOL");
-	if (penv && atoi(penv) > 0) {
-		default_pktmbuf_pool =
-			rte_pktmbuf_pool_create_by_ops(s_generic,
-				nb_mbuf,
-				MEMPOOL_CACHE_SIZE, 0,
-				buf_size, 0,
+	if (s_inject) {
+		if (s_port_fwd_tx_buf_type == PORT_FWD_TX_BUF_PLATFORM) {
+			pktmbuf_pool_tx_only = NULL;
+		} else if (s_port_fwd_tx_buf_type == PORT_FWD_TX_BUF_DEFAULT) {
+			pktmbuf_pool_tx_only = rte_pktmbuf_pool_create_by_ops(s_tx,
+				nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0,
 				RTE_MBUF_DEFAULT_MEMPOOL_OPS);
-		if (default_pktmbuf_pool) {
-			RTE_LOG(INFO, port_fwd,
-				"default mbuf pool(%s)(count=%d) created\n",
-				s_generic, nb_mbuf);
+		} else if (s_port_fwd_tx_buf_type == PORT_FWD_TX_BUF_EXT) {
+			pktmbuf_pool_tx_only = port_fwd_create_ext_pool(s_tx,
+				nb_mbuf, buf_size, MEMPOOL_CACHE_SIZE);
 		}
 	}
+
 	if (!pktmbuf_pool)
 		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool(%s)\n", s);
 
 	port_fwd_mp_max_min_addr(pktmbuf_pool);
-	if (default_pktmbuf_pool)
-		port_fwd_mp_max_min_addr(default_pktmbuf_pool);
+	if (pktmbuf_pool_tx_only)
+		port_fwd_mp_max_min_addr(pktmbuf_pool_tx_only);
 
 	return 0;
 }
@@ -1697,16 +2049,15 @@ main(int argc, char **argv)
 		s_dump_mbuf = atoi(penv);
 
 	penv = getenv("PORT_FWD_INJECTION_TEST");
-	if (penv) {
+	if (penv)
 		s_inject = atoi(penv);
-		if (s_inject) {
-			penv = getenv("PORT_FWD_INJECTION_PKT_SIZE");
-			if (penv) {
-				s_inject_pkt_size = atoi(penv);
-				if (s_inject_pkt_size < 64 ||
-					s_inject_pkt_size > 1518)
-					s_inject_pkt_size = 64;
-			}
+	if (s_inject) {
+		penv = getenv("PORT_FWD_INJECTION_PKT_SIZE");
+		if (penv) {
+			s_inject_pkt_size = atoi(penv);
+			if (s_inject_pkt_size < 64 ||
+				s_inject_pkt_size > 1518)
+				s_inject_pkt_size = 64;
 		}
 	}
 
@@ -1976,13 +2327,13 @@ main(int argc, char **argv)
 			"remote launch thread failed!(%d)\n", ret);
 	}
 
-	if (default_pktmbuf_pool) {
+	if (pktmbuf_pool_tx_only) {
 		uint32_t avail;
 
-		avail = rte_mempool_avail_count(default_pktmbuf_pool);
+		avail = rte_mempool_avail_count(pktmbuf_pool_tx_only);
 		RTE_LOG(INFO, port_fwd,
 			"default pool(%s) avail=%d, total=%d\n",
-			default_pktmbuf_pool->name,
+			pktmbuf_pool_tx_only->name,
 			avail, nb_mbuf);
 		if (avail != nb_mbuf) {
 			RTE_LOG(ERR, port_fwd,
