@@ -48,7 +48,8 @@ enum dpaa2_parser_protocol_id {
 	DPAA2_PARSER_TUNNEL_UDP_ID,
 	DPAA2_PARSER_TUNNEL_TCP_ID,
 	DPAA2_PARSER_ECPRI_ID,
-	DPAA2_PARSER_ROCEV2_ID
+	DPAA2_PARSER_ROCEV2_ID,
+	DPAA2_PARSER_GENEVE_ID
 };
 
 #define DPAA2_PSR_SUMMARY_NONIP 6
@@ -107,7 +108,7 @@ union dpaa2_psr_summary_l {
 		uint8_t non_ip:DPAA2_PSR_SUMMARY_NON_IP_NON_IP_BIT_SIZE;
 		uint8_t fafe3:1;
 	} non_ip;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_psr_summary {
 	union dpaa2_psr_summary_l sum_l;
@@ -117,12 +118,12 @@ struct dpaa2_psr_summary {
 	uint8_t fafe1:1;
 	uint8_t fafe0:1;
 	uint8_t checksum_err:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_psr_sum_16b {
 	uint16_t sum_16b;
 	struct dpaa2_psr_summary sum;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_ingress_frc {
 	uint32_t rsv0:10;
@@ -134,7 +135,7 @@ struct dpaa2_ingress_frc {
 	uint32_t faeadv:1;
 	uint32_t fasv:1;
 	union dpaa2_psr_sum_16b psr_sum;
-} __attribute__((__packed__));
+} __rte_packed;
 
 /* Frame annotation status */
 struct dpaa2_fas_parse {
@@ -166,18 +167,18 @@ struct dpaa2_fas_parse {
 	uint32_t rsv0:2;
 	uint32_t macsec:1;
 	uint32_t discard:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_fas_parse_32b {
 	uint32_t fas_32b;
 	struct dpaa2_fas_parse fas;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_sp_fafe_ecpri {
 	uint8_t msg_type:5;
 	uint8_t non_used:2;
 	uint8_t ecpri:1; /**Always 1, FRC FAFE0*/
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_sp_fafe_rocev2_tunnel {
 	uint8_t in_vlan:1;
@@ -188,13 +189,13 @@ struct dpaa2_sp_fafe_rocev2_tunnel {
 	uint8_t geneve:1; /**FRC FAFE2*/
 	uint8_t rocev2:1; /**FRC FAFE1*/
 	uint8_t non_used:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_sp_fafe_parse {
 	struct dpaa2_sp_fafe_ecpri ecpri;
 	struct dpaa2_sp_fafe_rocev2_tunnel rocev2_tunnel;
 	uint8_t fafe_8b;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_faf_l_parse {
 	uint32_t arp_err:1;
@@ -232,7 +233,7 @@ struct dpaa2_faf_l_parse {
 	uint32_t vlan_prio:1;
 	uint32_t gtp_prim:1;
 	uint32_t i6_r_hdr2:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_faf_l_parse_be {
 	uint32_t ike:1;
@@ -270,7 +271,7 @@ struct dpaa2_faf_l_parse_be {
 	uint32_t pppoe_ppp_err:1;
 	uint32_t pppoe_ppp:1;
 	uint32_t vlan_err:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_faf_h_parse {
 	uint32_t i6_r_hdr1:1;
@@ -344,7 +345,7 @@ struct dpaa2_faf_h_parse {
 	uint32_t ipv4_1:1;
 	uint32_t l2_spsr_err:1;
 	uint32_t l2_unknown:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_faf_h_parse_be {
 	uint32_t ipv4_n_unicast:1;
@@ -418,14 +419,14 @@ struct dpaa2_faf_h_parse_be {
 	uint32_t esp_err:1;
 	uint32_t esp:1;
 	uint32_t gtp_err:1;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_annot_word3_parse {
 	struct dpaa2_faf_l_parse faf_l;
 	uint8_t rsv;
 	union dpaa2_sp_fafe_parse fafe;
 	rte_be16_t nxthdr;
-} __attribute__((__packed__));
+} __rte_packed;
 
 struct dpaa2_ecpri_msg_rm_access {
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
@@ -439,7 +440,7 @@ struct dpaa2_ecpri_msg_rm_access {
 	uint32_t rr:4;			/**< Req/Resp */
 	uint32_t ele_id:16;		/**< Element ID */
 #endif
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_sp_ecpri_msg {
 	struct rte_ecpri_msg_iq_data type0;
@@ -450,14 +451,19 @@ union dpaa2_sp_ecpri_msg {
 	struct rte_ecpri_msg_delay_measure type5;
 	struct rte_ecpri_msg_remote_reset type6;
 	struct rte_ecpri_msg_event_ind type7;
-} __attribute__((__packed__));
+} __rte_packed;
 
 #define DPAA2_SP_PSR_CTX_LEN 5
 
 struct dpaa2_sp_rocev2 {
 	uint8_t opcode;
 	uint8_t dest_qp[ROCEV2_DEST_QP_SIZE];
-} __attribute__ ((__packed__));
+} __rte_packed;
+
+struct dpaa2_sp_geneve {
+	rte_be16_t protocol;
+	uint8_t geneve_vni[3];
+} __rte_packed;
 
 struct dpaa2_psr_result_word3 {
 	rte_be16_t nxthdr;
@@ -551,10 +557,11 @@ struct dpaa2_psr_result_word8 {
 		struct {
 			uint8_t vxlan_vni[3];
 			rte_be16_t vxlan_eth_type;
-		} __attribute__((__packed__));
+		} __rte_packed;
 		union dpaa2_sp_ecpri_msg ecpri_msg;
 		struct dpaa2_sp_rocev2 rocev2;
-	} __attribute__((__packed__));
+		struct dpaa2_sp_geneve geneve;
+	} __rte_packed;
 };
 
 struct dpaa2_psr_result_parse {
@@ -564,7 +571,7 @@ struct dpaa2_psr_result_parse {
 	struct dpaa2_psr_result_word6 word6;
 	struct dpaa2_psr_result_word7 word7;
 	struct dpaa2_psr_result_word8 word8;
-} __attribute__((__packed__));
+} __rte_packed;
 
 #define DPAA2_PSR_RESULT_SIZE sizeof(struct dpaa2_psr_result_parse)
 
@@ -574,17 +581,17 @@ struct dpaa2_psr_result_parse {
 union dpaa2_sp_fafe_parse_8b {
 	uint8_t fafe_8b;
 	union dpaa2_sp_fafe_parse fafe;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_faf_l_parse_32b {
 	uint32_t faf_l_32b;
 	struct dpaa2_faf_l_parse faf_l;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union dpaa2_faf_h_parse_64b {
 	uint64_t faf_h_64b;
 	struct dpaa2_faf_h_parse faf_h;
-} __attribute__((__packed__));
+} __rte_packed;
 
 /* Set by SP for vxlan distribution start*/
 #define DPAA2_VXLAN_IN_TCI_OFFSET \
@@ -629,6 +636,12 @@ union dpaa2_faf_h_parse_64b {
 
 #define DPAA2_ROCEV2_DST_QP_OFFSET \
 	offsetof(struct dpaa2_psr_result_parse, word8.rocev2.dest_qp[0])
+
+#define DPAA2_GENEVE_PROTOCOL_OFFSET \
+	offsetof(struct dpaa2_psr_result_parse, word8.geneve.protocol)
+
+#define DPAA2_GENEVE_VNI_OFFSET \
+	offsetof(struct dpaa2_psr_result_parse, word8.geneve.geneve_vni[0])
 
 static inline uint32_t
 dpaa2_spsr_fafe_bit_offset(union dpaa2_sp_fafe_parse fafe)
@@ -757,6 +770,9 @@ dpaa2_protocol_psr_bit_offset(uint32_t *bit_offset,
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
 	} else if (protocol == DPAA2_PARSER_ROCEV2_ID) {
 		fafe.rocev2_tunnel.rocev2 = 1;
+		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
+	} else if (protocol == DPAA2_PARSER_GENEVE_ID) {
+		fafe.rocev2_tunnel.geneve = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
 	} else {
 		DPAA2_PMD_ERR("Unsupported parser protocol(%d)", protocol);
@@ -1101,6 +1117,17 @@ dpaa2_print_rocev2_parse_result(const struct dpaa2_psr_result_parse *psr)
 		DPAA2_PR_PRINT("0x%02x ", psr->word8.rocev2.dest_qp[i]);
 
 	DPAA2_PR_PRINT("\r\n");
+}
+
+static inline void
+dpaa2_print_geneve_parse_result(const struct dpaa2_psr_result_parse *psr)
+{
+	DPAA2_PR_PRINT("GENEVE protocol: 0x%04x\r\n",
+		rte_be_to_cpu_16(psr->word8.geneve.protocol));
+	DPAA2_PR_PRINT("GENEVE vni: %02x %02x %02x\r\n",
+		psr->word8.geneve.geneve_vni[0],
+		psr->word8.geneve.geneve_vni[1],
+		psr->word8.geneve.geneve_vni[2]);
 }
 
 static inline void
@@ -1465,6 +1492,8 @@ dpaa2_print_parse_result(const struct dpaa2_annot_hdr *annotation)
 		dpaa2_print_ecpri_parse_result(psr);
 	if (psr->word3.fafe.rocev2_tunnel.rocev2)
 		dpaa2_print_rocev2_parse_result(psr);
+	if (psr->word3.fafe.rocev2_tunnel.geneve)
+		dpaa2_print_geneve_parse_result(psr);
 }
 
 #endif /* _DPAA2_PARSE_DECODE_H */

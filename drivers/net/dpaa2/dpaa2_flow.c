@@ -91,14 +91,16 @@ enum rte_flow_item_type dpaa2_hp_supported_pattern_type[] = {
 	RTE_FLOW_ITEM_TYPE_GTP,
 	RTE_FLOW_ITEM_TYPE_ESP,
 	RTE_FLOW_ITEM_TYPE_AH,
-	RTE_FLOW_ITEM_TYPE_RAW
+	RTE_FLOW_ITEM_TYPE_RAW,
+	/** Hardware parser supports vlan protocol only.*/
+	RTE_FLOW_ITEM_TYPE_VXLAN
 };
 
 static const
 enum rte_flow_item_type dpaa2_sp_supported_pattern_type[] = {
-	RTE_FLOW_ITEM_TYPE_VXLAN,
 	RTE_FLOW_ITEM_TYPE_ECPRI,
-	RTE_FLOW_ITEM_TYPE_ROCEV2
+	RTE_FLOW_ITEM_TYPE_ROCEV2,
+	RTE_FLOW_ITEM_TYPE_GENEVE
 };
 
 static const
@@ -204,6 +206,11 @@ static const struct rte_flow_item_gre dpaa2_flow_item_gre_mask = {
 
 static const struct rte_flow_item_vxlan dpaa2_flow_item_vxlan_mask = {
 	.flags = 0xff,
+	.vni = "\xff\xff\xff",
+};
+
+static const struct rte_flow_item_geneve dpaa2_flow_item_geneve_mask = {
+	.protocol = RTE_BE16(0xffff),
 	.vni = "\xff\xff\xff",
 };
 
@@ -1486,6 +1493,10 @@ dpaa2_flow_extract_support(const uint8_t *mask_src,
 	case RTE_FLOW_ITEM_TYPE_ROCEV2:
 		mask_support = (const char *)&dpaa2_flow_item_rocev2_mask;
 		size = sizeof(struct rte_flow_item_rocev2);
+		break;
+	case RTE_FLOW_ITEM_TYPE_GENEVE:
+		mask_support = (const char *)&dpaa2_flow_item_geneve_mask;
+		size = sizeof(struct rte_flow_item_geneve);
 		break;
 	default:
 		return -EINVAL;
@@ -3469,27 +3480,25 @@ dpaa2_configure_flow_vxlan(struct dpaa2_dev_flow *flow,
 		return -ENOTSUP;
 	}
 
-	if (!spec) {
-		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_ID);
-		if (ret)
-			return ret;
+	ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
+		DPAA2_PARSER_VXLAN_ID);
+	if (ret)
+		return ret;
 
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-				bit_offset, DPAA2_FLOW_QOS_TYPE,
-				group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+			bit_offset, DPAA2_FLOW_QOS_TYPE,
+			group, &local_cfg);
+	if (ret)
+		return ret;
 
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-				bit_offset, DPAA2_FLOW_FS_TYPE,
-				group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+			bit_offset, DPAA2_FLOW_FS_TYPE,
+			group, &local_cfg);
+	if (ret)
+		return ret;
 
-		(*device_configured) |= local_cfg;
-		return 0;
-	}
+	if (!spec)
+		goto quit;
 
 	ret = dpaa2_flow_extract_support((const uint8_t *)mask,
 		RTE_FLOW_ITEM_TYPE_VXLAN);
@@ -3532,6 +3541,7 @@ dpaa2_configure_flow_vxlan(struct dpaa2_dev_flow *flow,
 			return ret;
 	}
 
+quit:
 	(*device_configured) |= local_cfg;
 
 	return 0;
@@ -3589,22 +3599,20 @@ dpaa2_configure_flow_ecpri(struct dpaa2_dev_flow *flow,
 	if (ret)
 		return ret;
 
-	if (!spec) {
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-			bit_offset, DPAA2_FLOW_QOS_TYPE,
-			group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+		bit_offset, DPAA2_FLOW_QOS_TYPE,
+		group, &local_cfg);
+	if (ret)
+		return ret;
 
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-			bit_offset, DPAA2_FLOW_FS_TYPE,
-			group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+		bit_offset, DPAA2_FLOW_FS_TYPE,
+		group, &local_cfg);
+	if (ret)
+		return ret;
 
-		(*device_configured) |= local_cfg;
-		return 0;
-	}
+	if (!spec)
+		goto quit;
 
 	ret = dpaa2_flow_extract_support((const uint8_t *)mask,
 		RTE_FLOW_ITEM_TYPE_ECPRI);
@@ -3647,6 +3655,7 @@ dpaa2_configure_flow_ecpri(struct dpaa2_dev_flow *flow,
 			return ret;
 	}
 
+quit:
 	(*device_configured) |= local_cfg;
 
 	return 0;
@@ -3696,27 +3705,25 @@ dpaa2_configure_flow_rocev2(struct dpaa2_dev_flow *flow,
 		return -ENOTSUP;
 	}
 
-	if (!spec) {
-		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_ROCEV2_ID);
-		if (ret)
-			return ret;
+	ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
+		DPAA2_PARSER_ROCEV2_ID);
+	if (ret)
+		return ret;
 
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-			bit_offset, DPAA2_FLOW_QOS_TYPE,
-			group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+		bit_offset, DPAA2_FLOW_QOS_TYPE,
+		group, &local_cfg);
+	if (ret)
+		return ret;
 
-		ret = dpaa2_flow_identify_by_faf(priv, flow,
-			bit_offset, DPAA2_FLOW_FS_TYPE,
-			group, &local_cfg);
-		if (ret)
-			return ret;
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+		bit_offset, DPAA2_FLOW_FS_TYPE,
+		group, &local_cfg);
+	if (ret)
+		return ret;
 
-		(*device_configured) |= local_cfg;
-		return 0;
-	}
+	if (!spec)
+		goto quit;
 
 	ret = dpaa2_flow_extract_support((const uint8_t *)mask,
 		RTE_FLOW_ITEM_TYPE_ROCEV2);
@@ -3772,6 +3779,7 @@ dpaa2_configure_flow_rocev2(struct dpaa2_dev_flow *flow,
 			return ret;
 	}
 
+quit:
 	(*device_configured) |= local_cfg;
 
 	return 0;
@@ -3961,6 +3969,116 @@ dpaa2_configure_flow_raw(struct dpaa2_dev_flow *flow,
 		return ret;
 	}
 
+	(*device_configured) |= local_cfg;
+
+	return 0;
+}
+
+static int
+dpaa2_configure_flow_geneve(struct dpaa2_dev_flow *flow,
+	struct rte_eth_dev *dev,
+	const struct rte_flow_attr *attr,
+	const struct rte_dpaa2_flow_item *dpaa2_pattern,
+	const struct rte_flow_action actions[] __rte_unused,
+	struct rte_flow_error *error __rte_unused,
+	int *device_configured)
+{
+	int ret, local_cfg = 0;
+	uint32_t group, bit_offset;
+	const struct rte_flow_item_geneve *spec, *mask;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	const struct rte_flow_item *pattern = &dpaa2_pattern->generic_item;
+	char hex_dump[DPAA2_FLOW_HDR_HEX_DUMP_SIZE];
+
+	group = attr->group;
+
+	/* Parse pattern list to get the matching parameters */
+	spec = pattern->spec;
+	mask = pattern->mask ?
+		pattern->mask : &dpaa2_flow_item_geneve_mask;
+
+	/* Get traffic class index and flow id to be configured */
+	flow->tc_id = group;
+	flow->tc_index = attr->priority;
+
+	if (dpaa2_pattern->in_tunnel) {
+		DPAA2_PMD_ERR("Tunnel-GENEVE distribution not support");
+		return -ENOTSUP;
+	}
+
+	ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
+		DPAA2_PARSER_GENEVE_ID);
+	if (ret)
+		return ret;
+
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+			bit_offset, DPAA2_FLOW_QOS_TYPE,
+			group, &local_cfg);
+	if (ret)
+		return ret;
+
+	ret = dpaa2_flow_identify_by_faf(priv, flow,
+			bit_offset, DPAA2_FLOW_FS_TYPE,
+			group, &local_cfg);
+	if (ret)
+		return ret;
+
+	if (!spec)
+		goto quit;
+
+	ret = dpaa2_flow_extract_support((const uint8_t *)mask,
+		RTE_FLOW_ITEM_TYPE_GENEVE);
+	if (ret) {
+		dpaa2_flow_hdr_hexdump(hex_dump, (const uint8_t *)mask,
+			sizeof(struct rte_flow_item_geneve));
+		DPAA2_PMD_ERR("Extract GENEVE(%s) failed(%d)",
+			hex_dump, ret);
+
+		return ret;
+	}
+
+	if (mask->protocol && mask->protocol != 0xffff) {
+		DPAA2_PMD_ERR("Not support to extract geneve protocol.");
+		return -EINVAL;
+	}
+
+	if (mask->protocol) {
+		ret = dpaa2_flow_add_pr_extract_rule(flow,
+			DPAA2_GENEVE_PROTOCOL_OFFSET,
+			sizeof(mask->protocol), &spec->protocol,
+			&mask->protocol,
+			priv, group, &local_cfg, DPAA2_FLOW_QOS_TYPE);
+		if (ret)
+			return ret;
+
+		ret = dpaa2_flow_add_pr_extract_rule(flow,
+			DPAA2_GENEVE_PROTOCOL_OFFSET,
+			sizeof(mask->protocol), &spec->protocol,
+			&mask->protocol,
+			priv, group, &local_cfg, DPAA2_FLOW_FS_TYPE);
+		if (ret)
+			return ret;
+	}
+
+	if (mask->vni[0] || mask->vni[1] || mask->vni[2]) {
+		ret = dpaa2_flow_add_pr_extract_rule(flow,
+			DPAA2_GENEVE_VNI_OFFSET,
+			sizeof(mask->vni), spec->vni,
+			mask->vni,
+			priv, group, &local_cfg, DPAA2_FLOW_QOS_TYPE);
+		if (ret)
+			return ret;
+
+		ret = dpaa2_flow_add_pr_extract_rule(flow,
+			DPAA2_GENEVE_VNI_OFFSET,
+			sizeof(mask->vni), spec->vni,
+			mask->vni,
+			priv, group, &local_cfg, DPAA2_FLOW_FS_TYPE);
+		if (ret)
+			return ret;
+	}
+
+quit:
 	(*device_configured) |= local_cfg;
 
 	return 0;
@@ -4868,7 +4986,17 @@ dpaa2_generic_flow_set(struct dpaa2_dev_flow *flow,
 					actions, error,
 					&is_keycfg_configured);
 			if (ret) {
-				DPAA2_PMD_ERR("IBTH flow config failed!");
+				DPAA2_PMD_ERR("RoCEV2 flow config failed!");
+				goto end_flow_set;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_GENEVE:
+			ret = dpaa2_configure_flow_geneve(flow,
+					dev, attr, &dpaa2_pattern[i],
+					actions, error,
+					&is_keycfg_configured);
+			if (ret) {
+				DPAA2_PMD_ERR("GENEVE flow config failed!");
 				goto end_flow_set;
 			}
 			break;
