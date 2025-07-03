@@ -2194,7 +2194,7 @@ dpaa2_configure_flow_tunnel_vlan(struct dpaa2_dev_flow *flow,
 
 	if (!spec) {
 		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_VLAN_ID);
+			DPAA2_PARSER_TUNNEL_VLAN_ID);
 		if (ret)
 			return ret;
 
@@ -2372,7 +2372,7 @@ dpaa2_configure_flow_ipv4(struct dpaa2_dev_flow *flow,
 		}
 
 		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_IPV4_ID);
+			DPAA2_PARSER_TUNNEL_IPV4_ID);
 		if (ret)
 			return ret;
 
@@ -2581,7 +2581,7 @@ dpaa2_configure_flow_ipv6(struct dpaa2_dev_flow *flow,
 		}
 
 		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_IPV6_ID);
+			DPAA2_PARSER_TUNNEL_IPV6_ID);
 		if (ret)
 			return ret;
 
@@ -2847,7 +2847,7 @@ dpaa2_configure_flow_udp(struct dpaa2_dev_flow *flow,
 		}
 
 		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_UDP_ID);
+			DPAA2_PARSER_TUNNEL_UDP_ID);
 		if (ret)
 			return ret;
 
@@ -2967,7 +2967,7 @@ dpaa2_configure_flow_tcp(struct dpaa2_dev_flow *flow,
 		}
 
 		ret = dpaa2_protocol_psr_bit_offset(&bit_offset,
-			DPAA2_PARSER_VXLAN_TCP_ID);
+			DPAA2_PARSER_TUNNEL_TCP_ID);
 		if (ret)
 			return ret;
 

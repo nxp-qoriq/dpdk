@@ -42,11 +42,11 @@ enum dpaa2_parser_protocol_id {
 	DPAA2_PARSER_IPSEC_AH_ID,
 	DPAA2_PARSER_IPSEC_ESP_ID,
 	DPAA2_PARSER_VXLAN_ID,
-	DPAA2_PARSER_VXLAN_VLAN_ID,
-	DPAA2_PARSER_VXLAN_IPV4_ID,
-	DPAA2_PARSER_VXLAN_IPV6_ID,
-	DPAA2_PARSER_VXLAN_UDP_ID,
-	DPAA2_PARSER_VXLAN_TCP_ID,
+	DPAA2_PARSER_TUNNEL_VLAN_ID,
+	DPAA2_PARSER_TUNNEL_IPV4_ID,
+	DPAA2_PARSER_TUNNEL_IPV6_ID,
+	DPAA2_PARSER_TUNNEL_UDP_ID,
+	DPAA2_PARSER_TUNNEL_TCP_ID,
 	DPAA2_PARSER_ECPRI_ID,
 	DPAA2_PARSER_ROCEV2_ID
 };
@@ -174,24 +174,25 @@ union dpaa2_fas_parse_32b {
 } __attribute__((__packed__));
 
 struct dpaa2_sp_fafe_ecpri {
-	uint8_t msg_type:7;
+	uint8_t msg_type:5;
+	uint8_t non_used:2;
 	uint8_t ecpri:1; /**Always 1, FRC FAFE0*/
 } __attribute__((__packed__));
 
-struct dpaa2_sp_fafe_ibth_vxlan {
-	uint8_t rsv:1;
-	uint8_t vxlan_vlan:1;
-	uint8_t vxlan_udp:1;
-	uint8_t vxlan_tcp:1;
-	uint8_t vxlan_ipv6:1; /**FRC FAFE3*/
-	uint8_t vxlan_ipv4:1; /**FRC FAFE2*/
-	uint8_t ibth:1; /**FRC FAFE1*/
+struct dpaa2_sp_fafe_rocev2_tunnel {
+	uint8_t in_vlan:1;
+	uint8_t in_udp:1;
+	uint8_t in_tcp:1;
+	uint8_t in_ipv6:1;
+	uint8_t in_ipv4:1; /**FRC FAFE3*/
+	uint8_t geneve:1; /**FRC FAFE2*/
+	uint8_t rocev2:1; /**FRC FAFE1*/
 	uint8_t non_used:1;
 } __attribute__((__packed__));
 
 union dpaa2_sp_fafe_parse {
 	struct dpaa2_sp_fafe_ecpri ecpri;
-	struct dpaa2_sp_fafe_ibth_vxlan ibth_vxlan;
+	struct dpaa2_sp_fafe_rocev2_tunnel rocev2_tunnel;
 	uint8_t fafe_8b;
 } __attribute__((__packed__));
 
@@ -736,26 +737,26 @@ dpaa2_protocol_psr_bit_offset(uint32_t *bit_offset,
 	} else if (protocol == DPAA2_PARSER_VXLAN_ID) {
 		faf_l.vxlan = 1;
 		*bit_offset = dpaa2_psr_faf_l_bit_offset(&faf_l);
-	} else if (protocol == DPAA2_PARSER_VXLAN_VLAN_ID) {
-		fafe.ibth_vxlan.vxlan_vlan = 1;
+	} else if (protocol == DPAA2_PARSER_TUNNEL_VLAN_ID) {
+		fafe.rocev2_tunnel.in_vlan = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
-	} else if (protocol == DPAA2_PARSER_VXLAN_IPV4_ID) {
-		fafe.ibth_vxlan.vxlan_ipv4 = 1;
+	} else if (protocol == DPAA2_PARSER_TUNNEL_IPV4_ID) {
+		fafe.rocev2_tunnel.in_ipv4 = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
-	} else if (protocol == DPAA2_PARSER_VXLAN_IPV6_ID) {
-		fafe.ibth_vxlan.vxlan_ipv6 = 1;
+	} else if (protocol == DPAA2_PARSER_TUNNEL_IPV6_ID) {
+		fafe.rocev2_tunnel.in_ipv6 = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
-	} else if (protocol == DPAA2_PARSER_VXLAN_UDP_ID) {
-		fafe.ibth_vxlan.vxlan_udp = 1;
+	} else if (protocol == DPAA2_PARSER_TUNNEL_UDP_ID) {
+		fafe.rocev2_tunnel.in_udp = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
-	} else if (protocol == DPAA2_PARSER_VXLAN_TCP_ID) {
-		fafe.ibth_vxlan.vxlan_tcp = 1;
+	} else if (protocol == DPAA2_PARSER_TUNNEL_TCP_ID) {
+		fafe.rocev2_tunnel.in_tcp = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
 	} else if (protocol == DPAA2_PARSER_ECPRI_ID) {
 		fafe.ecpri.ecpri = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
 	} else if (protocol == DPAA2_PARSER_ROCEV2_ID) {
-		fafe.ibth_vxlan.ibth = 1;
+		fafe.rocev2_tunnel.rocev2 = 1;
 		*bit_offset = dpaa2_spsr_fafe_bit_offset(fafe);
 	} else {
 		DPAA2_PMD_ERR("Unsupported parser protocol(%d)", protocol);
@@ -1382,18 +1383,21 @@ dpaa2_print_parse_result(const struct dpaa2_annot_hdr *annotation)
 	if (psr->word3.fafe.ecpri.ecpri) {
 		DPAA2_PR_PRINT("FAFE ECPRI present, msg: %d\r\n",
 			psr->word3.fafe.ecpri.msg_type);
-	} else if (psr->word3.fafe.ibth_vxlan.ibth) {
+	} else if (psr->word3.fafe.rocev2_tunnel.rocev2) {
 		DPAA2_PR_PRINT("FAFE ROCEV2 present\r\n");
-	} else if (psr->word3.fafe.ibth_vxlan.vxlan_vlan) {
-		DPAA2_PR_PRINT("FAFE vXLAN vLAN present\r\n");
-	} else if (psr->word3.fafe.ibth_vxlan.vxlan_ipv4) {
-		DPAA2_PR_PRINT("FAFE vXLAN IPv4\r\n");
-	} else if (psr->word3.fafe.ibth_vxlan.vxlan_ipv6) {
-		DPAA2_PR_PRINT("FAFE vXLAN IPv6\r\n");
-	} else if (psr->word3.fafe.ibth_vxlan.vxlan_udp) {
-		DPAA2_PR_PRINT("FAFE vXLAN UDP\r\n");
-	} else if (psr->word3.fafe.ibth_vxlan.vxlan_tcp) {
-		DPAA2_PR_PRINT("FAFE vXLAN TCP\r\n");
+	} else if (psr->word3.fafe.rocev2_tunnel.geneve) {
+		DPAA2_PR_PRINT("FAFE GENEVE present\r\n");
+	} else {
+		if (psr->word3.fafe.rocev2_tunnel.in_vlan)
+			DPAA2_PR_PRINT("FAFE TUNNEL vLAN present\r\n");
+		if (psr->word3.fafe.rocev2_tunnel.in_ipv4)
+			DPAA2_PR_PRINT("FAFE TUNNEL IPv4 present\r\n");
+		if (psr->word3.fafe.rocev2_tunnel.in_ipv6)
+			DPAA2_PR_PRINT("FAFE TUNNEL IPv6 present\r\n");
+		if (psr->word3.fafe.rocev2_tunnel.in_udp)
+			DPAA2_PR_PRINT("FAFE TUNNEL UDP present\r\n");
+		if (psr->word3.fafe.rocev2_tunnel.in_tcp)
+			DPAA2_PR_PRINT("FAFE TUNNEL TCP present\r\n");
 	}
 
 	/** FAF popular protocol dump.*/
@@ -1459,9 +1463,7 @@ dpaa2_print_parse_result(const struct dpaa2_annot_hdr *annotation)
 		dpaa2_print_vxlan_parse_result(psr);
 	if (psr->word3.fafe.ecpri.ecpri)
 		dpaa2_print_ecpri_parse_result(psr);
-	if (!psr->word3.fafe.ecpri.ecpri &&
-		!psr->word3.faf_l_be.vxlan &&
-		psr->word3.fafe.ibth_vxlan.ibth)
+	if (psr->word3.fafe.rocev2_tunnel.rocev2)
 		dpaa2_print_rocev2_parse_result(psr);
 }
 
