@@ -56,6 +56,7 @@ struct dpaa2_dpdmux_dev {
 	struct dpaa2_key_extract key_extract;
 	uint8_t *key_param;
 	uint64_t key_param_iova;
+	uint16_t max_flow_num;
 	uint16_t flow_num;
 	int sp_protocol;
 	rte_spinlock_t lock;
@@ -591,6 +592,13 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	if (!dpdmux_dev) {
 		DPAA2_PMD_ERR("Invalid DPDMUX ID(%d)", dpdmux_id);
 		return -ENODEV;
+	}
+
+	if (dpdmux_dev->flow_num >= dpdmux_dev->max_flow_num) {
+		DPAA2_PMD_ERR("dpdmux.%d's flow numner(%d) >= max flow number(%d)",
+			dpdmux_id, dpdmux_dev->flow_num,
+			dpdmux_dev->max_flow_num);
+		return -ENOMEM;
 	}
 
 	if (actions[0].type == RTE_FLOW_ACTION_TYPE_VF) {
@@ -1591,6 +1599,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 	}
 	rte_spinlock_init(&dpdmux_dev->lock);
 	dpdmux_dev->sp_protocol = obj->sp_protocol;
+	dpdmux_dev->max_flow_num = attr.max_dmat_entries;
 
 	TAILQ_INSERT_TAIL(&dpdmux_dev_list, dpdmux_dev, next);
 
