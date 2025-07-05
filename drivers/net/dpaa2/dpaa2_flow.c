@@ -1578,27 +1578,6 @@ dpaa2_flow_extract_support(const uint8_t *mask_src,
 }
 
 static int
-dpaa2_flow_prev_ip_addr_extract_pos(const struct dpaa2_key_profile *profile)
-{
-	int idx = -ENXIO;
-
-	if (!profile->num)
-		return -ENXIO;
-
-	for (idx = profile->num - 1; idx >= 0; idx--) {
-		if (!(profile->prot_field[idx].type == DPAA2_NET_PROT_KEY &&
-			profile->prot_field[idx].prot == NET_PROT_IP &&
-			(profile->prot_field[idx].key_field == NH_FLD_IP_SRC ||
-			profile->prot_field[idx].key_field == NH_FLD_IP_DST)))
-			break;
-	}
-
-	if (idx >= 0)
-		return idx;
-	return -ENXIO;
-}
-
-static int
 dpaa2_flow_identify_by_faf(struct dpaa2_dev_priv *priv,
 	struct dpaa2_dev_flow *flow,
 	uint32_t faf_bit_off,
@@ -1784,59 +1763,6 @@ dpaa2_flow_add_hdr_extract_rule(struct dpaa2_dev_flow *flow,
 }
 
 static int
-dpaa2_flow_ip_addr_extract_add(uint32_t field,
-	struct dpaa2_key_profile *key_profile, uint8_t size,
-	int *update, int *pos)
-{
-	struct dpaa2_ip_addr_extract *ip_addr_extracts;
-	uint8_t i = 0;
-	uint16_t max_size_save = key_profile->key_max_size;
-	char log_buf[128];
-
-	if (field != NH_FLD_IP_SRC && field != NH_FLD_IP_DST)
-		return -EINVAL;
-
-	max_size_save -= key_profile->ip_addr_extracts[0].max_size;
-	max_size_save -= key_profile->ip_addr_extracts[1].max_size;
-	ip_addr_extracts = key_profile->ip_addr_extracts;
-	while (i < 2) {
-		if (ip_addr_extracts[i].field == field) {
-			if (size > ip_addr_extracts[i].max_size)
-				ip_addr_extracts[i].max_size = size;
-			break;
-		}
-		if (!ip_addr_extracts[i].field) {
-			ip_addr_extracts[i].field = field;
-			ip_addr_extracts[i].max_size = size;
-			if (update)
-				*update = 1;
-			break;
-		}
-		i++;
-	}
-	if (i > 1) {
-		sprintf(log_buf,
-			"field[0](%d)/size[0](%d)/field[1](%d)/size[1](%d)",
-			ip_addr_extracts[0].field,
-			ip_addr_extracts[0].max_size,
-			ip_addr_extracts[1].field,
-			ip_addr_extracts[1].max_size);
-		DPAA2_PMD_ERR("Invalid IP address extracts:%s\n",
-			log_buf);
-		return -EINVAL;
-	}
-
-	if (pos)
-		*pos = i;
-
-	max_size_save += key_profile->ip_addr_extracts[0].max_size;
-	max_size_save += key_profile->ip_addr_extracts[1].max_size;
-	key_profile->key_max_size = max_size_save;
-
-	return 0;
-}
-
-static int
 dpaa2_flow_add_ipaddr_extract_rule(struct dpaa2_dev_flow *flow,
 	enum net_prot prot, uint32_t field,
 	const void *key, const void *mask, int size,
@@ -1931,13 +1857,13 @@ dpaa2_flow_add_ipaddr_extract_rule(struct dpaa2_dev_flow *flow,
 		return -EINVAL;
 	}
 
-	pos = dpaa2_flow_prev_ip_addr_extract_pos(key_profile);
+	pos = dpaa2_extract_prev_ip_addr_pos(key_profile);
 	if (pos >= 0) {
 		ip_addr_offset = key_profile->key_offset[pos] +
 			key_profile->key_size[pos];
 	}
 
-	ret = dpaa2_flow_ip_addr_extract_add(field,
+	ret = dpaa2_extract_ip_addr_add(field,
 		key_profile, size, &update, &pos);
 	if (ret) {
 		DPAA2_PMD_ERR("Add IP address extract failed(%d)", ret);
@@ -5521,7 +5447,7 @@ dpaa2_flow_key_offset_size(struct dpaa2_dev_flow *flow,
 		ip_addr_size = NH_FLD_IPV6_ADDR_SIZE;
 
 	field = dpkg->extracts[idx].extract.from_hdr.field;
-	prev_ip_addr_pos = dpaa2_flow_prev_ip_addr_extract_pos(profile);
+	prev_ip_addr_pos = dpaa2_extract_prev_ip_addr_pos(profile);
 	if (prev_ip_addr_pos >= 0) {
 		ip_addr_offset =
 			profile->key_offset[prev_ip_addr_pos] +

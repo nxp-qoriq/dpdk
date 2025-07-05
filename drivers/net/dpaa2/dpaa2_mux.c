@@ -256,6 +256,123 @@ set_rule:
 	return 0;
 }
 
+static int
+dpaa2_mux_add_ipaddr_extract(struct dpaa2_key_extract *key_ext,
+	enum net_prot prot, uint32_t field, uint32_t field_size,
+	const void *field_data, const void *field_mask,
+	uint8_t *key_va, uint8_t *mask_va, int *extract_update)
+{
+	int ret, pos = 0;
+	struct dpaa2_key_profile *key_profile;
+	struct dpkg_profile_cfg *dpkg;
+	uint8_t num, ip_addr_offset = 0;
+
+	if (prot != NET_PROT_IPV4 && prot != NET_PROT_IPV6) {
+		DPAA2_PMD_ERR("%s: Invalid protocol(%d)",
+			__func__, prot);
+		return -EINVAL;
+	}
+
+	if (prot == NET_PROT_IPV4) {
+		if (field != NH_FLD_IPV4_SRC_IP &&
+			field != NH_FLD_IPV4_DST_IP) {
+			DPAA2_PMD_ERR("%s: Invalid ipv4 filed(%d)",
+				__func__, field);
+			return -EINVAL;
+		}
+		if (field_size != sizeof(rte_be32_t)) {
+			DPAA2_PMD_ERR("%s: Invalid ipv4 address size(%d)",
+				__func__, field_size);
+			return -EINVAL;
+		}
+	} else {
+		if (field != NH_FLD_IPV6_SRC_IP &&
+			field != NH_FLD_IPV6_DST_IP) {
+			DPAA2_PMD_ERR("%s: Invalid ipv6 filed(%d)",
+				__func__, field);
+			return -EINVAL;
+		}
+		if (field_size != NH_FLD_IPV6_ADDR_SIZE) {
+			DPAA2_PMD_ERR("%s: Invalid ipv6 address size(%d)",
+				__func__, field_size);
+			return -EINVAL;
+		}
+	}
+
+	if (prot == NET_PROT_IPV4 &&
+		field == NH_FLD_IPV4_SRC_IP) {
+		prot = NET_PROT_IP;
+		field = NH_FLD_IP_SRC;
+	} else if (prot == NET_PROT_IPV4 &&
+		field == NH_FLD_IPV4_DST_IP) {
+		prot = NET_PROT_IP;
+		field = NH_FLD_IP_DST;
+	} else if (prot == NET_PROT_IPV6 &&
+		field == NH_FLD_IPV6_SRC_IP) {
+		prot = NET_PROT_IP;
+		field = NH_FLD_IP_SRC;
+	} else if (prot == NET_PROT_IPV6 &&
+		field == NH_FLD_IPV6_DST_IP) {
+		prot = NET_PROT_IP;
+		field = NH_FLD_IP_DST;
+	} else {
+		DPAA2_PMD_ERR("Inval P(%d)/F(%d) to extract ip address",
+			prot, field);
+		return -EINVAL;
+	}
+
+	key_profile = &key_ext->key_profile;
+	dpkg = &key_ext->dpkg;
+	num = key_profile->num;
+
+	if (num >= DPKG_MAX_NUM_OF_EXTRACTS) {
+		DPAA2_PMD_ERR("Number of extracts overflows");
+		return -EINVAL;
+	}
+
+	pos = dpaa2_extract_prev_ip_addr_pos(key_profile);
+	if (pos >= 0) {
+		ip_addr_offset = key_profile->key_offset[pos] +
+			key_profile->key_size[pos];
+	}
+
+	ret = dpaa2_extract_ip_addr_add(field, key_profile,
+		field_size, extract_update, &pos);
+	if (ret) {
+		DPAA2_PMD_ERR("Add IP address extract failed(%d)", ret);
+		return ret;
+	}
+	if (pos > 1) {
+		DPAA2_PMD_ERR("Invalid IP address extract position(%d)", pos);
+		return -EINVAL;
+	}
+	if (*extract_update) {
+		key_profile->num++;
+		key_profile->prot_field[num].type = DPAA2_NET_PROT_KEY;
+		key_profile->prot_field[num].prot = prot;
+		key_profile->prot_field[num].key_field = field;
+
+		dpkg->extracts[num].type = DPKG_EXTRACT_FROM_HDR;
+		dpkg->extracts[num].extract.from_hdr.prot = prot;
+		dpkg->extracts[num].extract.from_hdr.field = field;
+		dpkg->extracts[num].extract.from_hdr.type = DPKG_FULL_FIELD;
+		dpkg->num_extracts++;
+	}
+
+	key_va += ip_addr_offset;
+	mask_va += ip_addr_offset;
+
+	if (pos == 0) {
+		rte_memcpy(key_va, field_data, field_size);
+		rte_memcpy(mask_va, field_mask, field_size);
+	} else {
+		rte_memcpy(key_va + field_size, field_data, field_size);
+		rte_memcpy(mask_va + field_size, field_mask, field_size);
+	}
+
+	return 0;
+}
+
 static inline int
 dpaa2_mux_add_non_hdr_extract(struct dpaa2_key_extract *key_ext,
 	uint8_t offset, uint8_t size, enum dpkg_extract_type type,
@@ -457,6 +574,30 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 				if (ret)
 					goto creation_error;
 			}
+
+			if (spec && mask && mask->hdr.src_addr) {
+				ret = dpaa2_mux_add_ipaddr_extract(key_extract,
+					NET_PROT_IPV4, NH_FLD_IPV4_SRC_IP,
+					sizeof(rte_be32_t),
+					&spec->hdr.src_addr,
+					&mask->hdr.src_addr,
+					flow->key_addr, flow->mask_addr,
+					&extract_update);
+				if (ret)
+					goto creation_error;
+			}
+			if (spec && mask && mask->hdr.dst_addr) {
+				ret = dpaa2_mux_add_ipaddr_extract(key_extract,
+					NET_PROT_IPV4, NH_FLD_IPV4_DST_IP,
+					sizeof(rte_be32_t),
+					&spec->hdr.dst_addr,
+					&mask->hdr.dst_addr,
+					flow->key_addr, flow->mask_addr,
+					&extract_update);
+				if (ret)
+					goto creation_error;
+			}
+
 			/**TO DO*/
 		}
 		break;

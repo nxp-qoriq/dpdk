@@ -550,6 +550,80 @@ dpaa2_dump_dpkg(const struct dpkg_profile_cfg *dpkg)
 	}
 }
 
+static inline int
+dpaa2_extract_prev_ip_addr_pos(const struct dpaa2_key_profile *profile)
+{
+	int idx = -ENXIO;
+
+	if (!profile->num)
+		return -ENXIO;
+
+	for (idx = profile->num - 1; idx >= 0; idx--) {
+		if (!(profile->prot_field[idx].type == DPAA2_NET_PROT_KEY &&
+			profile->prot_field[idx].prot == NET_PROT_IP &&
+			(profile->prot_field[idx].key_field == NH_FLD_IP_SRC ||
+			profile->prot_field[idx].key_field == NH_FLD_IP_DST)))
+			break;
+	}
+
+	if (idx >= 0)
+		return idx;
+	return -ENXIO;
+}
+
+static inline int
+dpaa2_extract_ip_addr_add(uint32_t field,
+	struct dpaa2_key_profile *key_profile, uint8_t size,
+	int *update, int *pos)
+{
+	struct dpaa2_ip_addr_extract *ip_addr_extracts;
+	uint8_t i = 0;
+	uint16_t max_size_save = key_profile->key_max_size;
+	char log_buf[128];
+
+	if (field != NH_FLD_IP_SRC && field != NH_FLD_IP_DST)
+		return -EINVAL;
+
+	max_size_save -= key_profile->ip_addr_extracts[0].max_size;
+	max_size_save -= key_profile->ip_addr_extracts[1].max_size;
+	ip_addr_extracts = key_profile->ip_addr_extracts;
+	while (i < 2) {
+		if (ip_addr_extracts[i].field == field) {
+			if (size > ip_addr_extracts[i].max_size)
+				ip_addr_extracts[i].max_size = size;
+			break;
+		}
+		if (!ip_addr_extracts[i].field) {
+			ip_addr_extracts[i].field = field;
+			ip_addr_extracts[i].max_size = size;
+			if (update)
+				*update = 1;
+			break;
+		}
+		i++;
+	}
+	if (i > 1) {
+		sprintf(log_buf,
+			"field[0](%d)/size[0](%d)/field[1](%d)/size[1](%d)",
+			ip_addr_extracts[0].field,
+			ip_addr_extracts[0].max_size,
+			ip_addr_extracts[1].field,
+			ip_addr_extracts[1].max_size);
+		DPAA2_FLOW_DUMP("Invalid IP address extracts:%s\n",
+			log_buf);
+		return -EINVAL;
+	}
+
+	if (pos)
+		*pos = i;
+
+	max_size_save += key_profile->ip_addr_extracts[0].max_size;
+	max_size_save += key_profile->ip_addr_extracts[1].max_size;
+	key_profile->key_max_size = max_size_save;
+
+	return 0;
+}
+
 int dpaa2_distset_to_dpkg_profile_cfg(uint64_t req_dist_set,
 				      struct dpkg_profile_cfg *kg_cfg);
 
