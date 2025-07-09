@@ -2941,6 +2941,7 @@ dpaa2_flow_ecpri_extract_rule_set(struct dpaa2_generic_flow *flow,
 		return ret;
 	}
 
+	memset(&fafe, 0, sizeof(union dpaa2_sp_fafe_parse));
 	extract_nb = dpaa2_parser_ecpri_extract(spec, mask,
 		rule_data, mask_data, extract_size, extract_off,
 		&fafe);
