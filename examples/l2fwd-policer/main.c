@@ -69,23 +69,43 @@ enum {
 #define POLICER_UNIT_FRAMES                1
 #define POLICER_UNIT_BYTES_L2_WITHOUT_FCS  2
 
-struct l2fwd_policer_tc_flow {
-	int valid;
-	uint16_t vlan_id;
+#define MAX_ITEM_NUM 4
+#define MAX_ACTION_NUM 4
 
-	uint16_t qidx;
-	uint16_t flow_id;
-	void *flow;
+#define POLICER_VLAN_ID 100
+#define POLICER_UPDATE_SKIP_HINT "enter to skip"
+
+struct l2fwd_policer_meter_param {
+	uint32_t *meter_id;
+	uint32_t *profile_id;
+	uint32_t *policy_id;
+
+	struct rte_meter_trtcm_params trtcm;
+	struct rte_flow_action red_action;
+};
+
+struct l2fwd_policer_tc_desc {
+	int valid;
+
+	/** Meter per TC.*/
+	struct l2fwd_policer_meter_param meter_param;
+	void **one_level_flows;
+	void **fs_flows;
+	struct rte_flow_item *fs_update_pattern;
+	uint16_t item_update_idx;
+	uint16_t action_update_idx;
+	uint16_t *flow_queue_ids;
+	uint16_t *tc_queue_ids;
+	uint16_t fs_max_num;
+	uint16_t queue_max_num;
+	uint16_t default_queue;
+	int miss_drop;
+	void *meter_flow;
 };
 
 #ifndef VLAN_PRIO_SHIFT
 #define VLAN_PRIO_SHIFT	13
 #endif
-
-#ifndef VLAN_VID_MASK
-#define VLAN_VID_MASK	0xfff
-#endif
-#define MAX_VLAN_ID VLAN_VID_MASK
 
 #define RTE_LOGTYPE_L2FWD_POLICER RTE_LOGTYPE_USER1
 
@@ -93,6 +113,10 @@ struct l2fwd_policer_tc_flow {
 #define MEMPOOL_CACHE_SIZE 256
 
 static volatile bool force_quit;
+
+static uint16_t s_vlan_id = POLICER_VLAN_ID;
+
+static int s_miss_drop;
 
 /* MAC updating enabled by default */
 static int mac_updating = 1;
@@ -103,31 +127,36 @@ static int promiscuous_on;
 /* Flow classification enabled by default */
 static int enable_flow = 1;
 
+static int s_flow_table_level = 2;
+
 static int tx_multi_ports = 1;
 
 #define PORT_MAX_FLOWS 128
 
 enum {
-	POLICER_PROFILE_UPDATE = (1 << 0),
-	POLICER_POLICY_UPDATE = (1 << 1)
+	ACTION_POLICER_PROFILE_UPDATE = (1 << 0),
+	ACTION_POLICER_POLICY_UPDATE = (1 << 1),
+	ACTION_QOS_JUMP_UPDATE = (1 << 2),
+	ACTION_FS_QUEUE_UPDATE = (1 << 3),
+	ACTION_MISS_QOS_UPDATE = (1 << 4),
+	ACTION_MISS_FS_UPDATE = (1 << 5),
+	ITEM_QOS_FLOW_UPDATE = (1 << 6),
+	ITEM_FS_FLOW_UPDATE = (1 << 7)
 };
 
 /* port and vlan id pair configuration */
 struct l2fwd_policer_port_params {
 	int enable;
-	/** Share meter to all flows.*/
-	uint32_t *meter_id;
-	uint32_t *profile_id;
-	uint32_t *policy_id;
-
-	struct rte_meter_trtcm_params trtcm;
-	struct rte_flow_action red_action;
-
-	uint16_t queue_ids[POLICER_TC_MAX_NUM][MAX_QUEUE_NUM_PER_TC];
-	uint16_t flow_ids[POLICER_TC_MAX_NUM][MAX_QUEUE_NUM_PER_TC];
-	uint16_t queue_num[POLICER_TC_MAX_NUM];
-
-	struct l2fwd_policer_tc_flow tc_flow[POLICER_TC_MAX_NUM];
+	int flow_tb_level;
+	void **qos_flows;
+	uint8_t *tc_ids;
+	struct rte_flow_item *qos_update_pattern;
+	uint8_t qos_update_idx;
+	uint16_t max_qos_entries;
+	int miss_drop;
+	uint8_t default_tc;
+	struct l2fwd_policer_tc_desc *tc_descs;
+	uint16_t max_tcs;
 };
 
 static struct l2fwd_policer_port_params s_port_param[RTE_MAX_ETHPORTS];
@@ -137,19 +166,172 @@ static int s_policer_unit = POLICER_UNIT_BYTES_L2_WITHOUT_FCS;
 static int s_default_color = RTE_COLOR_GREEN;
 static uint32_t s_color_option = POLICER_COLOR_AWARE;
 static enum rte_flow_action_type s_red_action = RTE_FLOW_ACTION_TYPE_DROP;
-static enum rte_flow_action_type s_red_action_update;
 
 static uint32_t s_cir = POLICER_CIR_DEFAULT;
 static uint32_t s_cbs = POLICER_CBS_DEFAULT;
 static uint32_t s_pir = POLICER_PIR_DEFAULT;
 static uint32_t s_pbs = POLICER_PBS_DEFAULT;
 
-static uint32_t s_cir_update;
-static uint32_t s_cbs_update;
-static uint32_t s_pir_update;
-static uint32_t s_pbs_update;
-
 static uint16_t s_meter_action = RTE_FLOW_ACTION_TYPE_METER_MARK;
+
+struct policer_item_update {
+	const char *item_protocol;
+	const char *item_field;
+	const char *input_format;
+	struct rte_flow_item pattern[2];
+	uint8_t spec[512];
+	uint8_t mask[512];
+	int (*item_parse)(const char *str, struct policer_item_update *item);
+};
+
+static int
+l2fwd_policer_item_eth_parse(const char *str,
+	struct policer_item_update *item_update)
+{
+	const char *token = str;
+	char *endptr;
+	uint64_t byte;
+	int i = 0;
+	uint8_t bytes[RTE_ETHER_ADDR_LEN];
+	struct rte_flow_item_eth *spec = (void *)item_update->spec;
+	struct rte_flow_item_eth *mask = (void *)item_update->mask;
+
+	if (!str || !item_update)
+		return -EINVAL;
+
+	while (i < RTE_ETHER_ADDR_LEN && *token != '\0') {
+		byte = strtoul(token, &endptr, 16);
+		if (byte > 0xFF || endptr == token)
+			return -EINVAL;
+		if (i < (RTE_ETHER_ADDR_LEN - 1) && *endptr != ':')
+			return -EINVAL;
+		bytes[i] = (uint8_t)byte;
+		if (*endptr == ':')
+			token = endptr + 1;
+		i++;
+	}
+
+	item_update->pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+	memset(spec, 0, sizeof(struct rte_flow_item_eth));
+	memset(mask, 0, sizeof(struct rte_flow_item_eth));
+	rte_memcpy(spec->src.addr_bytes,
+		bytes, RTE_ETHER_ADDR_LEN);
+	memset(mask->src.addr_bytes, 0xff, RTE_ETHER_ADDR_LEN);
+	item_update->pattern[0].spec = spec;
+	item_update->pattern[0].mask = mask;
+	item_update->pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+	return 0;
+}
+
+static int
+l2fwd_policer_item_vlan_parse(const char *str,
+	struct policer_item_update *item_update)
+{
+	char *endptr;
+	uint16_t tci;
+	struct rte_flow_item_vlan *spec = (void *)item_update->spec;
+	struct rte_flow_item_vlan *mask = (void *)item_update->mask;
+
+	if (!str || !item_update)
+		return -EINVAL;
+
+	tci = strtoul(str, &endptr, 16);
+	if (endptr == str)
+		return -EINVAL;
+
+	item_update->pattern[0].type = RTE_FLOW_ITEM_TYPE_VLAN;
+	memset(spec, 0, sizeof(struct rte_flow_item_vlan));
+	memset(mask, 0, sizeof(struct rte_flow_item_vlan));
+	spec->tci = rte_cpu_to_be_16(tci);
+	mask->tci = 0xffff;
+	item_update->pattern[0].spec = spec;
+	item_update->pattern[0].mask = mask;
+	item_update->pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+	return 0;
+}
+
+static int
+l2fwd_policer_item_ipv4_parse(const char *str,
+	struct policer_item_update *item_update)
+{
+	const char *token = str;
+	char *endptr;
+	uint64_t byte, i = 0;
+	rte_be32_t ip_addr;
+	uint8_t *bytes = (void *)&ip_addr;
+	struct rte_flow_item_ipv4 *spec = (void *)item_update->spec;
+	struct rte_flow_item_ipv4 *mask = (void *)item_update->mask;
+
+	if (!str || !item_update)
+		return -EINVAL;
+
+	while (i < sizeof(rte_be32_t) && *token != '\0') {
+		byte = strtoul(token, &endptr, 10);
+		if (byte > 0xFF || endptr == token)
+			return -EINVAL;
+		if (i < (sizeof(rte_be32_t) - 1) && *endptr != '.')
+			return -EINVAL;
+		bytes[i] = (uint8_t)byte;
+		if (*endptr == '.')
+			token = endptr + 1;
+		i++;
+	}
+
+	item_update->pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
+	memset(spec, 0, sizeof(struct rte_flow_item_ipv4));
+	memset(mask, 0, sizeof(struct rte_flow_item_ipv4));
+	spec->hdr.src_addr = ip_addr;
+	mask->hdr.src_addr = 0xffffffff;
+	item_update->pattern[0].spec = spec;
+	item_update->pattern[0].mask = mask;
+	item_update->pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+	return 0;
+}
+
+struct policer_item_update s_qos_item_update[] = {
+	{
+		.item_protocol = "eth",
+		.item_field = "src",
+		.input_format = "xx:xx:xx:xx:xx:xx",
+		.item_parse = l2fwd_policer_item_eth_parse
+	},
+	{
+		.item_protocol = "vlan",
+		.item_field = "tci",
+		.input_format = "hex 16 bits",
+		.item_parse = l2fwd_policer_item_vlan_parse
+	},
+	{
+		.item_protocol = "ipv4",
+		.item_field = "src",
+		.input_format = "x.x.x.x",
+		.item_parse = l2fwd_policer_item_ipv4_parse
+	}
+};
+
+struct policer_item_update s_fs_item_update[] = {
+	{
+		.item_protocol = "eth",
+		.item_field = "src",
+		.input_format = "xx:xx:xx:xx:xx:xx",
+		.item_parse = l2fwd_policer_item_eth_parse
+	},
+	{
+		.item_protocol = "vlan",
+		.item_field = "tci",
+		.input_format = "hex 16 bits",
+		.item_parse = l2fwd_policer_item_vlan_parse
+	},
+	{
+		.item_protocol = "ipv4",
+		.item_field = "src",
+		.input_format = "x.x.x.x",
+		.item_parse = l2fwd_policer_item_ipv4_parse
+	}
+};
 
 /*
  * Configurable number of RX/TX ring descriptors
@@ -206,16 +388,8 @@ struct l2fwd_policer_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 /* A tsc-based timer responsible for triggering statistics printout */
 static uint64_t timer_period = 10; /* default period is 10 seconds */
 
-#define POLICER_UPDATE_CIR "cir "
-#define POLICER_UPDATE_CBS "cbs "
-#define POLICER_UPDATE_PIR "pir "
-#define POLICER_UPDATE_PBS "pbs "
-#define POLICER_UPDATE_QUEUE_IDX "queue index update"
 #define POLICER_UPDATE_RED_DROP "red drop"
 #define POLICER_UPDATE_RED_PASS "red pass"
-
-#define POLICER_UPDATE_FORMAT \
-	"Update policer: %s<num> or %s<num> or %s<num> or %s<num>\n"
 
 enum policer_id_type {
 	POLICER_METER_ID_TYPE,
@@ -404,11 +578,6 @@ l2fwd_policer_usage(const char *prgname)
 		"       - The source MAC address is replaced by the TX port MAC address\n"
 		"       - The destination MAC address is replaced by 02:00:00:00:00:TX_PORT_ID\n"
 		"  --enable-flow: Enable/Disable vlan flow control (default is enable)\n"
-		"  --config:(portid,vlanid,vlan_prio)[,(portid,vlanid,vlan_prio)]\n"
-		"      Example: --config='(0,100,3),(1,400,4)'\n"
-		"      portid are acceptable which are used in portmask\n"
-		"      vlanid in int, acceptable range 0 to 4095\n"
-		"      vlan_prio is number of vlan priorities, maximum is 7 i.e.(0 to 7)\n"
 		"  --color: configure policer color (color_aware, color_blind)\n"
 		"	  Default: color_aware\n"
 		"  --policer_unit: configure policer unit (bytes_l2, bytes_l3, frames)\n"
@@ -425,8 +594,10 @@ l2fwd_policer_usage(const char *prgname)
 		"  --meter_action: Configure meter flow action type (meter_mark or meter)\n"
 		"      Default: meter_mark, directly get profile and(or) policy to\n"
 		"      configure flow action dynamically.\n"
+		"  --vlan_id vlan ID selected to configure QoS flow\n"
 		"  --queue_config: Configure (port,queue,core)\n"
-		"  --tx_multi_ports: 0 disable, 1 enable, Default: enable.\n",
+		"  --tx_multi_ports: 0 disable, 1 enable, Default: enable.\n"
+		"  --flow_table_level: 1 or 2.\n",
 		prgname);
 }
 
@@ -442,83 +613,6 @@ l2fwd_policer_parse_portmask(const char *portmask)
 		return 0;
 
 	return pm;
-}
-
-static int
-l2fwd_policer_parse_port_vlan_config(const char *q_arg)
-{
-	enum fieldnames {
-		FLD_PORT = 0,
-		FLD_VLAN_ID,
-		FLD_VLAN_PRIO,
-		_NUM_FLD
-	};
-	unsigned long int_fld[_NUM_FLD];
-	const char *p, *p0 = q_arg;
-	char *str_fld[_NUM_FLD];
-	unsigned int size;
-	char s[256];
-	char *end;
-	int i;
-	uint16_t portid, vlan_id, vlan_prio;
-	struct l2fwd_policer_tc_flow *tc_flow;
-
-	while ((p = strchr(p0, '(')) != NULL) {
-		++p;
-		p0 = strchr(p, ')');
-		if (p0 == NULL)
-			return -EINVAL;
-
-		size = p0 - p;
-		if (size >= sizeof(s))
-			return -EINVAL;
-
-		memcpy(s, p, size);
-		s[size] = '\0';
-		if (rte_strsplit(s, sizeof(s), str_fld,
-			_NUM_FLD, ',') != _NUM_FLD)
-			return -1;
-		for (i = 0; i < _NUM_FLD; i++) {
-			errno = 0;
-			int_fld[i] = strtoul(str_fld[i], &end, 0);
-			if (errno || end == str_fld[i])
-				return -EINVAL;
-		}
-
-		portid = (uint16_t)int_fld[FLD_PORT];
-		vlan_id = (uint16_t)int_fld[FLD_VLAN_ID];
-		vlan_prio = (uint16_t)int_fld[FLD_VLAN_PRIO];
-		if (portid >= RTE_MAX_ETHPORTS) {
-			RTE_LOG(ERR, L2FWD_POLICER,
-				"Invalid portid(%d) >= %d\n",
-				portid, RTE_MAX_ETHPORTS);
-			return -EINVAL;
-		}
-		if (vlan_id >= MAX_VLAN_ID) {
-			RTE_LOG(ERR, L2FWD_POLICER,
-				"Invalid vlan ID(%d) >= %d\n",
-				vlan_id, MAX_VLAN_ID);
-			return -EINVAL;
-		}
-		if (vlan_prio >= POLICER_TC_MAX_NUM) {
-			RTE_LOG(ERR, L2FWD_POLICER,
-				"Invalid vlan priority(%d) >= %d\n",
-				vlan_prio, POLICER_TC_MAX_NUM);
-			return -EINVAL;
-		}
-		tc_flow = &s_port_param[portid].tc_flow[vlan_prio];
-		if (tc_flow->valid) {
-			RTE_LOG(ERR, L2FWD_POLICER,
-				"TC[%d] flow(vlan ID=%d) has been configured.\n",
-				vlan_prio, tc_flow->vlan_id);
-			return -EINVAL;
-		}
-		tc_flow->valid = true;
-		tc_flow->vlan_id = vlan_id;
-		s_port_param[portid].enable = true;
-	}
-
-	return 0;
 }
 
 static int
@@ -554,9 +648,9 @@ static void
 l2fwd_policer_parse_red_action_option(const char *optarg)
 {
 	if (!strcmp(optarg, POLICER_UPDATE_RED_DROP)) {
-		s_red_action_update = RTE_FLOW_ACTION_TYPE_DROP;
+		s_red_action = RTE_FLOW_ACTION_TYPE_DROP;
 	} else if (!strcmp(optarg, POLICER_UPDATE_RED_PASS)) {
-		s_red_action_update = RTE_FLOW_ACTION_TYPE_PASSTHRU;
+		s_red_action = RTE_FLOW_ACTION_TYPE_PASSTHRU;
 	} else {
 		RTE_LOG(ERR, L2FWD_POLICER,
 			"Invalid red action option: %s\n", optarg);
@@ -679,7 +773,6 @@ static const char short_options[] =
 
 #define CMD_LINE_OPT_NO_MAC_UPDATING "no-mac-updating"
 #define CMD_LINE_OPT_ENABLE_FLOW "enable-flow"
-#define CMD_LINE_OPT_CONFIG "config"
 #define CMD_LINE_OPT_RATE_UNIT_CONFIG "unit"
 #define CMD_LINE_OPT_RATE_COLOR_CONFIG "color"
 #define CMD_LINE_OPT_RATE_DEFAULT_COLOR_CONFIG "default_color"
@@ -690,7 +783,10 @@ static const char short_options[] =
 #define CMD_LINE_OPT_PBS_CONFIG "pbs"
 #define CMD_LINE_OPT_METER_ACTION_CONFIG "meter_action"
 #define CMD_LINE_OPT_TX_MULTI_PORTS_CONFIG "tx_multi_ports"
+#define CMD_LINE_OPT_MISS_DROP_ACTION_CONFIG "miss_drop"
+#define CMD_LINE_OPT_QOS_VLAN_ID_CONFIG "vlan_id"
 #define CMD_LINE_OPT_QUEUE_CONFIG "queue_config"
+#define CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG "flow_table_level"
 
 enum {
 	/* long options mapped to a short option */
@@ -700,7 +796,6 @@ enum {
 	 */
 	CMD_LINE_OPT_NO_MAC_UPDATING_NUM = 256,
 	CMD_LINE_OPT_ENABLE_FLOW_CTL,
-	CMD_LINE_OPT_CONFIG_NUM,
 	CMD_LINE_OPT_RATE_UNIT,
 	CMD_LINE_OPT_RATE_COLOR,
 	CMD_LINE_OPT_RATE_DEFAULT_COLOR,
@@ -711,14 +806,16 @@ enum {
 	CMD_LINE_OPT_PBS,
 	CMD_LINE_OPT_METER_ACTION,
 	CMD_LINE_OPT_TX_MULTI_PORTS,
-	CMD_LINE_OPT_QUEUE_CONFIG_NUM
+	CMD_LINE_OPT_MISS_DROP_ACTION,
+	CMD_LINE_OPT_QOS_VLAN_ID,
+	CMD_LINE_OPT_QUEUE_CONFIG_NUM,
+	CMD_LINE_OPT_FLOW_TABLE_LEVEL
 };
 
 static const struct option lgopts[] = {
 	{CMD_LINE_OPT_NO_MAC_UPDATING, no_argument, 0,
 		CMD_LINE_OPT_NO_MAC_UPDATING_NUM},
 	{CMD_LINE_OPT_ENABLE_FLOW, 1, 0, CMD_LINE_OPT_ENABLE_FLOW_CTL},
-	{CMD_LINE_OPT_CONFIG, 1, 0, CMD_LINE_OPT_CONFIG_NUM},
 	{CMD_LINE_OPT_RATE_UNIT_CONFIG, 1, 0, CMD_LINE_OPT_RATE_UNIT},
 	{CMD_LINE_OPT_RATE_COLOR_CONFIG, 1, 0, CMD_LINE_OPT_RATE_COLOR},
 	{CMD_LINE_OPT_RATE_DEFAULT_COLOR_CONFIG, 1, 0, CMD_LINE_OPT_RATE_DEFAULT_COLOR},
@@ -729,7 +826,11 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_PBS_CONFIG, 1, 0, CMD_LINE_OPT_PBS},
 	{CMD_LINE_OPT_METER_ACTION_CONFIG, 1, 0, CMD_LINE_OPT_METER_ACTION},
 	{CMD_LINE_OPT_TX_MULTI_PORTS_CONFIG, 1, 0, CMD_LINE_OPT_TX_MULTI_PORTS},
+	{CMD_LINE_OPT_MISS_DROP_ACTION_CONFIG, 0, 0, CMD_LINE_OPT_MISS_DROP_ACTION},
+	{CMD_LINE_OPT_QOS_VLAN_ID_CONFIG, 1, 0, CMD_LINE_OPT_QOS_VLAN_ID},
 	{CMD_LINE_OPT_QUEUE_CONFIG, 1, 0, CMD_LINE_OPT_QUEUE_CONFIG_NUM},
+	{CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG, 1, 0,
+		CMD_LINE_OPT_FLOW_TABLE_LEVEL},
 	{NULL, 0, 0, 0}
 };
 
@@ -783,15 +884,6 @@ l2fwd_policer_parse_args(int argc, char **argv)
 			break;
 
 		/* long options */
-		case CMD_LINE_OPT_CONFIG_NUM:
-			ret = l2fwd_policer_parse_port_vlan_config(optarg);
-			if (ret) {
-				fprintf(stderr, "Invalid config\n");
-				l2fwd_policer_usage(prgname);
-				return ret;
-			}
-			break;
-
 		case CMD_LINE_OPT_RATE_UNIT:
 			l2fwd_policer_parse_rate_unit(optarg);
 			break;
@@ -843,10 +935,28 @@ l2fwd_policer_parse_args(int argc, char **argv)
 			tx_multi_ports = atoi(optarg);
 			break;
 
+		case CMD_LINE_OPT_QOS_VLAN_ID:
+			s_vlan_id = (uint16_t)atoi(optarg);
+			break;
+
+		case CMD_LINE_OPT_MISS_DROP_ACTION:
+			s_miss_drop = true;
+			break;
+
 		case CMD_LINE_OPT_QUEUE_CONFIG_NUM:
 			ret = l2fwd_policer_parse_queue_config(optarg);
 			if (ret)
 				return ret;
+			break;
+
+		case CMD_LINE_OPT_FLOW_TABLE_LEVEL:
+			s_flow_table_level = atoi(optarg);
+			if (s_flow_table_level != 1 && s_flow_table_level != 2) {
+				RTE_LOG(ERR, L2FWD_POLICER,
+					"Invalid flow table level(%d)\n",
+					s_flow_table_level);
+				return -EINVAL;
+			}
 			break;
 
 		default:
@@ -990,7 +1100,7 @@ l2fwd_policer_free_id(int port_id,
 
 static void
 l2fwd_policer_meter_mark_action_config(uint16_t port_id,
-	struct l2fwd_policer_port_params *param,
+	struct l2fwd_policer_meter_param *param,
 	struct rte_flow_action *action,
 	struct rte_flow_action_meter_mark *action_meter_mark)
 {
@@ -1016,7 +1126,7 @@ l2fwd_policer_meter_mark_action_config(uint16_t port_id,
 
 static void
 l2fwd_policer_meter_action_config(uint16_t port_id,
-	struct l2fwd_policer_port_params *param,
+	struct l2fwd_policer_meter_param *param,
 	struct rte_flow_action *action,
 	struct rte_flow_action_meter *action_meter)
 {
@@ -1030,147 +1140,238 @@ l2fwd_policer_meter_action_config(uint16_t port_id,
 	action->conf = action_meter;
 }
 
-/*
- * Creating maximum 8 classification flows based on
- * vlan priorities mapped to 8 TCs respectively.
- */
-
-#define MAX_PATTERN_NUM 4
-static void
-l2fwd_policer_vlan_flow_config(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
+static int
+l2fwd_policer_fs_flow_action_update(uint16_t port_id,
+	void *flow, uint16_t queue_id)
 {
-	struct rte_flow_item_vlan vlan_item[MAX_PATTERN_NUM];
-	struct rte_flow_item_vlan vlan_mask[MAX_PATTERN_NUM];
-	struct rte_flow_action flow_action[MAX_PATTERN_NUM];
-	struct rte_flow_item flow_item[MAX_PATTERN_NUM];
-	struct rte_flow_action_queue dest_queue;
-	struct rte_flow_attr flow_attr;
-	struct rte_flow_error error;
-	uint16_t prio, tc, vlan_id;
-	int ret;
-	struct rte_flow_action_meter_mark action_meter_mark;
-	struct rte_flow_action_meter action_meter;
-	struct l2fwd_policer_tc_flow *tc_flow;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_queue action_queue;
 
-	memset(&flow_attr, 0, sizeof(struct rte_flow_attr));
-	memset(flow_item, 0, MAX_PATTERN_NUM * sizeof(struct rte_flow_item));
-	memset(flow_action, 0, MAX_PATTERN_NUM * sizeof(struct rte_flow_action));
-	memset(&error, 0, sizeof(struct rte_flow_error));
-	memset(vlan_item, 0, sizeof(vlan_item));
-	memset(vlan_mask, 0, sizeof(vlan_mask));
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+	action_queue.index = queue_id;
+	flow_action[0].conf = &action_queue;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
 
-	for (tc = 0; tc < POLICER_TC_MAX_NUM; tc++) {
-		tc_flow = &param->tc_flow[tc];
-		if (!tc_flow->valid)
-			continue;
-
-		vlan_id = tc_flow->vlan_id;
-		flow_attr.ingress = 1;
-
-		/* RXQ0 is in TC0,  RXQ1 is in TC1 and so on*/
-		flow_attr.group = tc;
-		/* priority is set to 0 because using single queue of TC.*/
-		tc_flow->qidx = 0;
-		flow_attr.priority = param->flow_ids[tc][tc_flow->qidx];
-		dest_queue.index = param->queue_ids[tc][tc_flow->qidx];
-
-		prio = l2fwd_policer_tc_map_vlan_prio(tc);
-		vlan_item[0].hdr.vlan_tci = rte_cpu_to_be_16(prio + vlan_id);
-		vlan_item[0].hdr.eth_proto = rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN);
-		vlan_mask[0].hdr.vlan_tci = RTE_BE16(0xffff);
-
-		flow_item[0].spec = &vlan_item[0];
-		flow_item[0].mask = &vlan_mask[0];
-		flow_item[0].type = RTE_FLOW_ITEM_TYPE_VLAN;
-		flow_item[1].type = RTE_FLOW_ITEM_TYPE_END;
-		flow_action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-		flow_action[0].conf = &dest_queue;
-		if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK) {
-			l2fwd_policer_meter_mark_action_config(port_id,
-				param, &flow_action[1], &action_meter_mark);
-			flow_action[2].type = RTE_FLOW_ACTION_TYPE_END;
-		} else if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER) {
-			l2fwd_policer_meter_action_config(port_id,
-				param, &flow_action[1], &action_meter);
-			flow_action[2].type = RTE_FLOW_ACTION_TYPE_END;
-		} else {
-			flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
-		}
-
-		/* validate and create the flow rule */
-		ret = rte_flow_validate(port_id, &flow_attr, flow_item,
-			flow_action, &error);
-		if (ret) {
-			RTE_LOG(ERR, L2FWD_POLICER,
-				"flow validate failed(%d) on port%d-TC%d\n",
-				ret, port_id, tc);
-			continue;
-		}
-		tc_flow->flow = rte_flow_create(port_id,
-			&flow_attr, flow_item, flow_action, &error);
-		if (!tc_flow->flow) {
-			rte_exit(EXIT_FAILURE,
-				"Cannot create flow to TC%d/flow%d on port=%d\n",
-				tc, param->flow_ids[tc][tc_flow->qidx], port_id);
-		}
-		RTE_LOG(INFO, L2FWD_POLICER,
-			"vLAN(%04x)Flow created on port%d-TC%d-flow%d(rxq%d)\n",
-			prio + vlan_id, port_id, tc,
-			param->flow_ids[tc][tc_flow->qidx],
-			param->queue_ids[tc][tc_flow->qidx]);
-	}
+	return rte_flow_actions_update(port_id, flow,
+		flow_action, NULL);
 }
 
-static void
-_l2fwd_policer_flow_action_update(uint16_t port_id,
-	struct l2fwd_policer_port_params *param,
-	struct l2fwd_policer_tc_flow *tc_flow, uint16_t tc,
-	int queue_update)
+static void *
+l2fwd_policer_fs_flow_item_update(uint16_t port_id,
+	struct rte_flow_item *pattern, void *flow,
+	uint16_t tc_id, uint16_t flow_id,
+	int flow_tb_level)
 {
-	uint16_t idx = 0, qidx;
-	struct rte_flow_action flow_action[MAX_PATTERN_NUM];
-	struct rte_flow_action_queue dest_queue;
-	struct rte_flow_action_meter action_meter;
-	struct rte_flow_action_meter_mark action_meter_mark;
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_queue action_queue;
 	int ret;
 
-	memset(flow_action, 0, sizeof(flow_action));
-	if (queue_update) {
-		qidx = tc_flow->qidx;
-		qidx++;
-		if (qidx >= param->queue_num[tc])
-			qidx = 0;
-		tc_flow->qidx = qidx;
-		tc_flow->flow_id = param->flow_ids[tc][qidx];
-		dest_queue.index = param->queue_ids[tc][qidx];
-		flow_action[idx].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-		flow_action[idx].conf = &dest_queue;
-		idx++;
-	}
-	if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER) {
-		l2fwd_policer_meter_action_config(port_id,
-			param, &flow_action[idx], &action_meter);
-		idx++;
-	} else if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK) {
-		l2fwd_policer_meter_mark_action_config(port_id,
-			param, &flow_action[idx], &action_meter_mark);
-		idx++;
-	}
-	flow_action[idx].type = RTE_FLOW_ACTION_TYPE_END;
+	memset(&flow_attr, 0, sizeof(struct rte_flow_attr));
+	flow_attr.ingress = 1;
 
-	ret = rte_flow_actions_update(port_id, tc_flow->flow,
-			flow_action, NULL);
+	flow_attr.group = tc_id;
+	flow_attr.priority = 0;
+
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+	action_queue.index = flow_id;
+	flow_action[0].conf = &action_queue;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	ret = rte_flow_destroy(port_id, flow, NULL);
+	if (ret)
+		return NULL;
+
+	if (flow_tb_level > 1)
+		rte_dpaa2_fs_flow_attr_set(&flow_attr);
+
+	return rte_flow_create(port_id, &flow_attr, pattern, flow_action, NULL);
+}
+
+static void *
+l2fwd_policer_qos_flow_item_update(uint16_t port_id,
+	struct rte_flow_item *pattern, void *flow, uint8_t tc,
+	uint16_t max_tcs)
+{
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_jump action_jump;
+	int ret;
+
+	memset(&flow_attr, 0, sizeof(struct rte_flow_attr));
+	flow_attr.ingress = 1;
+
+	/** The grounp ID > any TC ID, which means the flow is QoS flow.*/
+	flow_attr.group = max_tcs;
+	flow_attr.priority = 0; /** Ignore for QoS flow.*/
+
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+	action_jump.group = tc;
+	flow_action[0].conf = &action_jump;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	ret = rte_flow_destroy(port_id, flow, NULL);
+	if (ret)
+		return NULL;
+	rte_dpaa2_qos_flow_attr_set(&flow_attr);
+
+	return rte_flow_create(port_id, &flow_attr, pattern, flow_action, NULL);
+}
+
+static struct rte_flow *
+l2fwd_policer_qos_flow_vlan_config(uint16_t port_id,
+	uint16_t tc, uint16_t vlan_id)
+{
+	uint16_t prio;
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_item_vlan vlan_item;
+	struct rte_flow_item_vlan vlan_mask;
+	struct rte_flow_item flow_item[MAX_ITEM_NUM];
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_jump action_jump;
+	struct rte_flow *qos_flow;
+
+	memset(&flow_attr, 0, sizeof(struct rte_flow_attr));
+	flow_attr.ingress = 1;
+
+	/** Ignore group and priority of attr.
+	 * flow_attr.group = xxx;
+	 * flow_attr.priority = xxx;
+	 */
+	prio = l2fwd_policer_tc_map_vlan_prio(tc);
+	memset(&vlan_item, 0, sizeof(struct rte_flow_item_vlan));
+	memset(&vlan_mask, 0, sizeof(struct rte_flow_item_vlan));
+	vlan_item.hdr.vlan_tci = rte_cpu_to_be_16(prio + vlan_id);
+	vlan_item.hdr.eth_proto = rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN);
+	vlan_mask.hdr.vlan_tci = RTE_BE16(0xffff);
+
+	flow_item[0].spec = &vlan_item;
+	flow_item[0].mask = &vlan_mask;
+	flow_item[0].type = RTE_FLOW_ITEM_TYPE_VLAN;
+	flow_item[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+	action_jump.group = tc;
+	flow_action[0].conf = &action_jump;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	rte_dpaa2_qos_flow_attr_set(&flow_attr);
+	qos_flow = rte_flow_create(port_id,
+		&flow_attr, flow_item, flow_action, NULL);
+	if (!qos_flow) {
+		rte_exit(EXIT_FAILURE,
+			"Cannot create QoS flow of TC%d on port=%d\n",
+			tc, port_id);
+	}
+	RTE_LOG(INFO, L2FWD_POLICER,
+		"Create port%d QoS flow to direct tci=0x%04x traffic to TC%d\n",
+		port_id, prio + vlan_id, tc);
+	return qos_flow;
+}
+
+static struct rte_flow *
+l2fwd_policer_meter_flow_create(uint16_t port_id,
+	uint16_t tc, struct l2fwd_policer_meter_param *meter_param,
+	int flow_tb_level)
+{
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_meter action_meter;
+	struct rte_flow_action_meter_mark action_meter_mark;
+	struct rte_flow *meter_flow;
+
+	if (s_meter_action != RTE_FLOW_ACTION_TYPE_METER_MARK &&
+		s_meter_action != RTE_FLOW_ACTION_TYPE_METER)
+		return NULL;
+
+	memset(&flow_attr, 0, sizeof(struct rte_flow_attr));
+	flow_attr.ingress = 1;
+
+	flow_attr.group = tc;
+	flow_attr.priority = 0; /** Ignore for QoS flow.*/
+
+	if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK) {
+		l2fwd_policer_meter_mark_action_config(port_id,
+			meter_param, &flow_action[0], &action_meter_mark);
+		flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+	} else if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER) {
+		l2fwd_policer_meter_action_config(port_id,
+			meter_param, &flow_action[0], &action_meter);
+		flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+	}
+
+	if (flow_tb_level > 1)
+		rte_dpaa2_fs_flow_attr_set(&flow_attr);
+	meter_flow = rte_flow_create(port_id,
+		&flow_attr, NULL, flow_action, NULL);
+	if (!meter_flow) {
+		rte_exit(EXIT_FAILURE,
+			"Cannot create meter flow of TC%d on port=%d\n",
+			tc, port_id);
+	}
+	RTE_LOG(INFO, L2FWD_POLICER,
+		"Create meter flow of port%d-TC%d\n", port_id, tc);
+
+	return meter_flow;
+}
+
+static struct rte_flow *
+l2fwd_policer_fs_flow_config(uint16_t port_id,
+	uint16_t tc, uint16_t flow_id, uint16_t queue_id)
+{
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_item_ipv4 ipv4_item;
+	struct rte_flow_item_ipv4 ipv4_mask;
+	struct rte_flow_item flow_item[MAX_ITEM_NUM];
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_queue dest_queue;
+	int ret;
+	struct rte_flow *fs_flow;
+
+	memset(&flow_attr, 0, sizeof(flow_attr));
+	flow_attr.ingress = 1;
+
+	flow_attr.group = tc;
+	flow_attr.priority = flow_id;
+	dest_queue.index = queue_id;
+	memset(&ipv4_item, 0, sizeof(struct rte_flow_item_ipv4));
+	memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
+	ipv4_item.hdr.src_addr = rte_cpu_to_be_32(flow_id);
+	ipv4_mask.hdr.src_addr = rte_cpu_to_be_32(0xff);
+
+	flow_item[0].spec = &ipv4_item;
+	flow_item[0].mask = &ipv4_mask;
+	flow_item[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
+	flow_item[1].type = RTE_FLOW_ITEM_TYPE_END;
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+	flow_action[0].conf = &dest_queue;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	/* validate and create the flow rule */
+	ret = rte_flow_validate(port_id, &flow_attr, flow_item,
+		flow_action, NULL);
 	if (ret) {
 		RTE_LOG(ERR, L2FWD_POLICER,
-			"Update port%d-flow%d action failed(%d)\n",
-			port_id, tc_flow->flow_id, ret);
+			"flow validate failed(%d) on port%d-TC%d\n",
+			ret, port_id, tc);
+		return NULL;
 	}
+
+	rte_dpaa2_fs_flow_attr_set(&flow_attr);
+	fs_flow = rte_flow_create(port_id,
+		&flow_attr, flow_item, flow_action, NULL);
+	if (fs_flow) {
+		RTE_LOG(INFO, L2FWD_POLICER,
+			"Create port%d-TC%d-flow%d to direct x.x.x.%d to queue%d\n",
+			port_id, tc, flow_id, flow_id, queue_id);
+	}
+
+	return fs_flow;
 }
 
 static uint32_t *
 l2fwd_policer_meter_profile_create(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
+	struct l2fwd_policer_meter_param *param)
 {
 	uint32_t *new_mp_id;
 	struct rte_mtr_meter_profile mp;
@@ -1209,9 +1410,27 @@ l2fwd_policer_meter_profile_create(uint16_t port_id,
 	return new_mp_id;
 }
 
+static void
+l2fwd_policer_meter_profile_del(uint16_t port_id,
+	uint32_t *profile_id)
+{
+	int ret;
+
+	if (!profile_id)
+		return;
+
+	ret = rte_mtr_meter_profile_delete(port_id, *profile_id, NULL);
+	if (ret) {
+		rte_exit(EXIT_FAILURE,
+			"Port %u meter Profile delete failed(%d)\n",
+			port_id, ret);
+	}
+	l2fwd_policer_free_id(port_id, profile_id, POLICER_PROFILE_ID_TYPE);
+}
+
 static uint32_t *
 l2fwd_policer_meter_policy_create(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
+	struct l2fwd_policer_meter_param *param)
 {
 	uint32_t *new_mpol_id;
 	struct rte_mtr_meter_policy_params mpol;
@@ -1243,53 +1462,32 @@ l2fwd_policer_meter_policy_create(uint16_t port_id,
 }
 
 static void
-l2fwd_policer_meter_profile_del(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
-{
-	int ret;
-
-	if (param->profile_id) {
-		ret = rte_mtr_meter_profile_delete(port_id,
-			*param->profile_id, NULL);
-		if (ret) {
-			rte_exit(EXIT_FAILURE,
-				"Port %u meter Profile delete failed(%d)\n",
-				port_id, ret);
-		}
-		l2fwd_policer_free_id(port_id, param->profile_id,
-			POLICER_PROFILE_ID_TYPE);
-		param->profile_id = NULL;
-	}
-}
-
-static void
 l2fwd_policer_meter_policy_del(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
+	uint32_t *policy_id)
 {
 	int ret;
 
-	if (param->policy_id) {
-		ret = rte_mtr_meter_policy_delete(port_id,
-			*param->policy_id, NULL);
-		if (ret) {
-			rte_exit(EXIT_FAILURE,
-				"Port %u meter Policy delete failed(%d)\n",
-				port_id, ret);
-		}
-		l2fwd_policer_free_id(port_id, param->policy_id,
-			POLICER_POLICY_ID_TYPE);
-		param->policy_id = NULL;
+	if (!policy_id)
+		return;
+
+	ret = rte_mtr_meter_policy_delete(port_id, *policy_id, NULL);
+	if (ret) {
+		rte_exit(EXIT_FAILURE,
+			"Port %u meter Policy delete failed(%d)\n",
+			port_id, ret);
 	}
+	l2fwd_policer_free_id(port_id, policy_id, POLICER_POLICY_ID_TYPE);
 }
 
 static void
 l2fwd_policer_meter_update(uint16_t port_id,
-	struct l2fwd_policer_port_params *param, uint8_t update)
+	struct l2fwd_policer_meter_param *param, uint8_t update,
+	uint32_t **old_profile_id, uint32_t **old_policy_id)
 {
 	uint32_t *mpof_id, *mpol_id;
 	int ret;
 
-	if (update & POLICER_PROFILE_UPDATE) {
+	if (update & ACTION_POLICER_PROFILE_UPDATE) {
 		mpof_id = l2fwd_policer_meter_profile_create(port_id, param);
 		if (!mpof_id) {
 			rte_exit(EXIT_FAILURE,
@@ -1305,11 +1503,12 @@ l2fwd_policer_meter_update(uint16_t port_id,
 					port_id, ret);
 			}
 		}
-		l2fwd_policer_meter_profile_del(port_id, param);
+		if (old_profile_id)
+			*old_profile_id = param->profile_id;
 		param->profile_id = mpof_id;
 	}
 
-	if (update & POLICER_POLICY_UPDATE) {
+	if (update & ACTION_POLICER_POLICY_UPDATE) {
 		mpol_id = l2fwd_policer_meter_policy_create(port_id, param);
 		if (!mpol_id) {
 			rte_exit(EXIT_FAILURE,
@@ -1325,14 +1524,15 @@ l2fwd_policer_meter_update(uint16_t port_id,
 					port_id, ret);
 			}
 		}
-		l2fwd_policer_meter_policy_del(port_id, param);
+		if (old_policy_id)
+			*old_policy_id = param->policy_id;
 		param->policy_id = mpol_id;
 	}
 }
 
 static void
 l2fwd_policer_meter_init(uint16_t port_id,
-	struct l2fwd_policer_port_params *param)
+	struct l2fwd_policer_meter_param *param)
 {
 	struct rte_mtr_params mp;
 	int ret;
@@ -1344,7 +1544,8 @@ l2fwd_policer_meter_init(uint16_t port_id,
 	param->red_action.type = s_red_action;
 	if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK) {
 		l2fwd_policer_meter_update(port_id, param,
-			POLICER_PROFILE_UPDATE | POLICER_POLICY_UPDATE);
+			ACTION_POLICER_PROFILE_UPDATE |
+			ACTION_POLICER_POLICY_UPDATE, NULL, NULL);
 		return;
 	}
 
@@ -1382,60 +1583,840 @@ l2fwd_policer_meter_init(uint16_t port_id,
 	}
 }
 
-static void
-l2fwd_policer_flow_action_update(uint16_t port_id,
-	struct l2fwd_policer_port_params *param,
-	uint8_t update, int queue_update)
+static void *
+l2fwd_policer_one_level_flow_config(uint16_t port_id,
+	uint16_t tc, uint16_t vlan_id, uint16_t flow_id, uint16_t queue_id)
 {
-	uint16_t tc = 0;
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_item_vlan vlan_item;
+	struct rte_flow_item_vlan vlan_mask;
+	struct rte_flow_item_ipv4 ipv4_item;
+	struct rte_flow_item_ipv4 ipv4_mask;
+	struct rte_flow_item flow_item[MAX_ITEM_NUM];
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_queue dest_queue;
+	int ret;
+	void *_flow;
+	uint16_t prio;
 
-	l2fwd_policer_meter_update(port_id, param, update);
+	memset(&flow_attr, 0, sizeof(flow_attr));
+	flow_attr.ingress = 1;
 
-	for (tc = 0; tc < POLICER_TC_MAX_NUM; tc++) {
-		if (!param->tc_flow[tc].valid)
+	flow_attr.group = tc;
+	flow_attr.priority = flow_id;
+	dest_queue.index = queue_id;
+
+	prio = l2fwd_policer_tc_map_vlan_prio(tc);
+	memset(&vlan_item, 0, sizeof(struct rte_flow_item_vlan));
+	memset(&vlan_mask, 0, sizeof(struct rte_flow_item_vlan));
+	vlan_item.hdr.vlan_tci = rte_cpu_to_be_16(prio + vlan_id);
+	vlan_item.hdr.eth_proto = rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN);
+	vlan_mask.hdr.vlan_tci = RTE_BE16(0xffff);
+	flow_item[0].spec = &vlan_item;
+	flow_item[0].mask = &vlan_mask;
+	flow_item[0].type = RTE_FLOW_ITEM_TYPE_VLAN;
+
+	memset(&ipv4_item, 0, sizeof(struct rte_flow_item_ipv4));
+	memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
+	ipv4_item.hdr.src_addr = rte_cpu_to_be_32(flow_id);
+	ipv4_mask.hdr.src_addr = rte_cpu_to_be_32(0xff);
+	flow_item[1].spec = &ipv4_item;
+	flow_item[1].mask = &ipv4_mask;
+	flow_item[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+	flow_item[2].type = RTE_FLOW_ITEM_TYPE_END;
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+	flow_action[0].conf = &dest_queue;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	/* validate and create the flow rule */
+	ret = rte_flow_validate(port_id, &flow_attr, flow_item,
+			flow_action, NULL);
+	if (ret) {
+		RTE_LOG(ERR, L2FWD_POLICER,
+			"flow validate failed(%d) on port%d-TC%d\n",
+			ret, port_id, tc);
+		return NULL;
+	}
+
+	_flow = rte_flow_create(port_id, &flow_attr, flow_item,
+		flow_action, NULL);
+	if (_flow) {
+		RTE_LOG(INFO, L2FWD_POLICER,
+			"Create port%d-TC%d-flow%d to direct x.x.x.%d to queue%d\n",
+			port_id, tc, flow_id, flow_id, queue_id);
+	}
+
+	return _flow;
+}
+
+static void
+l2fwd_policer_flow_init_config(uint16_t port_id,
+	struct l2fwd_policer_port_params *param)
+{
+	uint16_t tc, i;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	int ret;
+	struct l2fwd_policer_tc_desc *tc_desc;
+
+	for (tc = 0; tc < param->max_tcs; tc++) {
+		tc_desc = &param->tc_descs[tc];
+		if (!tc_desc->valid)
 			continue;
-		_l2fwd_policer_flow_action_update(port_id, param,
-			&param->tc_flow[tc], tc, queue_update);
+
+		if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER ||
+			s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK)
+			l2fwd_policer_meter_init(port_id, &tc_desc->meter_param);
+
+		if (param->flow_tb_level == 1) {
+			for (i = 0; i < tc_desc->queue_max_num; i++) {
+				tc_desc->one_level_flows[i] =
+					l2fwd_policer_one_level_flow_config(port_id, tc,
+						s_vlan_id, i, tc_desc->tc_queue_ids[i]);
+				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[i];
+			}
+		} else {
+			param->qos_flows[tc] = l2fwd_policer_qos_flow_vlan_config(port_id,
+				tc, s_vlan_id);
+			param->tc_ids[tc] = tc;
+			tc_desc = &param->tc_descs[tc];
+			tc_desc->meter_flow = l2fwd_policer_meter_flow_create(port_id,
+				tc, &tc_desc->meter_param, param->flow_tb_level);
+			for (i = 0; i < tc_desc->queue_max_num; i++) {
+				tc_desc->fs_flows[i] = l2fwd_policer_fs_flow_config(port_id,
+					tc, i, tc_desc->tc_queue_ids[i]);
+				if (!tc_desc->fs_flows[i]) {
+					rte_exit(EXIT_FAILURE,
+						"Cannot create FS flow[%d] of TC%d on port=%d\n",
+						i, tc, port_id);
+				}
+				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[i];
+			}
+		}
+		tc_desc->miss_drop = s_miss_drop;
+		tc_desc->default_queue =
+			tc_desc->tc_queue_ids[tc_desc->queue_max_num - 1];
+		if (tc_desc->miss_drop) {
+			flow_action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+			flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+			ret = rte_flow_group_set_miss_actions(port_id,
+				tc, NULL, flow_action, NULL);
+			if (ret) {
+				rte_exit(EXIT_FAILURE,
+					"Set miss action of TC%d on port=%d\n", tc, port_id);
+			}
+		}
+	}
+
+	if (param->miss_drop) {
+		flow_action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+		flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+		ret = rte_flow_group_set_miss_actions(port_id,
+			param->max_tcs, NULL, flow_action, NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Set miss action of QoS on port=%d\n", port_id);
+		}
 	}
 }
 
 static void
-l2fwd_policer_update_policer(int queue_update)
+l2fwd_policer_meter_action_update(uint16_t port_id,
+	uint8_t tc, uint32_t update, int flow_tb_level)
 {
-	uint16_t portid;
-	uint8_t update;
+	int ret, idx;
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct l2fwd_policer_tc_desc *tc_desc;
+	struct rte_flow_action_meter action_meter;
+	struct rte_flow_action_meter_mark action_meter_mark;
+	struct rte_flow_attr flow_attr;
 
-	RTE_ETH_FOREACH_DEV(portid) {
-		/* skip disabled port */
-		if (!(l2fwd_policer_enabled_port_mask & (1 << portid)))
-			continue;
+	tc_desc = &s_port_param[port_id].tc_descs[tc];
 
-		update = 0;
-		if (s_port_param[portid].trtcm.cir != s_cir_update ||
-			s_port_param[portid].trtcm.cbs != s_cbs_update ||
-			s_port_param[portid].trtcm.pir != s_pir_update ||
-			s_port_param[portid].trtcm.pbs != s_pbs_update)
-			update |= POLICER_PROFILE_UPDATE;
-		if (s_port_param[portid].red_action.type != s_red_action_update)
-			update |= POLICER_POLICY_UPDATE;
-		if (!update && !queue_update)
-			continue;
+	flow_attr.ingress = 1;
+	flow_attr.group = tc;
+	flow_attr.priority = 0;
 
-		s_port_param[portid].trtcm.cir = s_cir_update;
-		s_port_param[portid].trtcm.cbs = s_cbs_update;
-		s_port_param[portid].trtcm.pir = s_pir_update;
-		s_port_param[portid].trtcm.pbs = s_pbs_update;
-		s_port_param[portid].red_action.type = s_red_action_update;
-		l2fwd_policer_flow_action_update(portid,
-			&s_port_param[portid], update, queue_update);
+	idx = 0;
+	memset(&flow_action, 0, sizeof(flow_action));
+	if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER &&
+		(update & (ACTION_POLICER_PROFILE_UPDATE |
+		ACTION_POLICER_POLICY_UPDATE))) {
+		l2fwd_policer_meter_action_config(port_id,
+			&tc_desc->meter_param, &flow_action[idx],
+			&action_meter);
+		idx++;
+	} else if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK &&
+		(update & (ACTION_POLICER_PROFILE_UPDATE |
+		ACTION_POLICER_POLICY_UPDATE))) {
+		l2fwd_policer_meter_mark_action_config(port_id,
+			&tc_desc->meter_param, &flow_action[idx],
+			&action_meter_mark);
+		idx++;
+	}
+	flow_action[idx].type = RTE_FLOW_ACTION_TYPE_END;
+
+	if (idx <= 0)
+		return;
+
+	if (tc_desc->meter_flow) {
+		ret = rte_flow_actions_update(port_id,
+			tc_desc->meter_flow, flow_action, NULL);
+		if (ret) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"Update port%d-tc%d flow meter failed(%d)\n",
+				port_id, tc, ret);
+		}
+	} else {
+		if (flow_tb_level > 1)
+			rte_dpaa2_fs_flow_attr_set(&flow_attr);
+		tc_desc->meter_flow = rte_flow_create(port_id,
+			&flow_attr, NULL, flow_action, NULL);
+	}
+}
+
+static void
+l2fwd_policer_qos_flow_update(uint16_t portid,
+	uint32_t update)
+{
+	uint8_t idx, tc;
+	void *flow;
+	int ret;
+	struct rte_flow_action actions[MAX_ACTION_NUM];
+	struct rte_flow_action_jump action_jump;
+
+	if ((update & ACTION_QOS_JUMP_UPDATE) &&
+		s_port_param[portid].flow_tb_level == 1) {
+		RTE_LOG(WARNING, L2FWD_POLICER,
+			"QoS flow jump doesn't support with one-level table\n");
+	} else if (update & ACTION_QOS_JUMP_UPDATE) {
+		/**TBD*/
+		;
+	}
+
+	if (update & ACTION_MISS_QOS_UPDATE) {
+		if (s_port_param[portid].default_tc >=
+			s_port_param[portid].max_tcs) {
+			actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+		} else {
+			action_jump.group = s_port_param[portid].default_tc;
+			actions[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+			actions[0].conf = &action_jump;
+		}
+		actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+		ret = rte_flow_group_set_miss_actions(portid,
+			s_port_param[portid].max_tcs, NULL, actions, NULL);
+		RTE_ASSERT(!ret);
+		RTE_SET_USED(ret);
+	}
+
+	if ((update & ITEM_QOS_FLOW_UPDATE) &&
+		s_port_param[portid].flow_tb_level == 1) {
+		RTE_LOG(WARNING, L2FWD_POLICER,
+			"QoS flow item update doesn't support with one-level table\n");
+	} else if (update & ITEM_QOS_FLOW_UPDATE) {
+		idx = s_port_param[portid].qos_update_idx;
+		tc = s_port_param[portid].tc_ids[idx];
+		flow = l2fwd_policer_qos_flow_item_update(portid,
+			s_port_param[portid].qos_update_pattern,
+			s_port_param[portid].qos_flows[idx], tc,
+			s_port_param[portid].max_tcs);
+		RTE_ASSERT(flow);
+		s_port_param[portid].qos_flows[idx] = flow;
+	}
+}
+
+static void
+l2fwd_policer_tc_meter_update(uint16_t portid,
+	uint8_t tc, uint32_t update)
+{
+	uint32_t *old_profile_id, *old_policy_id;
+	struct l2fwd_policer_tc_desc *tc_desc;
+
+	tc_desc = &s_port_param[portid].tc_descs[tc];
+	old_profile_id = NULL;
+	old_policy_id = NULL;
+	l2fwd_policer_meter_update(portid, &tc_desc->meter_param, update,
+		&old_profile_id, &old_policy_id);
+	l2fwd_policer_meter_action_update(portid, tc, update,
+		s_port_param[portid].flow_tb_level);
+	l2fwd_policer_meter_profile_del(portid, old_profile_id);
+	l2fwd_policer_meter_policy_del(portid, old_policy_id);
+}
+
+static void
+l2fwd_policer_tc_flow_update(uint16_t portid,
+	uint8_t tc, uint32_t update)
+{
+	uint8_t idx;
+	uint16_t queue_id;
+	void *flow;
+	int ret;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	struct rte_flow_action actions[MAX_ACTION_NUM];
+	struct rte_flow_action_queue action_queue;
+
+	if (tc >= s_port_param[portid].max_tcs)
+		return;
+
+	tc_desc = &s_port_param[portid].tc_descs[tc];
+	if (update & (ACTION_POLICER_PROFILE_UPDATE |
+		ACTION_POLICER_POLICY_UPDATE))
+		l2fwd_policer_tc_meter_update(portid, tc, update);
+
+	if (update & ITEM_FS_FLOW_UPDATE) {
+		idx = tc_desc->item_update_idx;
+		flow = l2fwd_policer_fs_flow_item_update(portid,
+			tc_desc->fs_update_pattern,
+			s_port_param[portid].flow_tb_level == 1 ?
+			tc_desc->one_level_flows[idx] :
+			tc_desc->fs_flows[idx], tc,
+			tc_desc->flow_queue_ids[idx],
+			s_port_param[portid].flow_tb_level);
+		RTE_ASSERT(flow);
+		if (s_port_param[portid].flow_tb_level == 1)
+			tc_desc->one_level_flows[idx] = flow;
+		else
+			tc_desc->fs_flows[idx] = flow;
+	}
+
+	if (update & ACTION_MISS_FS_UPDATE) {
+		if (tc_desc->miss_drop) {
+			actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+		} else {
+			action_queue.index = tc_desc->default_queue;
+			actions[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+			actions[0].conf = &action_queue;
+		}
+		actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+		ret = rte_flow_group_set_miss_actions(portid, tc,
+			NULL, actions, NULL);
+		RTE_ASSERT(!ret);
+		RTE_SET_USED(ret);
+	}
+
+	if (update & ACTION_FS_QUEUE_UPDATE) {
+		idx = tc_desc->action_update_idx;
+		queue_id = tc_desc->flow_queue_ids[idx];
+		if (s_port_param[portid].flow_tb_level == 1)
+			flow = tc_desc->one_level_flows[idx];
+		else
+			flow = tc_desc->fs_flows[idx];
+		ret = l2fwd_policer_fs_flow_action_update(portid,
+			flow, queue_id);
+		if (ret) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"Update port%d-tc%d-flow%d action failed(%d)\n",
+				portid, tc, idx, ret);
+		}
+	}
+}
+
+static int
+l2fwd_policer_runtime_update_select_port(uint16_t *portid)
+{
+	int off = 0, i, port_update = -1;
+	char command[256];
+	char range[1024];
+	char *endp;
+
+	memset(range, 0, sizeof(range));
+	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
+		if (s_port_param[i].enable && !off)
+			off += sprintf(&range[off], "%d,", i);
+		else if (s_port_param[i].enable)
+			off += sprintf(&range[off], " %d,", i);
+	}
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	fprintf(stdout,
+		"Enter Port ID to update: range[%s]: ", range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		port_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return -EAGAIN;
+		if (port_update >= RTE_MAX_ETHPORTS ||
+			!s_port_param[port_update].enable) {
+			fprintf(stderr, "Invalid Port(%d)\n", port_update);
+			return -EINVAL;
+		}
+	}
+
+	if (port_update >= 0) {
+		*portid = port_update;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static void
+l2fwd_policer_runtime_qos_miss_update(uint16_t portid,
+	uint32_t *update)
+{
+	int off = 0, drop = false;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	uint8_t default_tc;
+
+	port_param = &s_port_param[portid];
+
+	memset(range, 0, sizeof(range));
+	off = sprintf(range, "0 ~ %d", port_param->max_tcs - 1);
+	off += sprintf(&range[off], " drop >= %d,", port_param->max_tcs);
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	default_tc = port_param->default_tc;
+	if (port_param->miss_drop) {
+		fprintf(stdout,
+			"\r\nEnter miss TC ID of port%d to update:(default=drop) range[%s]: ",
+			portid, range);
+	} else {
+		fprintf(stdout,
+			"\r\nEnter miss TC ID of port%d to update:(default=%d) range[%s]: ",
+			portid, default_tc, range);
+	}
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		default_tc = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (default_tc >= port_param->max_tcs)
+			drop = true;
+
+		if (drop == true) {
+			if (port_param->miss_drop == false) {
+				*update |= ACTION_MISS_QOS_UPDATE;
+				port_param->miss_drop = true;
+			}
+		} else if (port_param->default_tc != default_tc) {
+			*update |= ACTION_MISS_QOS_UPDATE;
+			port_param->default_tc = default_tc;
+		}
+	}
+}
+
+static void
+l2fwd_policer_runtime_qos_flow_item_update(uint16_t portid,
+	uint32_t *update)
+{
+	int off = 0, idx = -1, i, max_num = 0, item_update = -1, ret;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+
+	port_param = &s_port_param[portid];
+
+	off = 0;
+	memset(range, 0, sizeof(range));
+	for (i = 0; i < port_param->max_qos_entries; i++) {
+		if (port_param->qos_flows[i])
+			max_num++;
+	}
+	off += sprintf(&range[off], "0 ~ %d,", max_num - 1);
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	fprintf(stdout,
+		"\r\nEnter QoS flow index of port%d to update item(s): range[%s]: ",
+		portid, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		idx = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (idx >= max_num) {
+			fprintf(stderr, "Invalid QoS flow index(%d) >= %d\n",
+				idx, max_num);
+			return;
+		}
+	}
+
+	if (idx < 0)
+		return;
+
+	off = 0;
+	for (i = 0; i < (int)RTE_DIM(s_qos_item_update); i++) {
+		off += sprintf(&range[off], "%s/%s:%d, ",
+			s_qos_item_update[i].item_protocol,
+			s_qos_item_update[i].item_field, i);
+	}
+	off += sprintf(&range[off], "%s", POLICER_UPDATE_SKIP_HINT);
+
+	fprintf(stdout,
+		"Enter index of QoS item of port%d to update item(s): [%s]: ",
+		portid, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		item_update = strtoul(command, &endp, 10);
+		if (errno || command == endp ||
+			item_update >= (int)RTE_DIM(s_qos_item_update))
+			return;
+	}
+	if (item_update < 0)
+		return;
+
+	fprintf(stdout, "Enter format: %s: ",
+		s_qos_item_update[item_update].input_format);
+	if (fgets(command, 256, stdin)) {
+		ret = s_qos_item_update[item_update].item_parse(command,
+			&s_qos_item_update[item_update]);
+		if (ret) {
+			fprintf(stderr, "parse item failed!\n");
+			return;
+		}
+		port_param->qos_update_pattern =
+			s_qos_item_update[item_update].pattern;
+		port_param->qos_update_idx = idx;
+		*update |= ITEM_QOS_FLOW_UPDATE;
+	}
+}
+
+static int
+l2fwd_policer_runtime_update_select_tc(uint16_t portid,
+	uint8_t *tc)
+{
+	int tc_update = -1, off = 0;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+
+	port_param = &s_port_param[portid];
+
+	memset(range, 0, sizeof(range));
+	off += sprintf(&range[off], "0 ~ %d,", port_param->max_tcs - 1);
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	fprintf(stdout,
+		"\r\nEnter TC ID to update: range[%s]: ", range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		tc_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return -EAGAIN;
+		if (tc_update >= port_param->max_tcs) {
+			fprintf(stderr, "Invalid TC ID(%d) >= %d\n",
+				tc_update, port_param->max_tcs);
+			return -EINVAL;
+		}
+	}
+
+	*tc = tc_update;
+	if (tc_update >= 0)
+		return 0;
+
+	return -EINVAL;
+}
+
+static void
+l2fwd_policer_runtime_fs_miss_update(uint16_t portid,
+	uint16_t tc, uint32_t *update)
+{
+	int off = 0, i, drop = false;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	uint16_t default_queue;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	memset(range, 0, sizeof(range));
+	off = 0;
+	for (i = 0; i < tc_desc->queue_max_num; i++) {
+		off += sprintf(&range[off], "%d, ",
+			tc_desc->tc_queue_ids[i]);
+	}
+	off += sprintf(&range[off], " drop != any");
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	default_queue = tc_desc->default_queue;
+	if (tc_desc->miss_drop) {
+		fprintf(stdout,
+			"\r\nEnter miss queue ID of port%d-tc%d to update:(default=drop) range[%s]: ",
+			portid, tc, range);
+	} else {
+		fprintf(stdout,
+			"\r\nEnter miss queue ID of port%d-tc%d to update:(default=%d) range[%s]: ",
+			portid, tc, default_queue, range);
+	}
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		default_queue = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		for (i = 0; i < tc_desc->queue_max_num; i++) {
+			if (default_queue == tc_desc->tc_queue_ids[i])
+				break;
+		}
+		if (i >= tc_desc->queue_max_num)
+			drop = true;
+
+		if (drop == true) {
+			if (tc_desc->miss_drop == false) {
+				*update |= ACTION_MISS_FS_UPDATE;
+				tc_desc->miss_drop = true;
+			}
+		} else if (tc_desc->default_queue != default_queue) {
+			*update |= ACTION_MISS_FS_UPDATE;
+			tc_desc->default_queue = default_queue;
+		}
+	}
+}
+
+static void
+l2fwd_policer_runtime_tc_meter_update(uint16_t portid,
+	uint16_t tc, uint32_t *update)
+{
+	char command[256];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	uint32_t cir_update, cbs_update, pir_update, pbs_update;
+	enum rte_flow_action_type red_action;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	cir_update = tc_desc->meter_param.trtcm.cir;
+	fprintf(stdout, "\r\nEnter cir to update:(default=%d): ",
+		cir_update);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		cir_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			cir_update = tc_desc->meter_param.trtcm.cir;
+		if (tc_desc->meter_param.trtcm.cir != cir_update) {
+			*update |= ACTION_POLICER_PROFILE_UPDATE;
+			tc_desc->meter_param.trtcm.cir = cir_update;
+		}
+	}
+
+	cbs_update = tc_desc->meter_param.trtcm.cbs;
+	fprintf(stdout, "Enter cbs to update:(default=%d): ",
+		cbs_update);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		cbs_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			cbs_update = tc_desc->meter_param.trtcm.cbs;
+		if (tc_desc->meter_param.trtcm.cbs != cbs_update) {
+			*update |= ACTION_POLICER_PROFILE_UPDATE;
+			tc_desc->meter_param.trtcm.cbs = cbs_update;
+		}
+	}
+
+	pir_update = tc_desc->meter_param.trtcm.pir;
+	fprintf(stdout, "Enter pir to update:(default=%d): ",
+		pir_update);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		pir_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			pir_update = tc_desc->meter_param.trtcm.pir;
+		if (tc_desc->meter_param.trtcm.pir != pir_update) {
+			*update |= ACTION_POLICER_PROFILE_UPDATE;
+			tc_desc->meter_param.trtcm.pir = pir_update;
+		}
+	}
+
+	pbs_update = tc_desc->meter_param.trtcm.pbs;
+	fprintf(stdout, "Enter pbs to update:(default=%d): ",
+		pbs_update);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		pbs_update = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			pbs_update = tc_desc->meter_param.trtcm.pbs;
+		if (tc_desc->meter_param.trtcm.pbs != pbs_update) {
+			*update |= ACTION_POLICER_PROFILE_UPDATE;
+			tc_desc->meter_param.trtcm.pbs = pbs_update;
+		}
+	}
+
+	red_action = tc_desc->meter_param.red_action.type;
+	fprintf(stdout, "Enter red action to update:(default=%s): ",
+		red_action == RTE_FLOW_ACTION_TYPE_DROP ?
+		"drop" : "pass");
+	if (fgets(command, 256, stdin)) {
+		endp = command;
+		while (*endp == ' ') {
+			endp++;
+			if (endp - command > 10)
+				break;
+		}
+		if (!strncmp(endp, "drop", 4))
+			red_action = RTE_FLOW_ACTION_TYPE_DROP;
+		else if (!strncmp(endp, "pass", 4))
+			red_action = RTE_FLOW_ACTION_TYPE_PASSTHRU;
+		else
+			red_action = tc_desc->meter_param.red_action.type;
+		if (tc_desc->meter_param.red_action.type != red_action) {
+			*update |= ACTION_POLICER_POLICY_UPDATE;
+			tc_desc->meter_param.red_action.type = red_action;
+		}
+	}
+}
+
+static void
+l2fwd_policer_runtime_fs_flow_item_update(uint16_t portid,
+	uint8_t tc, uint32_t *update)
+{
+	int off = 0, i, idx = -1, max_num = 0, item_update = -1, ret;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	void **flows;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	if (port_param->flow_tb_level == 1)
+		flows = tc_desc->one_level_flows;
+	else
+		flows = tc_desc->fs_flows;
+	off = 0;
+	memset(range, 0, sizeof(range));
+	for (i = 0; i < tc_desc->fs_max_num; i++) {
+		if (flows[i])
+			max_num++;
+	}
+	off += sprintf(range, "0 ~ %d,", max_num - 1);
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	fprintf(stdout,
+		"\r\nEnter flow ID of port%d-tc%d to update item(s): range[%s]: ",
+		portid, tc, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		idx = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (idx >= max_num) {
+			fprintf(stderr, "Invalid flow(%d)\n", idx);
+			return;
+		}
+	}
+	if (idx < 0)
+		return;
+
+	off = 0;
+	for (i = 0; i < (int)RTE_DIM(s_fs_item_update); i++) {
+		off += sprintf(&range[off], "%s/%s:%d, ",
+			s_fs_item_update[i].item_protocol,
+			s_fs_item_update[i].item_field, i);
+	}
+	off += sprintf(&range[off], "%s", POLICER_UPDATE_SKIP_HINT);
+
+	fprintf(stdout,
+		"Enter index of flow item for port%d-tc%d-flow%d update: [%s]: ",
+		portid, tc, idx, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		item_update = strtoul(command, &endp, 10);
+		if (errno || command == endp ||
+			item_update >= (int)RTE_DIM(s_fs_item_update) ||
+			item_update < 0)
+			return;
+	}
+	fprintf(stdout, "Enter format: %s: ",
+		s_fs_item_update[item_update].input_format);
+	if (fgets(command, 256, stdin)) {
+		ret = s_fs_item_update[item_update].item_parse(command,
+			&s_fs_item_update[item_update]);
+		if (!ret) {
+			tc_desc->fs_update_pattern =
+				s_fs_item_update[item_update].pattern;
+			tc_desc->item_update_idx = idx;
+			*update |= ITEM_FS_FLOW_UPDATE;
+		}
+	}
+}
+
+static void
+l2fwd_policer_runtime_fs_flow_action_update(uint16_t portid,
+	uint8_t tc, uint32_t *update)
+{
+	int i, idx = -1, max_num = 0, off = 0;
+	char command[256];
+	char range[1024];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	uint16_t queue_id;
+	void **flows;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+	if (port_param->flow_tb_level == 1)
+		flows = tc_desc->one_level_flows;
+	else
+		flows = tc_desc->fs_flows;
+
+	memset(range, 0, sizeof(range));
+	for (i = 0; i < tc_desc->fs_max_num; i++) {
+		if (flows[i])
+			max_num++;
+	}
+	off += sprintf(range, "0 ~ %d,", max_num - 1);
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	fprintf(stdout,
+		"\r\nEnter flow ID of port%d-tc%d to update action: range[%s]: ",
+		portid, tc, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		idx = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (idx >= max_num) {
+			fprintf(stderr, "Invalid flow(%d)\n", idx);
+			return;
+		}
+	}
+	if (idx < 0)
+		return;
+
+	memset(range, 0, sizeof(range));
+	off = 0;
+	for (i = 0; i < tc_desc->queue_max_num; i++) {
+		off += sprintf(&range[off], "%d, ",
+			tc_desc->tc_queue_ids[i]);
+	}
+	off += sprintf(&range[off], " %s", POLICER_UPDATE_SKIP_HINT);
+	queue_id = tc_desc->flow_queue_ids[idx];
+	fprintf(stdout,
+		"Enter queue ID to update:(default=%d) range[%s]: ",
+		queue_id, range);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		queue_id = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		for (i = 0; i < tc_desc->queue_max_num; i++) {
+			if (queue_id == tc_desc->tc_queue_ids[i])
+				break;
+		}
+		if (i >= tc_desc->queue_max_num) {
+			fprintf(stderr, "Invalid queue ID(%d)\n", queue_id);
+				return;
+		}
+
+		if (tc_desc->flow_queue_ids[idx] != queue_id) {
+			*update |= ACTION_FS_QUEUE_UPDATE;
+			tc_desc->flow_queue_ids[idx] = queue_id;
+			tc_desc->action_update_idx = idx;
+		}
 	}
 }
 
 static void *
 l2fwd_policer_runtime_policer_update(void *arg)
 {
-	char command[256];
-	int ret, print_hint, queue_update = false, meter_enable = false;
+	int ret, meter_enable = false;
+	uint16_t portid;
+	uint32_t update = 0;
+	uint8_t tc;
 
 	/* Set this cpu-affinity to CPU 0 */
 	cpu_set_t cpuset;
@@ -1451,81 +2432,41 @@ l2fwd_policer_runtime_policer_update(void *arg)
 		pthread_exit(NULL);
 	}
 
-	s_cir_update = s_cir;
-	s_cbs_update = s_cbs;
-	s_pir_update = s_pir;
-	s_pbs_update = s_pbs;
-	s_red_action_update = s_red_action;
-
 	if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER ||
 		s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK)
 		meter_enable = true;
 
-	print_hint = true;
 	while (1) {
+start_again:
 		if (force_quit)
 			return arg;
-		if (print_hint) {
-			if (meter_enable) {
-				RTE_LOG(INFO, L2FWD_POLICER,
-					POLICER_UPDATE_FORMAT,
-					POLICER_UPDATE_CIR,
-					POLICER_UPDATE_CBS,
-					POLICER_UPDATE_PIR,
-					POLICER_UPDATE_PBS);
-				RTE_LOG(INFO, L2FWD_POLICER,
-					"Update policy action: %s or %s\n",
-					POLICER_UPDATE_RED_DROP,
-					POLICER_UPDATE_RED_PASS);
-			}
-			RTE_LOG(INFO, L2FWD_POLICER,
-				"Update queue index: %s\n",
-				POLICER_UPDATE_QUEUE_IDX);
-		}
-		if (fgets(command, 256, stdin)) {
-			if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_CIR,
-				strlen(POLICER_UPDATE_CIR))) {
-				s_cir_update = strtoul(command +
-					strlen(POLICER_UPDATE_CIR),
-					NULL, 10);
-			} else if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_CBS,
-				strlen(POLICER_UPDATE_CBS))) {
-				s_cbs_update = strtoul(command +
-					strlen(POLICER_UPDATE_CBS),
-					NULL, 10);
-			} else if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_PIR,
-				strlen(POLICER_UPDATE_PIR))) {
-				s_pir_update = strtoul(command +
-					strlen(POLICER_UPDATE_PIR),
-					NULL, 10);
-			} else if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_PBS,
-				strlen(POLICER_UPDATE_PBS))) {
-				s_pbs_update = strtoul(command +
-					strlen(POLICER_UPDATE_PBS),
-					NULL, 10);
-			} else if (!strncmp(command,
-				POLICER_UPDATE_QUEUE_IDX,
-				strlen(POLICER_UPDATE_QUEUE_IDX))) {
-				queue_update = true;
-			} else if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_RED_DROP,
-				strlen(POLICER_UPDATE_RED_DROP))) {
-				s_red_action_update = RTE_FLOW_ACTION_TYPE_DROP;
-			} else if (meter_enable && !strncmp(command,
-				POLICER_UPDATE_RED_PASS,
-				strlen(POLICER_UPDATE_RED_PASS))) {
-				s_red_action_update = RTE_FLOW_ACTION_TYPE_PASSTHRU;
-			} else {
-				print_hint = false;
-				continue;
-			}
-			print_hint = true;
-			l2fwd_policer_update_policer(queue_update);
-		}
+		update = 0;
+		fprintf(stdout, "\r\nStart flow update:\r\n");
+
+		ret = l2fwd_policer_runtime_update_select_port(&portid);
+		if (ret)
+			goto start_again;
+		tc = s_port_param[portid].max_tcs;
+
+		l2fwd_policer_runtime_qos_miss_update(portid, &update);
+		if (s_port_param[portid].flow_tb_level > 1)
+			l2fwd_policer_runtime_qos_flow_item_update(portid, &update);
+
+		ret = l2fwd_policer_runtime_update_select_tc(portid, &tc);
+		if (ret)
+			goto start_update;
+		l2fwd_policer_runtime_fs_miss_update(portid, tc, &update);
+		if (s_port_param[portid].flow_tb_level > 1)
+			l2fwd_policer_runtime_fs_flow_item_update(portid, tc, &update);
+		l2fwd_policer_runtime_fs_flow_action_update(portid, tc, &update);
+
+		if (!meter_enable)
+			goto start_update;
+		l2fwd_policer_runtime_tc_meter_update(portid, tc, &update);
+
+start_update:
+		l2fwd_policer_qos_flow_update(portid, update);
+		l2fwd_policer_tc_flow_update(portid, tc, update);
 	}
 
 	return arg;
@@ -1534,7 +2475,7 @@ l2fwd_policer_runtime_policer_update(void *arg)
 static void
 signal_handler(int signum)
 {
-	if ((signum == SIGINT || signum == SIGTERM)) {
+	if (signum == SIGINT || signum == SIGTERM) {
 		force_quit = true;
 		RTE_LOG(INFO, L2FWD_POLICER,
 		"\n\nSignal %d received, preparing to exit...\n",
@@ -1639,6 +2580,158 @@ l2fwd_policer_lcore_port_queue_config(uint16_t lcore,
 	return 0;
 }
 
+static void
+l2fwd_policer_meter_free(uint16_t portid,
+	struct l2fwd_policer_meter_param *meter_param)
+{
+	int ret;
+
+	if (meter_param->meter_id) {
+		ret = rte_mtr_destroy(portid, *meter_param->meter_id, NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Destroy port%d's meter ID(%d) failed(%d).\n",
+				portid, *meter_param->meter_id, ret);
+		}
+		l2fwd_policer_free_id(portid, meter_param->meter_id,
+			POLICER_METER_ID_TYPE);
+	}
+	l2fwd_policer_meter_profile_del(portid, meter_param->profile_id);
+	l2fwd_policer_meter_policy_del(portid, meter_param->policy_id);
+}
+
+static void
+l2fwd_policer_port_qos_init(uint16_t portid,
+	uint8_t rx_tc_num, uint16_t qos_entries)
+{
+	struct l2fwd_policer_port_params *port_param;
+
+	port_param = &s_port_param[portid];
+	port_param->enable = true;
+	port_param->qos_flows = rte_zmalloc(NULL,
+		sizeof(void *) * qos_entries, 0);
+	port_param->tc_ids = rte_zmalloc(NULL,
+		sizeof(uint8_t) * qos_entries, 0);
+	port_param->max_qos_entries = qos_entries;
+	port_param->tc_descs = rte_zmalloc(NULL,
+		sizeof(struct l2fwd_policer_tc_desc) *
+		rx_tc_num, 0);
+	port_param->max_tcs = rx_tc_num;
+	port_param->miss_drop = s_miss_drop;
+	port_param->default_tc = rx_tc_num - 1;
+	if (!port_param->qos_flows ||
+		!port_param->tc_ids ||
+		!port_param->tc_descs) {
+		rte_exit(EXIT_FAILURE,
+			"Failed to malloc qos memory of port%d\n",
+			portid);
+	}
+}
+
+static void
+l2fwd_policer_port_tc_fs_init(uint16_t portid, uint8_t tc,
+	uint16_t fs_entries, uint16_t queues_per_tc)
+{
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	tc_desc->valid = true;
+	tc_desc->fs_max_num = fs_entries;
+	tc_desc->queue_max_num = queues_per_tc;
+	tc_desc->one_level_flows = rte_zmalloc(NULL,
+		sizeof(void *) * tc_desc->fs_max_num, 0);
+	tc_desc->fs_flows = rte_zmalloc(NULL,
+		sizeof(void *) * tc_desc->fs_max_num, 0);
+	tc_desc->flow_queue_ids = rte_zmalloc(NULL,
+		sizeof(uint16_t) * tc_desc->fs_max_num, 0);
+	tc_desc->tc_queue_ids = rte_zmalloc(NULL,
+		sizeof(uint16_t) * tc_desc->queue_max_num, 0);
+	if (!tc_desc->fs_flows || !tc_desc->flow_queue_ids ||
+		!tc_desc->tc_queue_ids || !tc_desc->one_level_flows) {
+		rte_exit(EXIT_FAILURE,
+			"Failed to malloc fs memory of port%d-tc%d\n",
+			portid, tc);
+	}
+}
+
+static void
+l2fwd_policer_port_tc_fs_free(uint16_t portid, uint8_t tc)
+{
+	uint16_t i;
+	int ret;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	void **flows;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	if (port_param->flow_tb_level == 1)
+		flows = tc_desc->one_level_flows;
+	else
+		flows = tc_desc->fs_flows;
+
+	for (i = 0; i < tc_desc->fs_max_num; i++) {
+		if (!flows[i])
+			continue;
+		ret = rte_flow_destroy(portid, flows[i], NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Destroy port%d-tc%d-flow%d failed(%d).\n",
+				portid, tc, i, ret);
+		}
+		flows[i] = NULL;
+	}
+	if (tc_desc->meter_flow) {
+		ret = rte_flow_destroy(portid, tc_desc->meter_flow, NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Destroy port%d-tc%d's meter flow failed(%d).\n",
+				portid, tc, ret);
+		}
+		tc_desc->meter_flow = NULL;
+	}
+
+	l2fwd_policer_meter_free(portid, &tc_desc->meter_param);
+
+	rte_free(tc_desc->one_level_flows);
+	rte_free(tc_desc->fs_flows);
+	rte_free(tc_desc->flow_queue_ids);
+	rte_free(tc_desc->tc_queue_ids);
+}
+
+static void
+l2fwd_policer_port_qos_free(uint16_t portid)
+{
+	uint16_t i;
+	int ret;
+	struct l2fwd_policer_port_params *port_param;
+
+	port_param = &s_port_param[portid];
+
+	for (i = 0; i < port_param->max_qos_entries; i++) {
+		if (!port_param->qos_flows[i])
+			continue;
+		ret = rte_flow_destroy(portid, port_param->qos_flows[i], NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Destroy port%d-qos.flow[%d] failed(%d).\n",
+				portid, i, ret);
+		}
+		port_param->qos_flows[i] = NULL;
+	}
+	rte_free(port_param->tc_ids);
+	rte_free(port_param->qos_flows);
+
+	for (i = 0; i < port_param->max_tcs; i++)
+		l2fwd_policer_port_tc_fs_free(portid, i);
+
+	rte_free(port_param->tc_descs);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1732,7 +2825,9 @@ main(int argc, char **argv)
 		struct rte_eth_dev_info dev_info;
 		struct rte_eth_rxq_info qinfo;
 		uint8_t tc_id;
-		uint16_t flow_id, queue_num;
+		uint16_t flow_id, tc_num, qos_entries, fs_entries, queues_per_tc;
+		uint16_t queue_num[POLICER_TC_MAX_NUM];
+		struct l2fwd_policer_tc_desc *tc_desc;
 
 		/* skip ports that are not enabled */
 		if (!(l2fwd_policer_enabled_port_mask & (1 << portid))) {
@@ -1755,6 +2850,15 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+
+		rte_pmd_dpaa2_dev_parse_tc_info(&dev_info, &tc_num,
+			&qos_entries, &fs_entries, &queues_per_tc);
+		l2fwd_policer_port_qos_init(portid, tc_num, qos_entries);
+		memset(queue_num, 0, sizeof(queue_num));
+		for (tc_id = 0; tc_id < tc_num; tc_id++) {
+			l2fwd_policer_port_tc_fs_init(portid, tc_id,
+				fs_entries, queues_per_tc);
+		}
 
 		/* Configure the number of queues for a port. */
 		ret = rte_eth_dev_configure(portid, dev_info.max_rx_queues,
@@ -1807,11 +2911,9 @@ main(int argc, char **argv)
 			}
 			rte_pmd_dpaa2_rxq_parse_tc_info(&qinfo,
 				&tc_id, &flow_id);
-
-			queue_num = s_port_param[portid].queue_num[tc_id];
-			s_port_param[portid].queue_ids[tc_id][queue_num] = i;
-			s_port_param[portid].flow_ids[tc_id][queue_num] = flow_id;
-			s_port_param[portid].queue_num[tc_id]++;
+			tc_desc = &s_port_param[portid].tc_descs[tc_id];
+			tc_desc->tc_queue_ids[queue_num[tc_id]] = i;
+			queue_num[tc_id]++;
 			/* >8 End of RX queue setup. */
 		}
 
@@ -1871,8 +2973,9 @@ main(int argc, char **argv)
 		}
 
 		RTE_LOG(INFO, L2FWD_POLICER,
-			"Port %u, MAC address: " RTE_ETHER_ADDR_PRT_FMT "\n\n",
-			portid,
+			"Port%u: %d TCs, %d QoS entries, %d FS entries, %d queues per TC, MAC:"
+			RTE_ETHER_ADDR_PRT_FMT"\n",
+			portid, tc_num, qos_entries, fs_entries, queues_per_tc,
 			RTE_ETHER_ADDR_BYTES(&l2fwd_policer_ports_eth_addr[portid]));
 
 		/* initialize port stats */
@@ -1883,13 +2986,8 @@ main(int argc, char **argv)
 		RTE_ETH_FOREACH_DEV(portid) {
 			if (!s_port_param[portid].enable)
 				continue;
-			if (s_meter_action == RTE_FLOW_ACTION_TYPE_METER ||
-				s_meter_action == RTE_FLOW_ACTION_TYPE_METER_MARK) {
-				l2fwd_policer_meter_init(portid,
-					&s_port_param[portid]);
-			}
-			l2fwd_policer_vlan_flow_config(portid,
-				&s_port_param[portid]);
+			s_port_param[portid].flow_tb_level = s_flow_table_level;
+			l2fwd_policer_flow_init_config(portid, &s_port_param[portid]);
 		}
 
 		ret = pthread_create(&pid, NULL,
@@ -1921,54 +3019,8 @@ main(int argc, char **argv)
 	RTE_ETH_FOREACH_DEV(portid) {
 		if (!(l2fwd_policer_enabled_port_mask & (1 << portid)))
 			continue;
-		for (i = 0; i < POLICER_TC_MAX_NUM; i++) {
-			if (!s_port_param[portid].tc_flow[i].flow)
-				continue;
-			ret = rte_flow_destroy(portid,
-				s_port_param[portid].tc_flow[i].flow, NULL);
-			if (ret) {
-				rte_exit(EXIT_FAILURE,
-					"Destroy port%d's flow failed(%d).\n",
-					portid, ret);
-			}
-			s_port_param[portid].tc_flow[i].flow = NULL;
-		}
-		if (s_port_param[portid].meter_id) {
-			ret = rte_mtr_destroy(portid,
-				*s_port_param[portid].meter_id, NULL);
-			if (ret) {
-				rte_exit(EXIT_FAILURE,
-					"Destroy port%d's meter ID(%d) failed(%d).\n",
-					portid, *s_port_param[portid].meter_id, ret);
-			}
-			l2fwd_policer_free_id(portid,
-				s_port_param[portid].meter_id,
-				POLICER_METER_ID_TYPE);
-		}
-		if (s_port_param[portid].profile_id) {
-			ret = rte_mtr_meter_profile_delete(portid,
-				*s_port_param[portid].profile_id, NULL);
-			if (ret) {
-				rte_exit(EXIT_FAILURE,
-					"Delete port%d's profile ID(%d) failed(%d).\n",
-					portid, *s_port_param[portid].profile_id, ret);
-			}
-			l2fwd_policer_free_id(portid,
-				s_port_param[portid].profile_id,
-				POLICER_PROFILE_ID_TYPE);
-		}
-		if (s_port_param[portid].policy_id) {
-			ret = rte_mtr_meter_policy_delete(portid,
-				*s_port_param[portid].policy_id, NULL);
-			if (ret) {
-				rte_exit(EXIT_FAILURE,
-					"Delete port%d's policy ID(%d) failed(%d).\n",
-					portid, *s_port_param[portid].policy_id, ret);
-			}
-			l2fwd_policer_free_id(portid,
-				s_port_param[portid].policy_id,
-				POLICER_POLICY_ID_TYPE);
-		}
+		l2fwd_policer_port_qos_free(portid);
+
 		for (i = POLICER_METER_ID_TYPE; i < POLICER_ID_TYPE_MAX; i++) {
 			if (s_id_pool[portid][i])
 				rte_ring_free(s_id_pool[portid][i]);
