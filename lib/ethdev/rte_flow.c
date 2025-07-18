@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2016 6WIND S.A.
  * Copyright 2016 Mellanox Technologies, Ltd
- * Copyright 2023-2024 NXP
+ * Copyright 2023-2025 NXP
  */
 
 #include <errno.h>
@@ -1791,6 +1791,28 @@ rte_flow_template_table_destroy(uint16_t port_id,
 	return rte_flow_error_set(error, ENOTSUP,
 				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 				  NULL, rte_strerror(ENOTSUP));
+}
+
+int
+rte_flow_group_set_miss_actions(uint16_t port_id,
+				uint32_t group_id,
+				const struct rte_flow_group_attr *attr,
+				const struct rte_flow_action actions[],
+				struct rte_flow_error *error)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
+
+	if (unlikely(!ops))
+		return -rte_errno;
+	if (likely(!!ops->group_set_miss_actions)) {
+		return flow_err(port_id,
+			ops->group_set_miss_actions(dev, group_id, attr, actions, error),
+				error);
+	}
+	return rte_flow_error_set(error, ENOTSUP,
+		RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+		NULL, rte_strerror(ENOTSUP));
 }
 
 struct rte_flow *

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2016 6WIND S.A.
  * Copyright 2016 Mellanox Technologies, Ltd
+ * Copyright 2025 NXP
  */
 
 #ifndef RTE_FLOW_DRIVER_H_
@@ -56,6 +57,13 @@ struct rte_flow_ops {
 		(struct rte_eth_dev *,
 		 struct rte_flow *,
 		 struct rte_flow_error *);
+	/** See rte_flow_group_set_miss_actions() */
+	int (*group_set_miss_actions)
+		(struct rte_eth_dev *dev,
+		uint32_t group_id,
+		const struct rte_flow_group_attr *attr,
+		const struct rte_flow_action actions[],
+		struct rte_flow_error *err);
 	/** See rte_flow_actions_update(). */
 	int (*actions_update)
 		(struct rte_eth_dev *dev,

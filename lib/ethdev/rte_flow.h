@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2016 6WIND S.A.
  * Copyright 2016 Mellanox Technologies, Ltd
- * Copyright 2023-2024 NXP
+ * Copyright 2023-2025 NXP
  */
 
 #ifndef RTE_FLOW_H_
@@ -116,6 +116,12 @@ struct rte_flow_attr {
 	 */
 	uint32_t transfer:1;
 	uint32_t reserved:29; /**< Reserved, must be zero. */
+};
+
+struct rte_flow_group_attr {
+	uint32_t ingress:1;
+	uint32_t egress:1;
+	uint32_t transfer:1;
 };
 
 /**
@@ -5325,6 +5331,35 @@ int
 rte_flow_template_table_destroy(uint16_t port_id,
 		struct rte_flow_template_table *template_table,
 		struct rte_flow_error *error);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Set group miss actions.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param group_id
+ *   Identifier of a group to set miss actions for.
+ * @param attr
+ *   Group attributes.
+ * @param actions
+ *   List of group miss actions.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL.
+ *   PMDs initialize this structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_group_set_miss_actions(uint16_t port_id,
+				uint32_t group_id,
+				const struct rte_flow_group_attr *attr,
+				const struct rte_flow_action actions[],
+				struct rte_flow_error *error);
 
 /**
  * @warning

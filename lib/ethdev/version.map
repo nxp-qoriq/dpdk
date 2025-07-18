@@ -277,6 +277,7 @@ EXPERIMENTAL {
 	rte_flow_async_action_handle_create;
 	rte_flow_async_action_handle_destroy;
 	rte_flow_async_action_handle_update;
+	rte_flow_group_set_miss_actions;
 
 	# added in 22.07
 	rte_eth_rx_avail_thresh_query;
