@@ -1623,6 +1623,12 @@ int dpni_clear_qos_table(struct fsl_mc_io *mc_io,
  */
 #define DPNI_FS_OPT_REDIRECT_TO_MULTIPLE_DPNI_TX	0x20
 
+/**
+ * In case the FS rule already exists (key and mask), update its action.
+ * Cannot be used with the actions which redirect the frame towards other DPNIs.
+ */
+#define DPNI_FS_OPT_UPDATE_IF_EXISTS	0x40
+
 #ifndef DPNI_FS_REDIR_MAX_NUM
 #define DPNI_FS_REDIR_MAX_NUM 8
 #endif

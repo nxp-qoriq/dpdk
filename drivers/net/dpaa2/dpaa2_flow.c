@@ -585,6 +585,31 @@ dpaa2_flow_add_fs_rule(struct dpaa2_dev_priv *priv,
 }
 
 static int
+dpaa2_flow_update_fs_rule_action(struct dpaa2_dev_priv *priv,
+	struct dpaa2_generic_flow *flow)
+{
+	int ret;
+	struct fsl_mc_io *dpni = priv->hw;
+	struct dpni_fs_action_cfg *cfg;
+
+	dpaa2_flow_fs_entry_log("Update action", flow);
+
+	cfg = &flow->flow_action.fs_action.fs_action_cfg;
+	cfg->options |= DPNI_FS_OPT_UPDATE_IF_EXISTS;
+	/** This option doesn't support legacy operation.*/
+	ret = dpni_add_fs_entry(dpni, CMD_PRI_LOW,
+		priv->token, flow->tc_id, flow->entry_index,
+		&flow->rule_cfg, cfg);
+	if (ret < 0) {
+		DPAA2_PMD_ERR("Update rule(%d) in FS table(%d) failed",
+			flow->entry_index, flow->tc_id);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
 _dpaa2_flow_rule_insert_hole(struct dpaa2_generic_flow *flow,
 	int offset, int size)
 {
@@ -5663,15 +5688,19 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	const struct rte_flow_action actions[],
 	struct rte_flow_error *error)
 {
+	struct rte_device *rte_dev = dev->device;
+	struct rte_dpaa2_device *dpaa2_dev;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct dpaa2_dev_flow *flow;
 	struct dpaa2_key_extract *tc_ext;
 	uint16_t tc_id;
-	int ret, is_rss = false;
+	int ret, is_rss = false, hw_update = false;
 	struct dpaa2_dev_flow_fs_action *fs_action;
 	uint8_t qos_action_num = 0, fs_action_num = 0;
 	struct rte_flow_action qos_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
+
+	dpaa2_dev = container_of(rte_dev, struct rte_dpaa2_device, device);
 
 	/* check for the valid flow */
 	flow = (void *)_flow;
@@ -5711,6 +5740,14 @@ action_update:
 	if (!flow->fs_flow)
 		goto qos_action_update;
 	fs_action = &flow->fs_flow->flow_action.fs_action;
+	if (fs_action_num > 0 &&
+		fs_actions[0].type != RTE_FLOW_ACTION_TYPE_PORT_ID &&
+		fs_actions[0].type != RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT &&
+		dpaa2_dev->mc_rev >= DPAA2_FLOW_HW_ACTION_UPDATE_MC_REV) {
+		/** Action HW update doesn't support redirecting frames to other DPNIs.*/
+		hw_update = true;
+		goto skip_remove_fs_entry;
+	}
 	ret = dpaa2_flow_remove_generic_entry(dev, flow->fs_flow,
 		DPAA2_FLOW_FS_TYPE);
 	if (ret) {
@@ -5719,6 +5756,7 @@ action_update:
 
 		goto quit;
 	}
+skip_remove_fs_entry:
 	tc_id = flow->fs_flow->tc_id;
 	tc_ext = &priv->extract.tc_key_extract[tc_id];
 	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS)
@@ -5737,7 +5775,10 @@ action_update:
 		if (ret)
 			goto quit;
 	} else {
-		ret = dpaa2_flow_add_fs_rule(priv, flow->fs_flow);
+		if (hw_update)
+			ret = dpaa2_flow_update_fs_rule_action(priv, flow->fs_flow);
+		else
+			ret = dpaa2_flow_add_fs_rule(priv, flow->fs_flow);
 		if (ret)
 			goto quit;
 	}
