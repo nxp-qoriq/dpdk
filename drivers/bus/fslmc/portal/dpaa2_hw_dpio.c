@@ -377,6 +377,40 @@ static void dpaa2_portal_finish(void *arg)
 	pthread_setspecific(dpaa2_portal_key, NULL);
 }
 
+struct dpaa2_dpio_dev *
+rte_dpaa2_alloc_dpio_device(void)
+{
+	struct dpaa2_dpio_dev *dpio_dev = NULL;
+
+	/* Get DPIO dev handle from list using index */
+	TAILQ_FOREACH(dpio_dev, &dpio_dev_list, next) {
+		if (dpio_dev && rte_atomic16_test_and_set(&dpio_dev->ref_count))
+			break;
+	}
+	if (!dpio_dev) {
+		DPAA2_BUS_ERR("No software portal resource left");
+		return NULL;
+	}
+
+	DPAA2_BUS_DEBUG("New Portal %p (%d) affined thread - %u",
+		dpio_dev, dpio_dev->index, rte_gettid());
+
+#ifdef RTE_EVENT_DPAA2
+	if (dpaa2_dpio_intr_init(dpio_dev)) {
+		DPAA2_BUS_ERR("Interrupt registration failed for dpio");
+		rte_atomic16_clear(&dpio_dev->ref_count);
+		return NULL;
+	}
+#endif
+
+	return dpio_dev;
+}
+
+void rte_dpaa2_free_dpio_device(struct dpaa2_dpio_dev *dpio_dev)
+{
+	dpaa2_put_qbman_swp(dpio_dev);
+}
+
 static void
 dpaa2_close_dpio_device(int object_id)
 {

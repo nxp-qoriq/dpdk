@@ -58,4 +58,12 @@ __rte_internal
 uint32_t
 dpaa2_free_eq_descriptors(void);
 
+__rte_internal
+struct dpaa2_dpio_dev *
+rte_dpaa2_alloc_dpio_device(void);
+
+__rte_internal
+void
+rte_dpaa2_free_dpio_device(struct dpaa2_dpio_dev *dpio_dev);
+
 #endif /* _DPAA2_HW_DPIO_H_ */

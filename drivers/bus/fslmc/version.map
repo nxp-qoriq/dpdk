@@ -19,6 +19,8 @@ INTERNAL {
 
 	dpaa2_affine_qbman_ethrx_swp;
 	dpaa2_affine_qbman_swp;
+	rte_dpaa2_alloc_dpio_device;
+	rte_dpaa2_free_dpio_device;
 	dpaa2_alloc_dpbp_dev;
 	dpaa2_alloc_dq_storage;
 	dpaa2_dpbp_supported;
