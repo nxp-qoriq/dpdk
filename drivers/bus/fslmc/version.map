@@ -121,6 +121,7 @@ INTERNAL {
 	rte_dpaa2_alloc_dpci_dev;
 	rte_dpaa2_dev_type;
 	rte_dpaa2_free_dpci_dev;
+	rte_dpaa2_dpci_link_attach;
 	rte_dpaa2_intr_disable;
 	rte_dpaa2_intr_enable;
 	rte_fslmc_driver_register;

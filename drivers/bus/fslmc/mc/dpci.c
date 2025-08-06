@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
  *
  * Copyright 2013-2016 Freescale Semiconductor Inc.
- * Copyright 2017-2019 NXP
+ * Copyright 2017-2019, 2025 NXP
  *
  */
 #include <fsl_mc_sys.h>
@@ -297,6 +297,41 @@ int dpci_get_attributes(struct fsl_mc_io *mc_io,
 	/* retrieve response parameters */
 	rsp_params = (struct dpci_rsp_get_attr *)cmd.params;
 	attr->id = le32_to_cpu(rsp_params->id);
+	attr->num_of_priorities = rsp_params->num_of_priorities;
+
+	return 0;
+}
+
+/**
+ * dpci_get_peer_attributes() - Retrieve DPCI peer attributes.
+ * @mc_io:	Pointer to MC portal's I/O object
+ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
+ * @token:	Token of DPCI object
+ * @attr:	Returned DPCI peer's attributes
+ *
+ * Return:	'0' on Success; Error code otherwise.
+ */
+int dpci_get_peer_attributes(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			struct dpci_peer_attr *attr)
+{
+	struct dpci_rsp_get_attr *rsp_params;
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPCI_CMDID_GET_PEER_ATTR,
+					cmd_flags, token);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	rsp_params = (struct dpci_rsp_get_attr *)cmd.params;
+	attr->peer_id = le32_to_cpu(rsp_params->id);
 	attr->num_of_priorities = rsp_params->num_of_priorities;
 
 	return 0;

@@ -53,20 +53,24 @@ enum {
  * the ethdev to eventdev with DPAA2 devices.
  */
 
+#define DPAA2_EVENTQ_LINK_CONF_MAX 4 /** Max schedule type + 1.*/
 struct dpaa2_eventq {
+	int valid;
+	void *event_port;
 	/* DPcon device */
 	struct dpaa2_dpcon_dev *dpcon;
 	/* Attached DPCI device */
 	struct dpaa2_dpci_dev *dpci;
-	/* Mapped event port */
-	struct dpaa2_io_portal_t *event_port;
 	/* Configuration provided by the user */
 	uint32_t event_queue_cfg;
 	uint32_t event_queue_id;
+	struct dpaa2_queue *dpci_txqs[DPAA2_EVENTQ_LINK_CONF_MAX];
 };
 
 struct dpaa2_port {
+	struct rte_eventdev *eventdev;
 	struct dpaa2_eventq evq_info[DPAA2_EVENT_MAX_QUEUES];
+	uint8_t port_id;
 	uint8_t num_linked_evq;
 	uint8_t is_port_linked;
 	uint64_t timeout_us;

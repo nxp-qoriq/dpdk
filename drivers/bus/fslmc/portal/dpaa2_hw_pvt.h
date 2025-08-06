@@ -13,6 +13,7 @@
 #include <dpaax_iova_table.h>
 
 #include <mc/fsl_mc_sys.h>
+#include <mc/fsl_dpci.h>
 #include <fsl_qbman_portal.h>
 #include <bus_fslmc_driver.h>
 
@@ -80,7 +81,6 @@
 #define DPAA2_HW_BUF_RESERVE	0
 #define DPAA2_PACKET_LAYOUT_ALIGN	64 /*changing from 256 */
 
-#define DPAA2_DPCI_MAX_QUEUES 2
 #define DPAA2_INVALID_FLOW_ID 0xffff
 #define DPAA2_INVALID_CGID 0xff
 
@@ -256,13 +256,16 @@ struct dpaa2_dprc_dev {
 
 struct dpaa2_dpci_dev {
 	TAILQ_ENTRY(dpaa2_dpci_dev) next;
-		/**< Pointer to Next device instance */
-	struct fsl_mc_io dpci;  /** handle to DPCI portal object */
+	/**< Pointer to Next device instance */
+	struct fsl_mc_io dpci;	/** handle to DPCI portal object */
 	uint16_t token;
 	rte_atomic16_t in_use;
 	uint32_t dpci_id; /*HW ID for DPCI object */
-	struct dpaa2_queue rx_queue[DPAA2_DPCI_MAX_QUEUES];
-	struct dpaa2_queue tx_queue[DPAA2_DPCI_MAX_QUEUES];
+	uint32_t peer_id;
+	uint16_t rx_queue_num;
+	uint16_t tx_queue_num;
+	struct dpaa2_queue *rx_queue;
+	struct dpaa2_queue *tx_queue;
 };
 
 struct dpaa2_dpcon_dev {
@@ -574,6 +577,12 @@ int32_t rte_dpaa2_dpcon_start(struct dpaa2_dpcon_dev *dpcon_dev);
 
 __rte_internal
 int32_t rte_dpaa2_dpcon_stop(struct dpaa2_dpcon_dev *dpcon_dev);
+
+__rte_internal
+int
+rte_dpaa2_dpci_link_attach(struct dpaa2_dpci_dev *dpci_dev,
+	enum dpci_dest dest_type, uint32_t dest_id, uint8_t priority,
+	dpaa2_queue_cb_dqrr_t *rx_cb, struct dpaa2_queue **txq);
 
 /* Global MCP pointer */
 __rte_internal
