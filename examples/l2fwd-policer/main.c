@@ -373,7 +373,7 @@ static uint32_t l2fwd_policer_enabled_port_mask = 0;
 /* list of enabled ports */
 static uint32_t l2fwd_policer_dst_ports[RTE_MAX_ETHPORTS];
 
-#define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_RX_QUEUE_PER_LCORE 64
 /* List of queues to be polled for a given lcore. 8< */
 
 struct port_rxq_pair {
@@ -2896,6 +2896,11 @@ l2fwd_policer_lcore_port_queue_add(uint16_t lcore,
 	rte_pmd_dpaa2_rxq_parse_tc_info(&qinfo, &tc_id, &flow_id);
 
 	queue_conf = &s_lcore_queue_conf[lcore];
+	if (queue_conf->n_rx_port >= MAX_RX_QUEUE_PER_LCORE) {
+		rte_exit(EXIT_FAILURE,
+			"Too many queues(%d) are handled on core%d.\n",
+			queue_conf->n_rx_port, lcore);
+	}
 	queue_conf->rx_port_list[queue_conf->n_rx_port].port_id = portid;
 	queue_conf->rx_port_list[queue_conf->n_rx_port].queue_id = queue_id;
 	queue_conf->n_rx_port++;
@@ -3428,6 +3433,20 @@ main(int argc, char **argv)
 			ret = -1;
 			break;
 		}
+	}
+
+	for (i = 0; i < RTE_MAX_LCORE; i++) {
+		struct lcore_queue_conf *queue_conf = &s_lcore_queue_conf[i];
+
+		if (!queue_conf->sch_handle)
+			continue;
+		ret = rte_dpaa2_scheduler_destroy(queue_conf->sch_handle);
+		if (ret) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"Destroy scheduler on core%d failed(%d)\n",
+				i, ret);
+		}
+		queue_conf->sch_handle = NULL;
 	}
 
 	RTE_ETH_FOREACH_DEV(portid) {
