@@ -110,15 +110,17 @@ int dpaa2_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
 						struct timespec *timestamp)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	void *queue = priv->next_tx_conf_queue;
+	void *queue = priv->next_txq_to_cnf;
 
 	if (queue) {
-		if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE) {
+		if (priv->tx_conf_type == DPAA2_TX_DYNAMIC_CONF) {
 			while (!priv->tx_timestamp)
-				dpaa2_dev_tx_conf_dynamic(queue);
+				dpaa2_dev_tx_conf_dynamic(queue, false);
+		} else if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF) {
+			while (!priv->tx_timestamp)
+				dpaa2_dev_tx_conf(queue, false);
 		} else {
-			while (!priv->tx_timestamp)
-				dpaa2_dev_tx_conf(queue);
+			return -EINVAL;
 		}
 	} else {
 		return -EINVAL;

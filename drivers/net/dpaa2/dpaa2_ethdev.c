@@ -538,7 +538,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 	struct dpaa2_queue *dpaa2_q;
 
 	num_rxqueue_per_tc = (priv->nb_rx_queues / priv->num_rx_tc);
-	if (priv->flags & DPAA2_TX_CONF_ENABLE)
+	if (priv->tx_conf_type != DPAA2_TX_NO_CONF)
 		tot_queues = priv->nb_rx_queues + 2 * priv->nb_tx_queues;
 	else
 		tot_queues = priv->nb_rx_queues + priv->nb_tx_queues;
@@ -588,7 +588,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 		}
 	}
 
-	if (priv->flags & DPAA2_TX_CONF_ENABLE) {
+	if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 		/*Setup tx confirmation queues*/
 		for (i = 0; i < priv->nb_tx_queues; i++) {
 			mc_q->eth_data = dev->data;
@@ -668,7 +668,7 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 			dpaa2_q = priv->tx_vq[i];
 			rte_free(dpaa2_q->cscn);
 		}
-		if (priv->flags & DPAA2_TX_CONF_ENABLE) {
+		if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 			/* cleanup tx conf queue storage */
 			for (i = 0; i < priv->nb_tx_queues; i++) {
 				dpaa2_q = priv->tx_conf_vq[i];
@@ -1092,8 +1092,7 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			ceetm_ch_idx <= (priv->num_channels - 1);
 			ceetm_ch_idx++) {
 			/*Set tx-conf and error configuration*/
-			if (priv->flags & DPAA2_TX_CONF_ENABLE &&
-				!(priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE)) {
+			if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF) {
 				ret = dpni_set_tx_confirmation_mode(dpni,
 						CMD_PRI_LOW, priv->token,
 						ceetm_ch_idx,
@@ -1182,7 +1181,7 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	dpaa2_q->cb_eqresp_free = dpaa2_dev_free_eqresp_buf;
 	dev->data->tx_queues[tx_queue_id] = dpaa2_q;
 
-	if (priv->flags & DPAA2_TX_CONF_ENABLE) {
+	if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 		dpaa2_q->tx_conf_queue = dpaa2_tx_conf_q;
 		options = options | DPNI_QUEUE_OPT_USER_CTX;
 		tx_conf_cfg.user_context = (size_t)(dpaa2_q);
@@ -2339,7 +2338,7 @@ dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
 	 */
 	if (!dev->tx_pkt_burst ||
 		dev->tx_pkt_burst == rte_eth_pkt_burst_dummy) {
-		if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE)
+		if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
 			dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
 		else
 			dev->tx_pkt_burst = dpaa2_dev_tx;
@@ -3081,7 +3080,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 			eth_dev->rx_pkt_burst = dpaa2_dev_rx;
 		else
 			eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
-		if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE)
+		if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
 			eth_dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
 		else
 			eth_dev->tx_pkt_burst = dpaa2_dev_tx;
@@ -3167,29 +3166,29 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->options = attr.options;
 	priv->max_mac_filters = attr.mac_filter_entries;
 	priv->max_vlan_filters = attr.vlan_filter_entries;
-#if defined(RTE_LIBRTE_IEEE1588) || defined(DPAA2_TX_CONF)
+	priv->tx_conf_type = DPAA2_TX_NO_CONF;
+#if defined(RTE_LIBRTE_IEEE1588)
 	DPAA2_PMD_INFO("DPDK IEEE1588/ TX_CONF is enabled");
-	priv->flags |= DPAA2_TX_CONF_ENABLE;
+	priv->tx_conf_type = DPAA2_TX_ABSOLUTE_CONF;
 #endif
 	/* Used with ``fslmc:dpni.1,drv_tx_conf=1`` */
-	if (dpaa2_get_devargs(dev->devargs, DRIVER_TX_CONF) ||
-		getenv("DPAA2_TX_CONF")) {
-		priv->flags |= DPAA2_TX_CONF_ENABLE;
-		DPAA2_PMD_INFO("TX_CONF Enabled");
-		if (getenv("DPAA2_TX_DYNAMIC_CONF")) {
-			priv->flags |= DPAA2_TX_DYNAMIC_CONF_ENABLE;
-			DPAA2_PMD_INFO("TX_DYNAMIC_CONF Enabled");
-			priv->flags |= DPAA2_TX_PREFETCH_DYNAMIC_CONF;
-			penv = getenv("DPAA2_TX_DYNAMIC_CONF_PREFETCH");
-			if (penv && !atoi(penv))
-				priv->flags &= ~DPAA2_TX_PREFETCH_DYNAMIC_CONF;
-			DPAA2_PMD_INFO("Tx dynamic prefetch confirm %s",
-				(priv->flags & DPAA2_TX_PREFETCH_DYNAMIC_CONF) ?
-				"enabled" : "disabled");
-			penv = getenv("DPAA2_TX_CONF_FD_OVERFLOW");
-			if (penv)
-				dpaa2_tx_cnf_fd_overflow = atoi(penv);
-		}
+	if ((dpaa2_get_devargs(dev->devargs, DRIVER_TX_CONF) ||
+		getenv("DPAA2_TX_CONF")) && !getenv("DPAA2_TX_DYNAMIC_CONF")) {
+		priv->tx_conf_type = DPAA2_TX_ABSOLUTE_CONF;
+		DPAA2_PMD_INFO("TX_ABSOLUTE_CONF Enabled");
+	} else if (getenv("DPAA2_TX_DYNAMIC_CONF")) {
+		priv->tx_conf_type = DPAA2_TX_DYNAMIC_CONF;
+		DPAA2_PMD_INFO("TX_DYNAMIC_CONF Enabled");
+		priv->flags |= DPAA2_TX_PREFETCH_DYNAMIC_CONF;
+		penv = getenv("DPAA2_TX_DYNAMIC_CONF_PREFETCH");
+		if (penv && !atoi(penv))
+			priv->flags &= ~DPAA2_TX_PREFETCH_DYNAMIC_CONF;
+		DPAA2_PMD_INFO("Tx dynamic prefetch confirm %s",
+			(priv->flags & DPAA2_TX_PREFETCH_DYNAMIC_CONF) ?
+			"enabled" : "disabled");
+		penv = getenv("DPAA2_TX_CONF_FD_OVERFLOW");
+		if (penv)
+			dpaa2_tx_cnf_fd_overflow = atoi(penv);
 	}
 
 	if (dpaa2_get_devargs(dev->devargs, DRIVER_ERROR_QUEUE) ||
@@ -3260,34 +3259,22 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* ... tx buffer layout ... */
 	memset(&layout, 0, sizeof(struct dpni_buffer_layout));
-	if (priv->flags & DPAA2_TX_CONF_ENABLE) {
-		layout.options = DPNI_BUF_LAYOUT_OPT_FRAME_STATUS |
-				 DPNI_BUF_LAYOUT_OPT_TIMESTAMP;
-		layout.pass_timestamp = true;
-	} else {
-		layout.options = DPNI_BUF_LAYOUT_OPT_FRAME_STATUS;
-	}
-	layout.pass_frame_status = 1;
-	ret = dpni_set_buffer_layout(dpni_dev, CMD_PRI_LOW, priv->token,
-				     DPNI_QUEUE_TX, &layout);
-	if (ret) {
-		DPAA2_PMD_ERR("Error (%d) in setting tx buffer layout", ret);
-		goto init_err;
-	}
-
-	/* ... tx-conf and error buffer layout ... */
-	memset(&layout, 0, sizeof(struct dpni_buffer_layout));
-	if (priv->flags & DPAA2_TX_CONF_ENABLE) {
+	if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 		layout.options = DPNI_BUF_LAYOUT_OPT_TIMESTAMP;
 		layout.pass_timestamp = true;
 	}
 	layout.options |= DPNI_BUF_LAYOUT_OPT_FRAME_STATUS;
 	layout.pass_frame_status = 1;
 	ret = dpni_set_buffer_layout(dpni_dev, CMD_PRI_LOW, priv->token,
-				     DPNI_QUEUE_TX_CONFIRM, &layout);
+			DPNI_QUEUE_TX, &layout);
 	if (ret) {
-		DPAA2_PMD_ERR("Error (%d) in setting tx-conf buffer layout",
-			     ret);
+		DPAA2_PMD_ERR("Error (%d) in setting tx buffer layout", ret);
+		goto init_err;
+	}
+	ret = dpni_set_buffer_layout(dpni_dev, CMD_PRI_LOW, priv->token,
+			DPNI_QUEUE_TX_CONFIRM, &layout);
+	if (ret) {
+		DPAA2_PMD_ERR("Error (%d) in setting tx conf buffer layout", ret);
 		goto init_err;
 	}
 
@@ -3302,7 +3289,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	} else {
 		eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
 	}
-	if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE)
+	if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
 		eth_dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
 	else
 		eth_dev->tx_pkt_burst = dpaa2_dev_tx;
@@ -3417,30 +3404,28 @@ rte_pmd_dpaa2_ep_name(uint32_t eth_id)
 }
 
 uint16_t
-rte_pmd_dpaa2_clean_tx_conf(uint32_t eth_id,
-	uint16_t txq_id)
+rte_pmd_dpaa2_clean_tx_conf(uint32_t eth_id, uint16_t txq_id)
 {
 	struct rte_eth_dev *dev;
 	struct dpaa2_dev_priv *priv;
 	struct dpaa2_queue *txq;
 
 	if (unlikely(!rte_pmd_dpaa2_dev_is_dpaa2(eth_id))) {
-		DPAA2_PMD_WARN("eth%d is NOT dpaa2 device",
-			eth_id);
+		DPAA2_PMD_WARN("eth%d is NOT dpaa2 device", eth_id);
 		return 0;
 	}
 
 	dev = &rte_eth_devices[eth_id];
 	priv = dev->data->dev_private;
-	if (!((priv->flags & DPAA2_TX_CONF_ENABLE) &&
-		(priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE))) {
-		DPAA2_PMD_WARN("TX dynamic confirm not enabled on %s",
-			dev->data->name);
-		return 0;
-	}
 	txq = dev->data->tx_queues[txq_id];
 
-	return dpaa2_dev_tx_conf_dynamic(txq->tx_conf_queue);
+	if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF)
+		return dpaa2_dev_tx_conf(txq, true);
+	else if (priv->tx_conf_type == DPAA2_TX_DYNAMIC_CONF)
+		return dpaa2_dev_tx_conf_dynamic(txq, true);
+
+	DPAA2_PMD_WARN("TX confirm not enabled on %s", dev->data->name);
+	return 0;
 }
 
 #if defined(RTE_LIBRTE_IEEE1588)

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2021,2023-2024 NXP
+ *   Copyright 2016-2021,2023-2025 NXP
  *
  */
 
@@ -491,7 +491,7 @@ dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
 	 */
 
 	/* ... rx buffer layout ... */
-	if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE) {
+	if (priv->tx_conf_type == DPAA2_TX_DYNAMIC_CONF) {
 		int out_min_hdr_room, in_min_hdr_room;
 		/** Additional headroom layout for IPSec with TX configure
 		 * dynamic enabled.

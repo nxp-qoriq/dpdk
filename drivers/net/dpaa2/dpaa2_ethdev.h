@@ -89,21 +89,13 @@
 
 #define DPAA2_TX_DPNI_LOOPBACK_MODE	RTE_BIT32(7)
 
-/* Tx confirmation enabled */
-#define DPAA2_TX_CONF_ENABLE	RTE_BIT32(8)
+#define DPAA2_TX_PREFETCH_DYNAMIC_CONF	RTE_BIT32(8)
 
-/* Tx dynamic confirmation enabled,
- * only valid with Tx confirmation enabled.
- */
-#define DPAA2_TX_DYNAMIC_CONF_ENABLE	RTE_BIT32(9)
+#define DPAAX_RX_ERROR_QUEUE_FLAG	RTE_BIT32(9)
 
-#define DPAA2_TX_PREFETCH_DYNAMIC_CONF	RTE_BIT32(10)
+#define DPAAX_RX_DATA_STASHING_OFF_FLAG	RTE_BIT32(10)
 
-#define DPAAX_RX_ERROR_QUEUE_FLAG	RTE_BIT32(11)
-
-#define DPAAX_RX_DATA_STASHING_OFF_FLAG	RTE_BIT32(12)
-
-#define DPAAX_RX_SCHED_STRICT_ORDER_FLAG RTE_BIT32(13)
+#define DPAAX_RX_SCHED_STRICT_ORDER_FLAG RTE_BIT32(11)
 
 /* DPDMUX index for DPMAC */
 #define DPAA2_DPDMUX_DPMAC_IDX 0
@@ -331,6 +323,12 @@ struct dpaa2_dev_meter {
 	uint32_t policy_id;
 };
 
+enum dpaa2_tx_conf_type {
+	DPAA2_TX_NO_CONF,
+	DPAA2_TX_ABSOLUTE_CONF,
+	DPAA2_TX_DYNAMIC_CONF
+};
+
 struct dpaa2_dev_priv {
 	void *hw;
 	int32_t hw_id;
@@ -345,6 +343,7 @@ struct dpaa2_dev_priv {
 	void *tx_conf_vq[MAX_TX_QUEUES * DPAA2_MAX_CHANNELS];
 	void *rx_err_vq;
 	uint32_t flags; /*dpaa2 config flags */
+	enum dpaa2_tx_conf_type tx_conf_type;
 	uint8_t max_mac_filters;
 	uint8_t max_vlan_filters;
 	uint8_t num_rx_tc;
@@ -378,10 +377,10 @@ struct dpaa2_dev_priv {
 	uint64_t rx_timestamp;
 	/*stores timestamp of last received tx confirmation packet on dev*/
 	uint64_t tx_timestamp;
-	/* stores pointer to next tx_conf queue that should be processed,
+	/* stores next tx queue to be confirmed that should be processed,
 	 * it corresponds to last packet transmitted
 	 */
-	struct dpaa2_queue *next_tx_conf_queue;
+	struct dpaa2_queue *next_txq_to_cnf;
 
 	struct rte_eth_dev *eth_dev; /**< Pointer back to holding ethdev */
 	rte_spinlock_t lpbk_qp_lock;
@@ -594,8 +593,8 @@ uint16_t dpaa2_dev_tx_multi_txq_ordered(void **queue,
 
 void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci, struct dpaa2_queue *dpaa2_q);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
-uint16_t dpaa2_dev_tx_conf(void *queue);
-uint16_t dpaa2_dev_tx_conf_dynamic(void *queue);
+uint16_t dpaa2_dev_tx_conf(void *txq, int drain);
+uint16_t dpaa2_dev_tx_conf_dynamic(void *txq, int drain);
 
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);
 int dpaa2_timesync_disable(struct rte_eth_dev *dev);
