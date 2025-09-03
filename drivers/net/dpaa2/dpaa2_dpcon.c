@@ -111,6 +111,7 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	uint8_t status;
 	struct queue_storage_info_t *q_storage;
 	uint64_t iova_storage;
+	struct dpaa2_dev_priv *priv;
 
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
 		ret = dpaa2_affine_qbman_ethrx_swp();
@@ -169,13 +170,11 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 
 			fd = qbman_result_DQ_fd(dq_sch_storage);
 			rvq = (void *)qbman_result_DQ_fqd_ctx(dq_sch_storage);
-			if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg)) {
-				mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(fd,
-					rvq->eth_data->port_id);
-			} else {
-				mbuf[rcvd_pkts] = eth_fd_to_mbuf(fd,
-					rvq->eth_data->port_id);
-			}
+			priv = rvq->eth_data->dev_private;
+			if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+				mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
+			else
+				mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
 			rcvd_pkts++;
 			dq_sch_storage++;
 			iova_storage += sizeof(struct qbman_result);
@@ -202,6 +201,7 @@ dpaa2_dpcon_prefetch_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	struct qbman_swp *swp;
 	struct dpaa2_dpio_dev *ethrx_dpio_dev;
 	uint8_t status, pending;
+	struct dpaa2_dev_priv *priv;
 
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
 		ret = dpaa2_affine_qbman_ethrx_swp();
@@ -288,13 +288,11 @@ pull_active_dqs:
 
 		fd = qbman_result_DQ_fd(dq_storage);
 		rvq = (void *)qbman_result_DQ_fqd_ctx(dq_storage);
-		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg)) {
-			mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(fd,
-				rvq->eth_data->port_id);
-		} else {
-			mbuf[rcvd_pkts] = eth_fd_to_mbuf(fd,
-				rvq->eth_data->port_id);
-		}
+		priv = rvq->eth_data->dev_private;
+		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+			mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
+		else
+			mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
 		rcvd_pkts++;
 
 		dq_storage++;

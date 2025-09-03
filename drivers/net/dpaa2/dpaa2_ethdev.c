@@ -72,17 +72,12 @@ static uint64_t dev_tx_offloads_nodis =
 bool dpaa2_enable_ts[RTE_MAX_ETHPORTS];
 uint64_t dpaa2_timestamp_rx_dynflag;
 int dpaa2_timestamp_dynfield_offset = -1;
-int dpaa2_rx_protocol_pos_mbuf_offset = -1;
 
 static const struct rte_mbuf_dynfield s_dpaa2_rx_protocol_pos_dyn = {
 	.name = "dpaa2_rx_protocol_pos_dyn",
 	.size = sizeof(struct dpaa2_dyn_rx_protocol_pos),
 	.align = __alignof__(struct dpaa2_dyn_rx_protocol_pos),
 };
-
-bool dpaa2_print_parser_result;
-
-int dpaa2_tx_cnf_fd_overflow = 65535;
 
 #define MAX_NB_RX_DESC		11264
 int total_nb_rx_desc;
@@ -559,7 +554,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 			goto fail;
 	}
 
-	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+	if (priv->flags & DPAA2_RX_ERROR_QUEUE_FLAG) {
 		priv->rx_err_vq = rte_zmalloc("dpni_rx_err",
 			sizeof(struct dpaa2_queue), 0);
 		if (!priv->rx_err_vq) {
@@ -637,7 +632,7 @@ fail:
 		priv->rx_vq[i--] = NULL;
 	}
 
-	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+	if (priv->flags & DPAA2_RX_ERROR_QUEUE_FLAG) {
 		dpaa2_q = priv->rx_err_vq;
 		dpaa2_queue_storage_free(dpaa2_q, RTE_MAX_LCORE);
 	}
@@ -950,7 +945,7 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		options |= DPNI_QUEUE_OPT_FLC;
 		cfg->flc.stash_control = true;
 		dpaa2_flc_stashing_clear_all(&cfg->flc.value);
-		if (priv->flags & DPAAX_RX_DATA_STASHING_OFF_FLAG) {
+		if (priv->flags & DPAA2_RX_DATA_STASHING_OFF_FLAG) {
 			dpaa2_flc_stashing_set(DPAA2_FLC_DATA_STASHING, 0,
 				&cfg->flc.value);
 			dpaa2_q->data_stashing_off = 1;
@@ -1429,7 +1424,7 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		dpaa2_q->fqid = qid.fqid;
 	}
 
-	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+	if (priv->flags & DPAA2_RX_ERROR_QUEUE_FLAG) {
 		ret = dpni_get_queue(dpni, CMD_PRI_LOW, priv->token,
 				     DPNI_QUEUE_RX_ERR, 0, 0, &cfg, &qid);
 		if (ret) {
@@ -2337,12 +2332,8 @@ dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
 	 * if it has been set by rte_pmd_dpaa2_dev_recycle_qp_setup.
 	 */
 	if (!dev->tx_pkt_burst ||
-		dev->tx_pkt_burst == rte_eth_pkt_burst_dummy) {
-		if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
-			dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
-		else
-			dev->tx_pkt_burst = dpaa2_dev_tx;
-	}
+		dev->tx_pkt_burst == rte_eth_pkt_burst_dummy)
+		dev->tx_pkt_burst = dpaa2_dev_tx;
 
 	dev->data->dev_link.link_status = state.up;
 	dev->data->dev_link.link_speed = state.rate;
@@ -2658,7 +2649,7 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		ocfg.oloe = 1;
 		eth_priv->en_loose_ordered = 1;
 		/* Strict ordering enabled if explicitly set */
-		if (eth_priv->flags & DPAAX_RX_SCHED_STRICT_ORDER_FLAG) {
+		if (eth_priv->flags & DPAA2_RX_SCHED_STRICT_ORDER_FLAG) {
 			ocfg.oloe = 0;
 			eth_priv->en_loose_ordered = 0;
 		}
@@ -2804,7 +2795,7 @@ int rte_pmd_dpaa2_set_opr(uint16_t port_id, uint16_t rx_queue_id)
 	eth_priv->en_loose_ordered = 1;
 
 	/* Strict ordering enabled if explicitly set */
-	if (eth_priv->flags & DPAAX_RX_SCHED_STRICT_ORDER_FLAG) {
+	if (eth_priv->flags & DPAA2_RX_SCHED_STRICT_ORDER_FLAG) {
 		ocfg.oloe = 0;
 		eth_priv->en_loose_ordered = 0;
 	}
@@ -3080,10 +3071,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 			eth_dev->rx_pkt_burst = dpaa2_dev_rx;
 		else
 			eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
-		if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
-			eth_dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
-		else
-			eth_dev->tx_pkt_burst = dpaa2_dev_tx;
+		eth_dev->tx_pkt_burst = dpaa2_dev_tx;
 		return 0;
 	}
 
@@ -3186,14 +3174,11 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA2_PMD_INFO("Tx dynamic prefetch confirm %s",
 			(priv->flags & DPAA2_TX_PREFETCH_DYNAMIC_CONF) ?
 			"enabled" : "disabled");
-		penv = getenv("DPAA2_TX_CONF_FD_OVERFLOW");
-		if (penv)
-			dpaa2_tx_cnf_fd_overflow = atoi(penv);
 	}
 
 	if (dpaa2_get_devargs(dev->devargs, DRIVER_ERROR_QUEUE) ||
 		getenv("DPAA2_ENABLE_ERROR_QUEUE")) {
-		priv->flags |= DPAAX_RX_ERROR_QUEUE_FLAG;
+		priv->flags |= DPAA2_RX_ERROR_QUEUE_FLAG;
 		DPAA2_PMD_INFO("Enable error queue");
 	}
 
@@ -3203,6 +3188,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	if (getenv("DPAA2_TX_CGR_OFF"))
 		priv->flags |= DPAA2_TX_CGR_OFF;
 
+	priv->psr_dynfield_offset = -1;
 	if (getenv("DPAA2_RX_GET_PROTOCOL_OFFSET")) {
 		ret = rte_mbuf_dynfield_register(&s_dpaa2_rx_protocol_pos_dyn);
 		if (ret < 0) {
@@ -3211,7 +3197,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		}
 		DPAA2_PMD_INFO("Register mbuf offset(%d) for protocol pos",
 			ret);
-		dpaa2_rx_protocol_pos_mbuf_offset = ret;
+		priv->psr_dynfield_offset = ret;
 	}
 	/* Packets with parse error to be dropped in hw */
 	if (getenv("DPAA2_PARSE_ERR_DROP")) {
@@ -3220,13 +3206,13 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	if (getenv("DPAA2_PRINT_RX_PARSER_RESULT"))
-		dpaa2_print_parser_result = 1;
+		priv->flags |= DPAA2_RX_PRINT_PSR_RESULT_FLAG;
 
 	if (getenv("DPAA2_DATA_STASHING_OFF"))
-			priv->flags |= DPAAX_RX_DATA_STASHING_OFF_FLAG;
+		priv->flags |= DPAA2_RX_DATA_STASHING_OFF_FLAG;
 
 	if (getenv("DPAA2_STRICT_ORDERING_ENABLE"))
-			priv->flags |= DPAAX_RX_SCHED_STRICT_ORDER_FLAG;
+		priv->flags |= DPAA2_RX_SCHED_STRICT_ORDER_FLAG;
 
 	/* Allocate memory for hardware structure for queues */
 	ret = dpaa2_alloc_rx_tx_queues(eth_dev);
@@ -3289,10 +3275,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	} else {
 		eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
 	}
-	if (priv->flags & DPAA2_TX_DYNAMIC_CONF)
-		eth_dev->tx_pkt_burst = dpaa2_dev_tx_with_dynamic_cnf;
-	else
-		eth_dev->tx_pkt_burst = dpaa2_dev_tx;
+	eth_dev->tx_pkt_burst = dpaa2_dev_tx;
 
 	/* Init fields w.r.t. classification */
 	for (i = 0; i < (MAX_TCS + 1); i++) {
@@ -3419,10 +3402,8 @@ rte_pmd_dpaa2_clean_tx_conf(uint32_t eth_id, uint16_t txq_id)
 	priv = dev->data->dev_private;
 	txq = dev->data->tx_queues[txq_id];
 
-	if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF)
+	if (priv->tx_conf_type != DPAA2_TX_NO_CONF)
 		return dpaa2_dev_tx_conf(txq, true);
-	else if (priv->tx_conf_type == DPAA2_TX_DYNAMIC_CONF)
-		return dpaa2_dev_tx_conf_dynamic(txq, true);
 
 	DPAA2_PMD_WARN("TX confirm not enabled on %s", dev->data->name);
 	return 0;

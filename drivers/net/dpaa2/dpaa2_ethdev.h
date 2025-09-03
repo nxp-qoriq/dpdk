@@ -91,11 +91,13 @@
 
 #define DPAA2_TX_PREFETCH_DYNAMIC_CONF	RTE_BIT32(8)
 
-#define DPAAX_RX_ERROR_QUEUE_FLAG	RTE_BIT32(9)
+#define DPAA2_RX_ERROR_QUEUE_FLAG	RTE_BIT32(9)
 
-#define DPAAX_RX_DATA_STASHING_OFF_FLAG	RTE_BIT32(10)
+#define DPAA2_RX_DATA_STASHING_OFF_FLAG	RTE_BIT32(10)
 
-#define DPAAX_RX_SCHED_STRICT_ORDER_FLAG RTE_BIT32(11)
+#define DPAA2_RX_SCHED_STRICT_ORDER_FLAG RTE_BIT32(11)
+
+#define DPAA2_RX_PRINT_PSR_RESULT_FLAG RTE_BIT32(12)
 
 /* DPDMUX index for DPMAC */
 #define DPAA2_DPDMUX_DPMAC_IDX 0
@@ -215,12 +217,6 @@ extern int dpaa2_timestamp_dynfield_offset;
 extern const struct rte_flow_ops dpaa2_flow_ops;
 
 extern const struct rte_tm_ops dpaa2_tm_ops;
-
-extern bool dpaa2_print_parser_result;
-
-extern int dpaa2_tx_cnf_fd_overflow;
-
-extern int dpaa2_rx_protocol_pos_mbuf_offset;
 
 struct dpaa2_dyn_rx_protocol_pos {
 	uint8_t l3_offset;
@@ -344,6 +340,7 @@ struct dpaa2_dev_priv {
 	void *rx_err_vq;
 	uint32_t flags; /*dpaa2 config flags */
 	enum dpaa2_tx_conf_type tx_conf_type;
+	int psr_dynfield_offset;
 	uint8_t max_mac_filters;
 	uint8_t max_vlan_filters;
 	uint8_t num_rx_tc;
@@ -581,9 +578,6 @@ void dpaa2_dev_process_ordered_event(struct qbman_swp *swp,
 uint16_t
 dpaa2_dev_tx(void *queue,
 	struct rte_mbuf **bufs, uint16_t nb_pkts);
-uint16_t
-dpaa2_dev_tx_with_dynamic_cnf(void *queue,
-	struct rte_mbuf **bufs, uint16_t nb_pkts);
 
 uint16_t dpaa2_dev_tx_ordered(void *queue, struct rte_mbuf **bufs,
 			      uint16_t nb_pkts);
@@ -594,7 +588,6 @@ uint16_t dpaa2_dev_tx_multi_txq_ordered(void **queue,
 void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci, struct dpaa2_queue *dpaa2_q);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
 uint16_t dpaa2_dev_tx_conf(void *txq, int drain);
-uint16_t dpaa2_dev_tx_conf_dynamic(void *txq, int drain);
 
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);
 int dpaa2_timesync_disable(struct rte_eth_dev *dev);
@@ -621,9 +614,9 @@ rte_pmd_dpaa2_dev_recycle_qp_setup(struct rte_dpaa2_device *dpaa2_dev,
 	struct dpaa2_queue **rxq);
 
 struct rte_mbuf *__rte_hot
-eth_fd_to_mbuf(const struct qbman_fd *fd, uint16_t port_id);
+eth_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
 struct rte_mbuf *__rte_hot
-eth_sg_fd_to_mbuf(const struct qbman_fd *fd, uint16_t port_id);
+eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
 
 /* DPCON prototypes */
 int32_t
