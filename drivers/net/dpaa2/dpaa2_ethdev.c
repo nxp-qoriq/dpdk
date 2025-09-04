@@ -77,9 +77,6 @@ static const struct rte_mbuf_dynfield s_dpaa2_rx_protocol_pos_dyn = {
 #define MAX_NB_RX_DESC		11264
 int total_nb_rx_desc;
 
-int dpaa2_valid_dev;
-struct rte_mempool *dpaa2_tx_sg_pool;
-
 struct rte_dpaa2_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
 	uint8_t page_id; /* dpni statistics page id */
@@ -1585,6 +1582,7 @@ dpaa2_dev_close(struct rte_eth_dev *dev)
 
 	/* Free the allocated memory for ethernet private data and dpni*/
 	priv->hw = NULL;
+	priv->tx_sg_pool = NULL;
 	dev->process_private = NULL;
 	rte_free(dpni);
 
@@ -3316,6 +3314,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 
 
 	priv->speed_capa = dpaa2_dev_get_speed_capability(eth_dev);
+	priv->tx_sg_pool = dpaa2_dev->mem_pool;
 
 	return 0;
 init_err:
@@ -3386,35 +3385,6 @@ rte_pmd_dpaa2_clean_tx_conf(uint32_t eth_id, uint16_t txq_id)
 	return 0;
 }
 
-static int dpaa2_tx_sg_pool_init(void)
-{
-	char name[RTE_MEMZONE_NAMESIZE];
-
-	if (dpaa2_tx_sg_pool)
-		return 0;
-
-	sprintf(name, "dpaa2_mbuf_tx_sg_pool");
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		dpaa2_tx_sg_pool = rte_pktmbuf_pool_create(name,
-			DPAA2_POOL_SIZE,
-			DPAA2_POOL_CACHE_SIZE, 0,
-			DPAA2_MAX_SGS * sizeof(struct qbman_sge),
-			rte_socket_id());
-		if (!dpaa2_tx_sg_pool) {
-			DPAA2_PMD_ERR("SG pool creation failed");
-			return -ENOMEM;
-		}
-	} else {
-		dpaa2_tx_sg_pool = rte_mempool_lookup(name);
-		if (!dpaa2_tx_sg_pool) {
-			DPAA2_PMD_ERR("SG pool lookup failed");
-			return -ENOMEM;
-		}
-	}
-
-	return 0;
-}
-
 static int
 rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 		struct rte_dpaa2_device *dpaa2_dev)
@@ -3469,11 +3439,7 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 	/* Invoke PMD device initialization function */
 	diag = dpaa2_dev_init(eth_dev);
 	if (!diag) {
-		diag = dpaa2_tx_sg_pool_init();
-		if (diag)
-			return diag;
 		rte_eth_dev_probing_finish(eth_dev);
-		dpaa2_valid_dev++;
 		return 0;
 	}
 
@@ -3489,9 +3455,6 @@ rte_dpaa2_remove(struct rte_dpaa2_device *dpaa2_dev)
 
 	eth_dev = dpaa2_dev->eth_dev;
 	dpaa2_dev_close(eth_dev);
-	dpaa2_valid_dev--;
-	if (!dpaa2_valid_dev)
-		rte_mempool_free(dpaa2_tx_sg_pool);
 	ret = rte_eth_dev_release_port(eth_dev);
 
 	return ret;

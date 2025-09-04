@@ -21,6 +21,7 @@
 #include "fslmc_logs.h"
 
 #include <dpaax_iova_table.h>
+#include <dpaa2_hw_pvt.h>
 
 #define VFIO_IOMMU_GROUP_PATH "/sys/kernel/iommu_groups"
 #define FSLMC_BUS_NAME	fslmc
@@ -28,6 +29,13 @@
 #define FSLMC_CONTAINER_MAX_LEN 8 /**< Of the format dprc.XX */
 
 struct rte_fslmc_bus rte_fslmc_bus;
+
+/* Maximum SG segments */
+#define DPAA2_MAX_SGS 128
+/* SG pool size */
+#define DPAA2_POOL_SIZE 2048
+/* SG pool cache size */
+#define DPAA2_POOL_CACHE_SIZE 256
 
 #define DPAA2_SEQN_DYNFIELD_NAME "dpaa2_seqn_dynfield"
 int dpaa2_seqn_dynfield_offset = -1;
@@ -404,6 +412,10 @@ rte_fslmc_close(void)
 	ret = fslmc_vfio_close_group();
 	if (ret)
 		DPAA2_BUS_ERR("Unable to close devices %d", ret);
+	if (rte_fslmc_bus.mem_pool) {
+		rte_mempool_free(rte_fslmc_bus.mem_pool);
+		rte_fslmc_bus.mem_pool = NULL;
+	}
 
 	return 0;
 }
@@ -459,6 +471,12 @@ rte_fslmc_probe(void)
 		return 0;
 	}
 
+	/** Create SG pool after dpbp objects are created.*/
+	rte_fslmc_bus.mem_pool = rte_pktmbuf_pool_create("dpaa2_sg_pool",
+		DPAA2_POOL_SIZE, DPAA2_POOL_CACHE_SIZE, 0,
+		DPAA2_MAX_SGS * sizeof(struct qbman_sge),
+		rte_socket_id());
+
 	probe_all = rte_fslmc_bus.bus.conf.scan_mode != RTE_BUS_SCAN_ALLOWLIST;
 
 	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
@@ -481,11 +499,13 @@ rte_fslmc_probe(void)
 			}
 
 			if (probe_all || !dev->device.devargs ||
-			   (dev->device.devargs &&
-			    dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
+				(dev->device.devargs &&
+				dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
+				dev->mem_pool = rte_fslmc_bus.mem_pool;
 				ret = drv->probe(drv, dev);
 				if (ret) {
-					DPAA2_BUS_ERR("Unable to probe");
+					DPAA2_BUS_ERR("Failed(%d) to probe %s",
+						ret, dev->device.name);
 				} else {
 					dev->driver = drv;
 					dev->device.driver = &drv->driver;

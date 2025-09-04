@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2016,2021-2024 NXP
+ *   Copyright 2016,2021-2025 NXP
  *
  */
 
@@ -108,6 +108,7 @@ struct rte_dpaa2_device {
 	struct rte_intr_handle *intr_handle; /**< Interrupt handle */
 	struct rte_dpaa2_driver *driver;    /**< Associated driver */
 	char name[FSLMC_OBJECT_MAX_LEN];    /**< DPAA2 Object name*/
+	void *mem_pool;
 };
 
 typedef int (*rte_dpaa2_obj_create_t)(int vdev_fd,

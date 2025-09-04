@@ -750,6 +750,7 @@ dpaa2_dev_tx_mbuf_to_sg_fd(struct rte_mempool *hw_mp,
 	uint16_t nb_segs = mbuf->nb_segs;
 	uint32_t sg_size = nb_segs * sizeof(struct qbman_sge);
 	struct rte_mempool *mp;
+	struct dpaa2_dev_priv *priv = txq->eth_data->dev_private;
 
 	if (conf == DPAA2_TX_DYNAMIC_CONF) {
 		while (cur_seg) {
@@ -792,7 +793,9 @@ dpaa2_dev_tx_mbuf_to_sg_fd(struct rte_mempool *hw_mp,
 #endif
 		DPAA2_SET_FD_OFFSET(fd, offset);
 	} else {
-		sg_mbuf = rte_pktmbuf_alloc(dpaa2_tx_sg_pool);
+		sg_mbuf = NULL;
+		if (priv->tx_sg_pool)
+			sg_mbuf = rte_pktmbuf_alloc(priv->tx_sg_pool);
 		if (!sg_mbuf) {
 			DPAA2_PMD_DP_DEBUG("No memory to allocate S/G table");
 			return -ENOMEM;
@@ -805,7 +808,7 @@ dpaa2_dev_tx_mbuf_to_sg_fd(struct rte_mempool *hw_mp,
 			DPAA2_SET_ONLY_FD_BPID(fd, MAX_BPID);
 			DPAA2_SET_FD_IVP(fd);
 		} else {
-			DPAA2_SET_ONLY_FD_BPID(fd, mempool_to_bpid(dpaa2_tx_sg_pool));
+			DPAA2_SET_ONLY_FD_BPID(fd, mempool_to_bpid(priv->tx_sg_pool));
 		}
 		DPAA2_SET_FD_OFFSET(fd, sg_mbuf->data_off);
 		offset = sg_mbuf->data_off;

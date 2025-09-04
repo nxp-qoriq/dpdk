@@ -205,15 +205,6 @@
 #define DPAA2_MAC_STATS_INDEX_DMA_SIZE (DPAA2_MAC_NUM_STATS * sizeof(uint32_t))
 #define DPAA2_MAC_STATS_VALUE_DMA_SIZE (DPAA2_MAC_NUM_STATS * sizeof(uint64_t))
 
-/* Global pool used by driver for SG list TX */
-extern struct rte_mempool *dpaa2_tx_sg_pool;
-/* Maximum SG segments */
-#define DPAA2_MAX_SGS 128
-/* SG pool size */
-#define DPAA2_POOL_SIZE 2048
-/* SG pool cache size */
-#define DPAA2_POOL_CACHE_SIZE 256
-
 /* Externally defined */
 extern const struct rte_flow_ops dpaa2_flow_ops;
 
@@ -397,6 +388,8 @@ struct dpaa2_dev_priv {
 	uint32_t *cnt_idx_dma_mem;
 	uint64_t *cnt_values_dma_mem;
 	uint64_t cnt_idx_iova, cnt_values_iova;
+
+	struct rte_mempool *tx_sg_pool;
 
 	struct dpaa2_dev_flow *curr;
 	LIST_HEAD(, dpaa2_dev_flow) flows;
