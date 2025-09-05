@@ -30,9 +30,6 @@ EXPERIMENTAL {
 	rte_pmd_dpaa2_mux_default_id;
 	rte_pmd_dpaa2_mux_ep_name;
 
-	rte_pmd_dpaa2_set_one_step_ts;
-	rte_pmd_dpaa2_get_one_step_ts;
-
 	rte_dpaa2_scheduler_init;
 	rte_dpaa2_scheduler_start;
 	rte_dpaa2_scheduler_rx;

@@ -68,11 +68,6 @@ static uint64_t dev_tx_offloads_sup =
 static uint64_t dev_tx_offloads_nodis =
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 
-/* enable timestamp in mbuf */
-bool dpaa2_enable_ts[RTE_MAX_ETHPORTS];
-uint64_t dpaa2_timestamp_rx_dynflag;
-int dpaa2_timestamp_dynfield_offset = -1;
-
 static const struct rte_mbuf_dynfield s_dpaa2_rx_protocol_pos_dyn = {
 	.name = "dpaa2_rx_protocol_pos_dyn",
 	.size = sizeof(struct dpaa2_dyn_rx_protocol_pos),
@@ -691,9 +686,6 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 	int tx_l4_csum_offload = false;
 	int ret, tc_index;
 	uint32_t max_rx_pktlen;
-#if defined(RTE_LIBRTE_IEEE1588)
-	uint16_t ptp_correction_offset;
-#endif
 
 	/* Rx offloads which are enabled by default */
 	if (dev_rx_offloads_nodis & ~rx_offloads) {
@@ -759,25 +751,15 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 		return ret;
 	}
 
-#if !defined(RTE_LIBRTE_IEEE1588)
-	if (rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP)
-#endif
-	{
-		ret = rte_mbuf_dyn_rx_timestamp_register(
-				&dpaa2_timestamp_dynfield_offset,
-				&dpaa2_timestamp_rx_dynflag);
-		if (ret != 0) {
+	if (rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
+		ret = rte_mbuf_dyn_rx_timestamp_register(&priv->rx_ts_offset,
+			&priv->rx_ts_flag);
+		if (ret) {
 			DPAA2_PMD_ERR("Error to register timestamp field/flag");
-			return -rte_errno;
+			return ret;
 		}
-		dpaa2_enable_ts[dev->data->port_id] = true;
 	}
 
-#if defined(RTE_LIBRTE_IEEE1588)
-	/* By default setting ptp correction offset for Ethernet SYNC packets */
-	ptp_correction_offset = RTE_ETHER_HDR_LEN + 8;
-	rte_pmd_dpaa2_set_one_step_ts(dev->data->port_id, ptp_correction_offset, 0);
-#endif
 	if (tx_offloads & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
 		tx_l3_csum_offload = true;
 
@@ -2858,7 +2840,6 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.rxq_info_get	      = dpaa2_rxq_info_get,
 	.txq_info_get	      = dpaa2_txq_info_get,
 	.tm_ops_get	      = dpaa2_tm_ops_get,
-#if defined(RTE_LIBRTE_IEEE1588)
 	.timesync_enable      = dpaa2_timesync_enable,
 	.timesync_disable     = dpaa2_timesync_disable,
 	.timesync_read_time   = dpaa2_timesync_read_time,
@@ -2866,7 +2847,6 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.timesync_adjust_time = dpaa2_timesync_adjust_time,
 	.timesync_read_rx_timestamp = dpaa2_timesync_read_rx_timestamp,
 	.timesync_read_tx_timestamp = dpaa2_timesync_read_tx_timestamp,
-#endif
 	.mtr_ops_get = dpaa2_mtr_ops_get,
 };
 
@@ -3155,10 +3135,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->max_mac_filters = attr.mac_filter_entries;
 	priv->max_vlan_filters = attr.vlan_filter_entries;
 	priv->tx_conf_type = DPAA2_TX_NO_CONF;
-#if defined(RTE_LIBRTE_IEEE1588)
-	DPAA2_PMD_INFO("DPDK IEEE1588/ TX_CONF is enabled");
-	priv->tx_conf_type = DPAA2_TX_ABSOLUTE_CONF;
-#endif
+
 	/* Used with ``fslmc:dpni.1,drv_tx_conf=1`` */
 	if ((dpaa2_get_devargs(dev->devargs, DRIVER_TX_CONF) ||
 		getenv("DPAA2_TX_CONF")) && !getenv("DPAA2_TX_DYNAMIC_CONF")) {
@@ -3408,59 +3385,6 @@ rte_pmd_dpaa2_clean_tx_conf(uint32_t eth_id, uint16_t txq_id)
 	DPAA2_PMD_WARN("TX confirm not enabled on %s", dev->data->name);
 	return 0;
 }
-
-#if defined(RTE_LIBRTE_IEEE1588)
-int
-rte_pmd_dpaa2_get_one_step_ts(uint16_t port_id, bool mc_query)
-{
-	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
-	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	struct fsl_mc_io *dpni = priv->eth_dev->process_private;
-	struct dpni_single_step_cfg ptp_cfg;
-	int err;
-
-	if (!mc_query)
-		return priv->ptp_correction_offset;
-
-	err = dpni_get_single_step_cfg(dpni, CMD_PRI_LOW, priv->token, &ptp_cfg);
-	if (err) {
-		DPAA2_PMD_ERR("Failed to retrieve onestep configuration");
-		return err;
-	}
-
-	if (!ptp_cfg.ptp_onestep_reg_base) {
-		DPAA2_PMD_ERR("1588 onestep reg not available");
-		return -1;
-	}
-
-	priv->ptp_correction_offset = ptp_cfg.offset;
-
-	return priv->ptp_correction_offset;
-}
-
-int
-rte_pmd_dpaa2_set_one_step_ts(uint16_t port_id, uint16_t offset, uint8_t ch_update)
-{
-	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
-	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	struct fsl_mc_io *dpni = dev->process_private;
-	struct dpni_single_step_cfg cfg;
-	int err;
-
-	cfg.en = 1;
-	cfg.ch_update = ch_update;
-	cfg.offset = offset;
-	cfg.peer_delay = 0;
-
-	err = dpni_set_single_step_cfg(dpni, CMD_PRI_LOW, priv->token, &cfg);
-	if (err)
-		return err;
-
-	priv->ptp_correction_offset = offset;
-
-	return 0;
-}
-#endif
 
 static int dpaa2_tx_sg_pool_init(void)
 {

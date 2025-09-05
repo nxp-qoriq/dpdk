@@ -8,6 +8,7 @@
 #ifndef _DPAA2_ETHDEV_H
 #define _DPAA2_ETHDEV_H
 
+#include <rte_time.h>
 #include <rte_compat.h>
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_pmd_dpaa2.h>
@@ -98,6 +99,11 @@
 #define DPAA2_RX_SCHED_STRICT_ORDER_FLAG RTE_BIT32(11)
 
 #define DPAA2_RX_PRINT_PSR_RESULT_FLAG RTE_BIT32(12)
+
+#define DPAA2_IEEE1588_DEBUG_FLAG RTE_BIT32(13)
+
+#define DPAA2_IEEE1588_TX_TS_FLAG RTE_BIT32(14)
+#define DPAA2_IEEE1588_RX_TS_FLAG RTE_BIT32(15)
 
 /* DPDMUX index for DPMAC */
 #define DPAA2_DPDMUX_DPMAC_IDX 0
@@ -207,11 +213,6 @@ extern struct rte_mempool *dpaa2_tx_sg_pool;
 #define DPAA2_POOL_SIZE 2048
 /* SG pool cache size */
 #define DPAA2_POOL_CACHE_SIZE 256
-
-/* enable timestamp in mbuf*/
-extern bool dpaa2_enable_ts[];
-extern uint64_t dpaa2_timestamp_rx_dynflag;
-extern int dpaa2_timestamp_dynfield_offset;
 
 /* Externally defined */
 extern const struct rte_flow_ops dpaa2_flow_ops;
@@ -374,6 +375,9 @@ struct dpaa2_dev_priv {
 	uint64_t rx_timestamp;
 	/*stores timestamp of last received tx confirmation packet on dev*/
 	uint64_t tx_timestamp;
+
+	int rx_ts_offset;
+	uint64_t rx_ts_flag;
 	/* stores next tx queue to be confirmed that should be processed,
 	 * it corresponds to last packet transmitted
 	 */
@@ -384,7 +388,10 @@ struct dpaa2_dev_priv {
 
 	bool enable_bp_flow_ctrl;
 	uint8_t channel_inuse;
-	/* Stores correction offset for one step timestamping */
+	/* Stores correction offset for one step timestamping,
+	 * this offset varies according to current SYNC packet
+	 * format. (eth/vlan/udp)
+	 */
 	uint16_t ptp_correction_offset;
 	/* for mac counters */
 	uint32_t *cnt_idx_dma_mem;
@@ -412,6 +419,21 @@ static inline int dpaa2_dev_cmp_dpni_ver(struct dpaa2_dev_priv *priv,
 }
 
 #define DPAA2_FLOW_DUMP printf
+
+static inline void
+dpaa2_timestamp_debug(struct dpaa2_dev_priv *priv,
+	const char *prefix, uint64_t timestamp)
+{
+	struct timespec ts;
+
+	if (likely(!(priv->flags & DPAA2_IEEE1588_DEBUG_FLAG)))
+		return;
+
+	ts = rte_ns_to_timespec(timestamp);
+	fprintf(stderr,
+		"DPAA2 TS DBG: %s: ns(%ld)->%ld seconds/%ld nanoseconds\n",
+		prefix, timestamp, ts.tv_sec, ts.tv_nsec);
+}
 
 static inline void
 dpaa2_prot_field_string(uint32_t prot, uint32_t field,
@@ -589,6 +611,9 @@ void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci, struct dpaa2_queue *dpaa2_q);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
 uint16_t dpaa2_dev_tx_conf(void *txq, int drain);
 
+void
+dpaa2_dev_tx_ptp_one_step_runtime(struct rte_eth_dev *dev,
+	struct rte_mbuf *buf, int *tstamp, int *set);
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);
 int dpaa2_timesync_disable(struct rte_eth_dev *dev);
 int dpaa2_timesync_read_time(struct rte_eth_dev *dev,

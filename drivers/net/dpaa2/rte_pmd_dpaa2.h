@@ -156,16 +156,6 @@ rte_dpaa2_dev_tx_multi_ports(uint16_t port_id[],
 	uint16_t txq_id[], struct rte_mbuf **bufs,
 	uint16_t nb_pkts);
 
-#if defined(RTE_LIBRTE_IEEE1588)
-__rte_experimental
-int
-rte_pmd_dpaa2_set_one_step_ts(uint16_t port_id, uint16_t offset, uint8_t ch_update);
-
-__rte_experimental
-int
-rte_pmd_dpaa2_get_one_step_ts(uint16_t port_id, bool mc_query);
-#endif
-
 #define RTE_DPAA2_DEV_TC_INFO_RSV_IDX 0
 union rte_pmd_dpaa2_dev_tc_desc {
 	uint64_t tc_info;
