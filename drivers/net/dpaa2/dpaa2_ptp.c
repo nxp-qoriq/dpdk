@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019, 2023-2024 NXP
+ * Copyright 2019, 2023-2025 NXP
  */
 
 #include <sys/queue.h>
