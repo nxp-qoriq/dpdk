@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2022, 2024 NXP
+ * Copyright 2019-2022, 2024-2025 NXP
  * Code was mostly borrowed from examples/l3fwd/l3fwd.h
  * See examples/l3fwd/l3fwd.h for additional Copyrights.
  */
@@ -28,6 +28,8 @@ struct lcore_rx_queue {
 	uint8_t queue_id;
 	void *send_q;
 	void *recv_q;
+	struct rte_ip_frag_tbl *tbl;
+	struct rte_ip_frag_death_row dr;
 } __rte_cache_aligned;
 
 struct lcore_statistic {
@@ -56,6 +58,11 @@ struct lcore_conf {
 	struct lcore_statistic tx_statistic[RTE_MAX_ETHPORTS];
 	struct lcore_statistic rx_statistic[RTE_MAX_ETHPORTS];
 	uint32_t tx_ip[RTE_MAX_ETHPORTS];
+
+	uint64_t tx_jumbo_count[RTE_MAX_ETHPORTS];
+	uint64_t tx_jumbo_bytes[RTE_MAX_ETHPORTS];
+	uint64_t rx_reassemble_count[RTE_MAX_ETHPORTS];
+	uint64_t rx_reassemble_bytes[RTE_MAX_ETHPORTS];
 	char *dump_buf;
 } __rte_cache_aligned;
 

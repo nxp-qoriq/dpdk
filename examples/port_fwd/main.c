@@ -53,6 +53,7 @@
 #include <cmdline_parse.h>
 #include <cmdline_parse_etheraddr.h>
 #include <rte_pdump.h>
+#include <rte_ip_frag.h>
 
 #include "port_fwd.h"
 #include "nxp/rte_remote_direct_flow.h"
@@ -128,10 +129,12 @@ static int fwd_dst_port[RTE_MAX_ETHPORTS];
 
 static int rx_seg_port[RTE_MAX_ETHPORTS];
 
-static struct rte_mempool *pktmbuf_pool;
 static struct rte_mempool *pktmbuf_pools[RTE_ETH_DPAA_RX_MAX_MPOOLS];
+static struct rte_mempool *pktmbuf_per_port_pool[RTE_MAX_ETHPORTS];
 
 static struct rte_mempool *pktmbuf_pool_tx_only;
+
+#define MAX_FRAG_NUM 10
 
 #define RTE_MAX_QUEUES 128
 static uint16_t s_pq_map[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES];
@@ -142,6 +145,12 @@ static uint64_t min_mbuf_addr = (~((uint64_t)0));
 static int s_dump_mbuf;
 static int s_inject;
 static uint16_t s_inject_pkt_size = 64;
+static int s_fragment_tx_port = -1;
+static int s_reassemble_rx_port = -1;
+
+static uint8_t s_per_port_pool;
+
+static int s_jumbo_size = 9000;
 
 static uint16_t s_tx_seg = 1;
 
@@ -258,8 +267,7 @@ port_fwd_drain_tx_cnf(struct lcore_conf *qconf)
 			continue;
 		rte_delay_us(10000);
 drain_again:
-		drain = rte_pmd_dpaa2_clean_tx_conf(dstportid,
-				queueid);
+		drain = rte_pmd_dpaa2_clean_tx_conf(dstportid, queueid);
 		if (drain)
 			goto drain_again;
 	}
@@ -501,6 +509,31 @@ port_fwd_create_ext_pool(char *nm, uint32_t nb_mbufs,
 	return mp;
 }
 
+static void
+port_fwd_inject_gen_pkt(struct rte_mbuf *mbuf)
+{
+	struct rte_ether_hdr *eth_header;
+	struct rte_ipv4_hdr *ipv4_header;
+	uint64_t rand = rte_rand();
+	uint8_t *payload = rte_pktmbuf_mtod(mbuf, void *);
+	const uint16_t len = s_inject_pkt_size -
+		sizeof(struct rte_ether_hdr) - PKTGEN_ETH_FCS_SIZE;
+
+	rte_memcpy(payload, s_inject_pkt_base,
+		sizeof(s_inject_pkt_base));
+	eth_header = (struct rte_ether_hdr *)payload;
+	ipv4_header = (struct rte_ipv4_hdr *)(eth_header + 1);
+	ipv4_header->total_length = rte_cpu_to_be_16(len);
+	ipv4_header->packet_id = rte_cpu_to_be_16(0x1234);
+	ipv4_header->src_addr = (rte_be32_t)(rand & 0xffffffff);
+	ipv4_header->dst_addr = (rte_be32_t)((rand >> 32) & 0xffffffff);
+	ipv4_header->hdr_checksum = 0;
+	ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
+
+	mbuf->pkt_len = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
+	mbuf->data_len = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
+}
+
 static int
 port_fwd_alloc_seg_mbufs(struct rte_mempool *pools[],
 	struct rte_mbuf **mbuf_hdr)
@@ -559,9 +592,9 @@ port_fwd_dup_mbufs(uint32_t eth_id,
 	for (i = 0; i < s_tx_seg; i++) {
 		if (!(i % 2)) {
 			pools[i] = pktmbuf_pool_tx_only ?
-				pktmbuf_pool_tx_only : pktmbuf_pool;
+				pktmbuf_pool_tx_only : pktmbuf_per_port_pool[eth_id];
 		} else {
-			pools[i] = pktmbuf_pool;
+			pools[i] = pktmbuf_per_port_pool[eth_id];
 		}
 	}
 
@@ -587,8 +620,7 @@ alloc_again:
 		if (ret) {
 			clean_count = 0;
 alloc_clean_again:
-			tx_clean = rte_pmd_dpaa2_clean_tx_conf(eth_id,
-						txq_id);
+			tx_clean = rte_pmd_dpaa2_clean_tx_conf(eth_id, txq_id);
 			if (!tx_clean) {
 				clean_count++;
 				if (clean_count < 100)
@@ -597,6 +629,8 @@ alloc_clean_again:
 			alloc_count++;
 			goto alloc_again;
 		}
+		for (i = 0; i < count; i++)
+			port_fwd_inject_gen_pkt(mbuf_to[i]);
 
 		return count;
 	}
@@ -626,6 +660,281 @@ copy_clean_again:
 	rte_pktmbuf_free_bulk(mbuf_from, count);
 
 	return i;
+}
+
+static void
+port_fwd_reassemble_process(struct lcore_rx_queue *lc_rxq,
+	struct rte_mbuf *mbufs[], uint16_t nb_rx)
+{
+	uint16_t i;
+	uint8_t ip_offset;
+	struct rte_mbuf *mo;
+	int ret;
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_ip_frag_tbl *tbl;
+	struct rte_ip_frag_death_row *dr = &lc_rxq->dr;
+	uint8_t *pay_load;
+	uint32_t lcore_id = rte_lcore_id();
+	struct lcore_conf *qconf;
+	uint64_t frag_cycles;
+	uint32_t bucket_num = 0x1000, bucket_entries = 16, max_entries = 0x1000;
+
+	frag_cycles = (rte_get_tsc_hz() + MS_PER_S - 1) / MS_PER_S * MS_PER_S;
+
+	qconf = &s_lcore_conf[lcore_id];
+
+	if (!lc_rxq->tbl) {
+		lc_rxq->tbl = rte_ip_frag_table_create(bucket_num,
+			bucket_entries, max_entries, frag_cycles,
+			rte_socket_id());
+		if (!lc_rxq->tbl) {
+			rte_panic("%s, line %d: Create fragment table failed\n",
+				__func__, __LINE__);
+		}
+	}
+	tbl = lc_rxq->tbl;
+
+	for (i = 0; i < nb_rx; i++) {
+		if ((mbufs[i]->packet_type & RTE_PTYPE_L4_MASK) !=
+			RTE_PTYPE_L4_FRAG) {
+			mo = mbufs[i];
+			goto free_buf;
+		}
+		ip_offset = 0;
+		ret = rte_pmd_dpaa2_rx_get_offset(RTE_MAX_ETHPORTS,
+			mbufs[i], &ip_offset, NULL, NULL);
+		if (ret)
+			continue;
+		pay_load = rte_pktmbuf_mtod(mbufs[i], void *);
+		ip_hdr = (void *)(pay_load + ip_offset);
+		mbufs[i]->l2_len = sizeof(struct rte_ether_hdr);
+		mbufs[i]->l3_len = sizeof(struct rte_ipv4_hdr);
+		mo = rte_ipv4_frag_reassemble_packet(tbl,
+			dr, mbufs[i], rte_rdtsc(), ip_hdr);
+		if (!mo)
+			continue;
+		qconf->rx_reassemble_count[lc_rxq->port_id]++;
+		qconf->rx_reassemble_bytes[lc_rxq->port_id] += mo->pkt_len;
+
+free_buf:
+		rte_pktmbuf_free(mo);
+		mo = NULL;
+	}
+
+	if (dr->cnt >= RTE_IP_FRAG_DEATH_ROW_MBUF_LEN) {
+		rte_panic("%s: Mbuf count in frag death row overflows\n",
+			__func__);
+	}
+	rte_ip_frag_free_death_row(dr, 3);
+}
+
+static int
+main_frag_tx_test_loop(void)
+{
+	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+	uint16_t tx_len[MAX_PKT_BURST * MAX_FRAG_NUM];
+	unsigned int lcore_id;
+	int i, j, num, k;
+	uint16_t portid;
+	int dstportid;
+	uint8_t queueid;
+	struct lcore_conf *qconf;
+	char *penv;
+	uint16_t burst_size = 1, frag_count, nb_tx, sent;
+	uint16_t inject_size = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
+	struct rte_mbuf *frag_pkts[MAX_PKT_BURST * MAX_FRAG_NUM], **pkts;
+	struct rte_ether_hdr eth_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
+	uint16_t wait_s = 0;
+
+	penv = getenv("PORT_FWD_INJECTION_BURST_SIZE");
+	if (penv) {
+		burst_size = atoi(penv);
+		if (burst_size < 1 || burst_size > MAX_PKT_BURST)
+			burst_size = MAX_PKT_BURST;
+	}
+	penv = getenv("PORT_FWD_TX_FRAG_WAIT_TIME");
+	if (penv)
+		wait_s = atoi(penv);
+
+	RTE_LOG(INFO, port_fwd,
+		"Inject pkt size is %d and burst size is %d\n",
+		s_inject_pkt_size, burst_size);
+
+	lcore_id = rte_lcore_id();
+	qconf = &s_lcore_conf[lcore_id];
+
+	if (qconf->n_rx_queue == 0) {
+		RTE_LOG(INFO, port_fwd,
+			"lcore %u has nothing to do\n", lcore_id);
+		return 0;
+	}
+
+	RTE_LOG(INFO, port_fwd,
+		"entering injection test loop on lcore %u\n",
+		lcore_id);
+
+	for (i = 0; i < qconf->n_rx_queue; i++) {
+		portid = qconf->rx_queue_list[i].port_id;
+		queueid = qconf->rx_queue_list[i].queue_id;
+		RTE_LOG(INFO, port_fwd,
+			" -- lcoreid=%u portid=%u rxqueueid=%hhu\n",
+			lcore_id, portid, queueid);
+	}
+
+	while (!force_quit) {
+		/* Read packet from RX queues
+		 */
+		for (i = 0; i < qconf->n_rx_queue; i++) {
+			portid = qconf->rx_queue_list[i].port_id;
+			queueid = qconf->rx_queue_list[i].queue_id;
+
+			dstportid = portid;
+
+			if (s_fragment_tx_port != dstportid)
+				continue;
+
+			nb_tx = port_fwd_dup_mbufs(dstportid,
+				qconf->tx_queue_id[dstportid],
+				pkts_burst, NULL, burst_size);
+			if (!nb_tx)
+				continue;
+
+			frag_count = 0;
+			for (j = 0; j < nb_tx; j++) {
+				pkts_burst[j]->data_off = RTE_PKTMBUF_HEADROOM;
+				pkts_burst[j]->pkt_len = inject_size;
+				pkts_burst[j]->data_len = inject_size;
+				qconf->tx_jumbo_count[dstportid]++;
+				qconf->tx_jumbo_bytes[dstportid] += inject_size;
+				rte_memcpy(&eth_hdr, rte_pktmbuf_mtod(pkts_burst[j], void *),
+					sizeof(struct rte_ether_hdr));
+				rte_pktmbuf_adj(pkts_burst[j], sizeof(struct rte_ether_hdr));
+				num = rte_ipv4_fragment_packet(pkts_burst[j],
+					&frag_pkts[frag_count], MAX_FRAG_NUM, RTE_ETHER_MTU,
+					pkts_burst[j]->pool, pkts_burst[j]->pool);
+				rte_pktmbuf_free(pkts_burst[j]);
+				if (num <= 0) {
+					RTE_LOG(DEBUG, port_fwd,
+						"Fragment frame err(%d)\n", num);
+					continue;
+				}
+				pkts = &frag_pkts[frag_count];
+				for (k = 0; k < num; k++) {
+					ip_hdr = rte_pktmbuf_mtod(pkts[k], void *);
+					ip_hdr->hdr_checksum = 0;
+					rte_pktmbuf_prepend(pkts[k], sizeof(struct rte_ether_hdr));
+					rte_memcpy(rte_pktmbuf_mtod(pkts[k], void *),
+						&eth_hdr, sizeof(struct rte_ether_hdr));
+					pkts[k]->ol_flags |=
+						(RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_IP_CKSUM);
+					pkts[k]->l2_len = sizeof(struct rte_ether_hdr);
+					tx_len[frag_count + k] = pkts[k]->pkt_len;
+				}
+				frag_count += num;
+			}
+
+			sent = rte_eth_tx_burst(dstportid,
+					qconf->tx_queue_id[dstportid],
+					frag_pkts, frag_count);
+			for (j = 0; j < sent; j++) {
+				qconf->tx_statistic[dstportid].bytes +=
+					tx_len[j];
+				qconf->tx_statistic[dstportid].bytes_fcs +=
+					tx_len[j] + PKTGEN_ETH_FCS_SIZE;
+				qconf->tx_statistic[dstportid].bytes_overhead +=
+					tx_len[j] + PKTGEN_ETH_OVERHEAD_SIZE;
+			}
+			qconf->tx_statistic[dstportid].packets += sent;
+
+			/* Free any unsent packets. */
+			for (j = sent; j < frag_count; j++)
+				rte_pktmbuf_free(frag_pkts[j]);
+		}
+
+		if (wait_s)
+			sleep(wait_s);
+	}
+
+	if (qconf->dump_buf) {
+		rte_free(qconf->dump_buf);
+		qconf->dump_buf = NULL;
+	}
+
+	if (pktmbuf_pool_tx_only)
+		port_fwd_drain_tx_cnf(qconf);
+
+	return 0;
+}
+
+static int
+main_reassemble_rx_loop(void)
+{
+	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+	unsigned int lcore_id;
+	int i, j, nb_rx;
+	uint16_t portid;
+	uint8_t queueid;
+	struct lcore_conf *qconf;
+
+	lcore_id = rte_lcore_id();
+	qconf = &s_lcore_conf[lcore_id];
+
+	if (qconf->n_rx_queue == 0) {
+		RTE_LOG(INFO, port_fwd,
+			"lcore %u has nothing to do\n", lcore_id);
+		return 0;
+	}
+
+	RTE_LOG(INFO, port_fwd,
+		"entering injection test loop on lcore %u\n",
+		lcore_id);
+
+	for (i = 0; i < qconf->n_rx_queue; i++) {
+		portid = qconf->rx_queue_list[i].port_id;
+		queueid = qconf->rx_queue_list[i].queue_id;
+		RTE_LOG(INFO, port_fwd,
+			" -- lcoreid=%u portid=%u rxqueueid=%hhu\n",
+			lcore_id, portid, queueid);
+	}
+
+	while (!force_quit) {
+		/* Read packet from RX queues
+		 */
+		for (i = 0; i < qconf->n_rx_queue; i++) {
+			portid = qconf->rx_queue_list[i].port_id;
+			queueid = qconf->rx_queue_list[i].queue_id;
+
+			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst,
+				MAX_PKT_BURST);
+
+			for (j = 0; j < nb_rx; j++) {
+				qconf->rx_statistic[portid].bytes +=
+					pkts_burst[j]->pkt_len;
+				qconf->rx_statistic[portid].bytes_fcs +=
+					PORT_FWD_MBUF_FCS(pkts_burst[j]);
+				qconf->rx_statistic[portid].bytes_overhead +=
+					PORT_FWD_MBUF_OVERHEAD(pkts_burst[j]);
+			}
+			qconf->rx_statistic[portid].packets += nb_rx;
+
+			if (s_reassemble_rx_port == portid) {
+				if (nb_rx > 0) {
+					port_fwd_reassemble_process(&qconf->rx_queue_list[i],
+						pkts_burst, nb_rx);
+				}
+				continue;
+			}
+			rte_pktmbuf_free_bulk(pkts_burst, nb_rx);
+		}
+	}
+
+	if (qconf->dump_buf) {
+		rte_free(qconf->dump_buf);
+		qconf->dump_buf = NULL;
+	}
+
+	return 0;
 }
 
 static int
@@ -688,13 +997,6 @@ main_injection_test_loop(void)
 				MAX_PKT_BURST);
 
 			for (j = 0; j < nb_rx; j++) {
-				if (unlikely(inject_size !=
-					pkts_burst[j]->pkt_len)) {
-					RTE_LOG(WARNING, port_fwd,
-						"PKT len(%d) received is not expected(%d)\n",
-						pkts_burst[j]->pkt_len,
-						inject_size);
-				}
 				qconf->rx_statistic[portid].bytes +=
 					pkts_burst[j]->pkt_len;
 				qconf->rx_statistic[portid].bytes_fcs +=
@@ -732,6 +1034,7 @@ main_injection_test_loop(void)
 			sent = rte_eth_tx_burst(dstportid,
 					qconf->tx_queue_id[dstportid],
 					pkts_burst, nb_tx);
+
 			for (j = 0; j < sent; j++) {
 				qconf->tx_statistic[dstportid].bytes +=
 					tx_len[j];
@@ -955,10 +1258,45 @@ main_loop(__attribute__((unused)) void *dummy)
 	uint64_t bytes[MAX_PKT_BURST];
 	struct rte_ring *tx_ring, *rx_ring;
 	uint8_t sents[MAX_PKT_BURST];
-	int re_send_max = 0;
+	int re_send_max = 0, fragment_tx = 0, reassemble_rx = 0;
 
 	if (s_inject) {
 		main_injection_test_loop();
+		return 0;
+	}
+	lcore_id = rte_lcore_id();
+	qconf = &s_lcore_conf[lcore_id];
+	if (s_fragment_tx_port >= 0) {
+		for (i = 0; i < qconf->n_rx_queue; i++) {
+			portid = qconf->rx_queue_list[i].port_id;
+			if (portid == s_fragment_tx_port) {
+				fragment_tx = 1;
+				break;
+			}
+		}
+	}
+	if (s_reassemble_rx_port >= 0) {
+		for (i = 0; i < qconf->n_rx_queue; i++) {
+			portid = qconf->rx_queue_list[i].port_id;
+			if (portid == s_reassemble_rx_port) {
+				reassemble_rx = 1;
+				break;
+			}
+		}
+	}
+	if (fragment_tx && reassemble_rx) {
+		RTE_LOG(ERR, port_fwd,
+			"fragment and reassemble can't run on same core(%d)\n",
+			lcore_id);
+		return 0;
+	}
+
+	if (fragment_tx) {
+		main_frag_tx_test_loop();
+		return 0;
+	}
+	if (reassemble_rx) {
+		main_reassemble_rx_loop();
 		return 0;
 	}
 
@@ -974,9 +1312,6 @@ main_loop(__attribute__((unused)) void *dummy)
 		if (re_send_max < 0)
 			re_send_max = 0;
 	}
-
-	lcore_id = rte_lcore_id();
-	qconf = &s_lcore_conf[lcore_id];
 
 	if (qconf->n_rx_queue == 0) {
 		RTE_LOG(INFO, port_fwd,
@@ -1495,6 +1830,9 @@ static const char short_options[] =
 #define CMD_LINE_OPT_TX_ONLY_SEG "tx-only-seg"
 #define CMD_LINE_OPT_TX_ONLY_BUF_TYPE "tx-only-buf"
 
+#define CMD_LINE_OPT_TX_FRAG_PORT "tx-frag-port"
+#define CMD_LINE_OPT_RX_REASSEMBLE_PORT "rx-reassemble-port"
+
 enum {
 	/* long options mapped to a short option */
 
@@ -1507,8 +1845,11 @@ enum {
 	CMD_LINE_OPT_DIRECT_REMOTE_CONFIG_NUM,
 	CMD_LINE_OPT_DIRECT_DEF_CONFIG_NUM,
 	CMD_LINE_OPT_TX_ONLY_NUM,
+	CMD_LINE_OPT_TX_FRAG_PORT_NUM,
 	CMD_LINE_OPT_TX_ONLY_SEG_NUM,
-	CMD_LINE_OPT_TX_ONLY_BUF_TYPE_NUM
+	CMD_LINE_OPT_TX_ONLY_BUF_TYPE_NUM,
+	CMD_LINE_OPT_RX_REASSEMBLE_PORT_NUM,
+	CMD_LINE_OPT_PER_PORT_POOL_NUM
 };
 
 static const struct option lgopts[] = {
@@ -1526,6 +1867,12 @@ static const struct option lgopts[] = {
 		CMD_LINE_OPT_TX_ONLY_SEG_NUM},
 	{CMD_LINE_OPT_TX_ONLY, 0, 0,
 		CMD_LINE_OPT_TX_ONLY_NUM},
+	{CMD_LINE_OPT_TX_FRAG_PORT, 1, 0,
+		CMD_LINE_OPT_TX_FRAG_PORT_NUM},
+	{CMD_LINE_OPT_RX_REASSEMBLE_PORT, 1, 0,
+		CMD_LINE_OPT_RX_REASSEMBLE_PORT_NUM},
+	{CMD_LINE_OPT_PER_PORT_POOL, 0, 0,
+		CMD_LINE_OPT_PER_PORT_POOL_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -1611,8 +1958,17 @@ parse_args(int argc, char **argv)
 		case CMD_LINE_OPT_TX_ONLY_NUM:
 			s_inject = true;
 			break;
+		case CMD_LINE_OPT_TX_FRAG_PORT_NUM:
+			s_fragment_tx_port = atoi(optarg);
+			break;
+		case CMD_LINE_OPT_RX_REASSEMBLE_PORT_NUM:
+			s_reassemble_rx_port = atoi(optarg);
+			break;
 		case CMD_LINE_OPT_TX_ONLY_SEG_NUM:
 			s_tx_seg = atoi(optarg);
+			break;
+		case CMD_LINE_OPT_PER_PORT_POOL_NUM:
+			s_per_port_pool = 1;
 			break;
 
 		default:
@@ -1626,30 +1982,6 @@ parse_args(int argc, char **argv)
 	ret = optind - 1;
 	optind = 1; /* reset getopt lib */
 	return ret;
-}
-
-static void
-port_fwd_inject_gen_pkt(struct rte_mbuf *mbuf)
-{
-	struct rte_ether_hdr *eth_header;
-	struct rte_ipv4_hdr *ipv4_header;
-	uint64_t rand = rte_rand();
-	uint8_t *payload = rte_pktmbuf_mtod(mbuf, void *);
-	const uint16_t len = s_inject_pkt_size -
-		sizeof(struct rte_ether_hdr) - PKTGEN_ETH_FCS_SIZE;
-
-	rte_memcpy(payload, s_inject_pkt_base,
-		sizeof(s_inject_pkt_base));
-	eth_header = (struct rte_ether_hdr *)payload;
-	ipv4_header = (struct rte_ipv4_hdr *)(eth_header + 1);
-	ipv4_header->total_length = rte_cpu_to_be_16(len);
-	ipv4_header->src_addr = (rte_be32_t)(rand & 0xffffffff);
-	ipv4_header->dst_addr = (rte_be32_t)((rand >> 32) & 0xffffffff);
-	ipv4_header->hdr_checksum = 0;
-	ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
-
-	mbuf->pkt_len = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
-	mbuf->data_len = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
 }
 
 static void
@@ -1686,20 +2018,19 @@ port_fwd_mp_max_min_addr(struct rte_mempool *mp)
 			max_mbuf_addr = mbuf_arry[i]->buf_iova;
 		if (mbuf_arry[i]->buf_iova < min_mbuf_addr)
 			min_mbuf_addr = mbuf_arry[i]->buf_iova;
-		if (s_inject)
-			port_fwd_inject_gen_pkt(mbuf_arry[i]);
 	}
 	rte_pktmbuf_free_bulk(mbuf_arry, mp->size);
 	free(mbuf_arry);
 }
 
 static int
-init_mem(unsigned int nb_mbuf, uint16_t buf_size)
+init_mem(unsigned int nb_mbuf, uint16_t buf_size, uint16_t nb_ports)
 {
 	char s[64];
 	char s_tx[64];
 	char s_2nd[64];
 	int i, max_pool_size;
+	struct rte_mempool *pktmbuf_pool;
 
 	snprintf(s, sizeof(s), "port_fwd_mbuf_pool");
 	snprintf(s_tx, sizeof(s_tx), "port_fwd_mbuf_tx_pool");
@@ -1718,8 +2049,7 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 			"mbuf pool(%s)(count=%d) lookup success\n",
 			pktmbuf_pool->name, pktmbuf_pool->size);
 	} else if (s_proc_type == proc_standalone_secondary) {
-		pktmbuf_pool =
-			rte_pktmbuf_pool_create_by_ops(s_2nd,
+		pktmbuf_pool = rte_pktmbuf_pool_create_by_ops(s_2nd,
 				nb_mbuf,
 				MEMPOOL_CACHE_SIZE, 0,
 				buf_size, 0,
@@ -1748,6 +2078,19 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 				}
 			}
 			pktmbuf_pool = pktmbuf_pools[RTE_ETH_DPAA_RX_MAX_MPOOLS - 1];
+		} else if (s_per_port_pool) {
+			for (i = 0; i < nb_ports; i++) {
+				snprintf(s, sizeof(s),
+					"port_fwd_mbuf_pool_port%d", i);
+				pktmbuf_per_port_pool[i] = rte_pktmbuf_pool_create(s,
+					nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0);
+				if (pktmbuf_per_port_pool[i]) {
+					RTE_LOG(INFO, port_fwd,
+						"mbuf pool(%s)(count=%d) created\n",
+						s, nb_mbuf);
+				}
+			}
+			pktmbuf_pool = pktmbuf_per_port_pool[0];
 		} else {
 			pktmbuf_pool = rte_pktmbuf_pool_create(s,
 				nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0);
@@ -1759,7 +2102,7 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 		}
 	}
 
-	if (s_inject) {
+	if (s_inject || s_fragment_tx_port >= 0) {
 		if (s_port_fwd_tx_buf_type == PORT_FWD_TX_BUF_PLATFORM) {
 			pktmbuf_pool_tx_only = NULL;
 		} else if (s_port_fwd_tx_buf_type == PORT_FWD_TX_BUF_DEFAULT) {
@@ -1770,6 +2113,11 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size)
 			pktmbuf_pool_tx_only = port_fwd_create_ext_pool(s_tx,
 				nb_mbuf, buf_size, MEMPOOL_CACHE_SIZE);
 		}
+	}
+
+	if (!s_per_port_pool) {
+		for (i = 0; i < nb_ports; i++)
+			pktmbuf_per_port_pool[i] = pktmbuf_pool;
 	}
 
 	if (!pktmbuf_pool)
@@ -1812,16 +2160,16 @@ static inline void
 port_fwd_dump_port_status(struct rte_eth_stats *stats)
 {
 	RTE_LOG(INFO, port_fwd,
+		"Output: %ld bytes, %ld packets, %ld error\n",
+		(unsigned long)stats->obytes,
+		(unsigned long)stats->opackets,
+		(unsigned long)stats->oerrors);
+	RTE_LOG(INFO, port_fwd,
 		"Input: %ld bytes, %ld packets, %ld missed, %ld error\n",
 		(unsigned long)stats->ibytes,
 		(unsigned long)stats->ipackets,
 		(unsigned long)stats->imissed,
 		(unsigned long)stats->ierrors);
-	RTE_LOG(INFO, port_fwd,
-		"Output: %ld bytes, %ld packets, %ld error\n",
-		(unsigned long)stats->obytes,
-		(unsigned long)stats->opackets,
-		(unsigned long)stats->oerrors);
 }
 
 static void *perf_statistics(void *arg)
@@ -1839,6 +2187,10 @@ static void *perf_statistics(void *arg)
 	uint64_t tx_bytes_oh[RTE_MAX_ETHPORTS];
 	uint64_t rx_bytes_oh_old[RTE_MAX_ETHPORTS];
 	uint64_t tx_bytes_oh_old[RTE_MAX_ETHPORTS];
+	uint64_t tx_jumbo_count[RTE_MAX_ETHPORTS];
+	uint64_t tx_jumbo_bytes[RTE_MAX_ETHPORTS];
+	uint64_t rx_reassemble_count[RTE_MAX_ETHPORTS];
+	uint64_t rx_reassemble_bytes[RTE_MAX_ETHPORTS];
 
 	memset(rx_bytes_oh_old, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
 	memset(tx_bytes_oh_old, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
@@ -1861,6 +2213,10 @@ loop:
 	memset(tx_bytes_fcs, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
 	memset(rx_bytes_oh, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
 	memset(tx_bytes_oh, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
+	memset(tx_jumbo_count, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
+	memset(tx_jumbo_bytes, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
+	memset(rx_reassemble_count, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
+	memset(rx_reassemble_bytes, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
 
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
 		if (rte_lcore_is_enabled(lcore_id) == 0)
@@ -1878,6 +2234,10 @@ loop:
 				tx_bytes_fcs[port_id] += txs->bytes_fcs;
 				rx_bytes_oh[port_id] +=	rxs->bytes_overhead;
 				tx_bytes_oh[port_id] +=	txs->bytes_overhead;
+				tx_jumbo_count[port_id] += qconf->tx_jumbo_count[port_id];
+				tx_jumbo_bytes[port_id] += qconf->tx_jumbo_bytes[port_id];
+				rx_reassemble_count[port_id] += qconf->rx_reassemble_count[port_id];
+				rx_reassemble_bytes[port_id] += qconf->rx_reassemble_bytes[port_id];
 				port_num--;
 			}
 		}
@@ -1899,6 +2259,18 @@ loop:
 			port_fwd_dump_port_status(&stats);
 
 skip_print_hw_status:
+			if (tx_jumbo_count[port_id]) {
+				RTE_LOG(INFO, port_fwd,
+					"TX jumbo: %ld pkts, %ld bytes\r\n",
+					(unsigned long)tx_jumbo_count[port_id],
+					(unsigned long)tx_jumbo_bytes[port_id]);
+			}
+			if (rx_reassemble_count[port_id]) {
+				RTE_LOG(INFO, port_fwd,
+					"RX reassemble: %ld pkts, %ld bytes\r\n",
+					(unsigned long)rx_reassemble_count[port_id],
+					(unsigned long)rx_reassemble_bytes[port_id]);
+			}
 			RTE_LOG(INFO, port_fwd,
 				"TX: %lld pkts, %lld bits, %fGbps\r\n",
 				(unsigned long long)tx_pkts[port_id],
@@ -2060,6 +2432,8 @@ main(int argc, char **argv)
 				s_inject_pkt_size = 64;
 		}
 	}
+	if (s_fragment_tx_port >= 0)
+		s_inject_pkt_size = s_jumbo_size;
 
 	penv = getenv("PORT_FWD_DPAA1_POOL_SELECT_BY_SIZE");
 	if (penv)
@@ -2081,6 +2455,9 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "check_port_config failed\n");
 
 	nb_lcores = rte_lcore_count();
+
+	if (s_fragment_tx_port >= 0)
+		data_room_size = s_jumbo_size + 100;
 
 	penv = getenv("PORT_FWD_DATA_ROOM_SIZE");
 	if (penv) {
@@ -2111,7 +2488,7 @@ main(int argc, char **argv)
 		nb_lcores * MEMPOOL_CACHE_SIZE;
 	nb_mbuf = nb_mbuf > 2048 ? nb_mbuf : 2048;
 	s_data_room_size = data_room_size;
-	ret = init_mem(nb_mbuf, data_room_size + RTE_PKTMBUF_HEADROOM);
+	ret = init_mem(nb_mbuf, data_room_size + RTE_PKTMBUF_HEADROOM, nb_ports);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE,
 			"global mem pool(count=%d) init failed\n",
@@ -2225,13 +2602,13 @@ main(int argc, char **argv)
 					ret = rte_eth_rx_queue_setup(portid,
 						rx_queues[portid][q_nb],
 						nb_rxd, socketid[portid][q_nb],
-						&rxq_conf, pktmbuf_pool);
+						&rxq_conf, pktmbuf_per_port_pool[portid]);
 				}
 			} else {
 				ret = rte_eth_rx_queue_setup(portid,
 					rx_queues[portid][q_nb],
 					nb_rxd, socketid[portid][q_nb],
-					&rxq_conf, pktmbuf_pool);
+					&rxq_conf, pktmbuf_per_port_pool[portid]);
 			}
 			if (ret < 0) {
 				rte_exit(EXIT_FAILURE,
@@ -2349,6 +2726,14 @@ main(int argc, char **argv)
 		rte_eth_dev_stop(portid);
 		rte_eth_dev_close(portid);
 		RTE_LOG(INFO, port_fwd, " Done\n");
+	}
+	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+		rx_queue = s_lcore_conf[lcore_id].rx_queue_list;
+		for (queue = 0; queue < MAX_RX_QUEUE_PER_LCORE; queue++) {
+			if (rx_queue[queue].tbl)
+				rte_ip_frag_table_destroy(rx_queue[queue].tbl);
+			rx_queue[queue].tbl = NULL;
+		}
 	}
 
 	rte_eal_cleanup();
