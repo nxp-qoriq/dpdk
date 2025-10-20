@@ -3281,9 +3281,8 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	}
 	eth_dev->data->mtu = RTE_ETHER_MTU;
 
-	ret = dpaa2_soft_parser_loaded();
-	if (ret > 0)
-		DPAA2_PMD_INFO("soft parser is loaded");
+	priv->sp_protocol = dpaa2_dev->sp_protocol;
+
 	DPAA2_PMD_INFO("%s: netdev created, connected to %s",
 		eth_dev->data->name, priv->ep_name);
 

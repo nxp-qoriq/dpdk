@@ -21,6 +21,7 @@ struct rte_fslmc_bus {
 	int device_count[DPAA2_DEVTYPE_MAX];
 				/**< Count of all devices scanned */
 	void *mem_pool;
+	int sp_protocol_support;
 };
 
 extern struct rte_fslmc_bus rte_fslmc_bus;

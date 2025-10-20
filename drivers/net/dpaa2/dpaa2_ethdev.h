@@ -373,6 +373,7 @@ struct dpaa2_dev_priv {
 	 * it corresponds to last packet transmitted
 	 */
 	struct dpaa2_queue *next_txq_to_cnf;
+	bool sp_protocol;
 
 	struct rte_eth_dev *eth_dev; /**< Pointer back to holding ethdev */
 	rte_spinlock_t lpbk_qp_lock;
@@ -768,7 +769,6 @@ int dpaa2_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
 
 int dpaa2_dev_recycle_config(struct rte_eth_dev *eth_dev);
 int dpaa2_dev_recycle_deconfig(struct rte_eth_dev *eth_dev);
-int dpaa2_soft_parser_loaded(void);
 
 int
 rte_pmd_dpaa2_dev_recycle_qp_setup(struct rte_dpaa2_device *dpaa2_dev,

@@ -101,7 +101,7 @@ dpaa2_dev_rx_print_parser_result(struct dpaa2_dev_priv *priv,
 
 	fd_addr = (size_t)DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
 	hw_annot_addr = (void *)(fd_addr + DPAA2_FD_PTA_SIZE);
-	dpaa2_print_parse_result(hw_annot_addr);
+	dpaa2_print_parse_result(hw_annot_addr, priv->sp_protocol);
 }
 
 static inline void
@@ -155,8 +155,10 @@ dpaa2_dev_rx_parse_new(struct dpaa2_dev_priv *priv,
 	void *hw_annot_addr, int is_vlan)
 {
 	uint16_t frc = DPAA2_GET_FD_FRC_PARSE_SUM(fd);
+	struct dpaa2_psr_summary *frc_parse = (void *)&frc;
 	struct dpaa2_annot_hdr *annotation = hw_annot_addr;
 	int default_parsed = false, vlan2 = false;
+	uint32_t ext_packet_type = RTE_PTYPE_UNKNOWN;
 
 	RTE_SET_USED(priv);
 
@@ -165,6 +167,16 @@ dpaa2_dev_rx_parse_new(struct dpaa2_dev_priv *priv,
 		if (frc & DPAA2_PKT_TYPE_VLAN_2)
 			vlan2 = true;
 		frc &= (~DPAA2_PKT_TYPE_VLAN);
+	}
+	if (priv->sp_protocol) {
+		if (frc_parse->fafe2) {
+			frc_parse->fafe2 = 0;
+			ext_packet_type |= RTE_PTYPE_TUNNEL_GENEVE;
+		}
+		if (frc_parse->sum_l.l4.fafe3) {
+			frc_parse->sum_l.l4.fafe3 = 0;
+			ext_packet_type |= RTE_PTYPE_INNER_L3_IPV4;
+		}
 	}
 	switch (frc) {
 	case DPAA2_PKT_TYPE_IPV4_UDP:
@@ -231,11 +243,12 @@ dpaa2_dev_rx_parse_new(struct dpaa2_dev_priv *priv,
 		default_parsed = true;
 	}
 
+	m->packet_type |= ext_packet_type;
+
 	if (unlikely(is_vlan && !default_parsed)) {
 		struct dpaa2_psr_result_word5 word5;
 		rte_be16_t *vlan_tci = NULL;
 
-		m->packet_type |= RTE_PTYPE_L2_ETHER_VLAN;
 		m->ol_flags |= RTE_MBUF_F_RX_VLAN;
 		*(rte_be64_t *)&word5 = rte_cpu_to_be_64(annotation->word5);
 		if (vlan2) {

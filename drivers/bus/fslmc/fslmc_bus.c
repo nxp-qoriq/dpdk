@@ -7,6 +7,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <sys/mman.h>
 
 #include <rte_log.h>
 #include <bus_driver.h>
@@ -39,6 +40,85 @@ struct rte_fslmc_bus rte_fslmc_bus;
 
 #define DPAA2_SEQN_DYNFIELD_NAME "dpaa2_seqn_dynfield"
 int dpaa2_seqn_dynfield_offset = -1;
+
+/** For LX2160A, LS2088A and LS1088A*/
+#define WRIOP_CCSR_BASE 0x8b80000
+#define WRIOP_CCSR_CTLU_OFFSET 0
+#define WRIOP_CCSR_CTLU_PARSER_OFFSET 0
+#define WRIOP_CCSR_CTLU_PARSER_INGRESS_OFFSET 0
+
+#define WRIOP_INGRESS_PARSER_PHY \
+	(WRIOP_CCSR_BASE + WRIOP_CCSR_CTLU_OFFSET + \
+	WRIOP_CCSR_CTLU_PARSER_OFFSET + \
+	WRIOP_CCSR_CTLU_PARSER_INGRESS_OFFSET)
+
+struct dpaa2_parser_ccsr {
+	uint32_t psr_cfg;
+	uint32_t psr_idle;
+	uint32_t psr_pclm;
+	uint8_t psr_ver_min;
+	uint8_t psr_ver_maj;
+	uint8_t psr_id1_l;
+	uint8_t psr_id1_h;
+	uint32_t psr_rev2;
+	uint8_t rsv[0x2c];
+	uint8_t sp_ins[4032];
+} __rte_packed;
+
+#define SP_PROTOCOL_MAGIC_DATA 0xabcd
+#define SP_PROTOCOL_MAGIC_OFFSET 0x4
+
+static void
+fslmc_soft_parser_protocol_supported(void)
+{
+	int fd, i;
+	void *map_addr = NULL;
+	const struct dpaa2_parser_ccsr *parser_ccsr = NULL;
+	const uint16_t *magic_num;
+
+	fd = open("/dev/mem", O_RDWR | O_SYNC);
+	if (fd < 0) {
+		DPAA2_BUS_ERR("open \"/dev/mem\" ERROR(%d)", fd);
+		goto exit;
+	}
+
+	map_addr = mmap(NULL, sizeof(struct dpaa2_parser_ccsr),
+		PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		WRIOP_INGRESS_PARSER_PHY);
+	parser_ccsr = map_addr;
+	if (!parser_ccsr) {
+		DPAA2_BUS_ERR("Map 0x%lx(size=0x%lx) failed",
+			(uint64_t)WRIOP_INGRESS_PARSER_PHY,
+			sizeof(struct dpaa2_parser_ccsr));
+		goto exit;
+	}
+
+	DPAA2_BUS_DEBUG("Soft ParserID:0x%02x%02x, Rev:maj(%02x), min(%02x)",
+		parser_ccsr->psr_id1_h, parser_ccsr->psr_id1_l,
+		parser_ccsr->psr_ver_maj, parser_ccsr->psr_ver_min);
+
+	magic_num = (const void *)&parser_ccsr->sp_ins[SP_PROTOCOL_MAGIC_OFFSET];
+	if (*magic_num == SP_PROTOCOL_MAGIC_DATA) {
+		#define SP_PRINT_LEN 128
+
+		rte_fslmc_bus.sp_protocol_support = true;
+		DPAA2_BUS_INFO("Soft parser protocol support.\r\n");
+		fprintf(stderr, "First %d bytes of sp protocol firmware:\r\n",
+			SP_PRINT_LEN);
+		for (i = 0; i < SP_PRINT_LEN; i++) {
+			fprintf(stderr, "%02x ", parser_ccsr->sp_ins[i]);
+			if ((i + 1) % 16 == 0)
+				fprintf(stderr, "\r\n");
+		}
+		fprintf(stderr, "\r\n");
+	}
+
+exit:
+	if (map_addr)
+		munmap(map_addr, sizeof(struct dpaa2_parser_ccsr));
+	if (fd >= 0)
+		close(fd);
+}
 
 uint32_t
 rte_fslmc_get_device_count(enum rte_dpaa2_dev_type device_type)
@@ -356,6 +436,7 @@ rte_fslmc_scan(void)
 		DPAA2_BUS_ERR("Unable to open VFIO group directory");
 		goto scan_fail;
 	}
+	fslmc_soft_parser_protocol_supported();
 
 	/* Scan the DPRC container object */
 	ret = scan_one_fslmc_device(group_name);
@@ -502,6 +583,7 @@ rte_fslmc_probe(void)
 				(dev->device.devargs &&
 				dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
 				dev->mem_pool = rte_fslmc_bus.mem_pool;
+				dev->sp_protocol = rte_fslmc_bus.sp_protocol_support;
 				ret = drv->probe(drv, dev);
 				if (ret) {
 					DPAA2_BUS_ERR("Failed(%d) to probe %s",

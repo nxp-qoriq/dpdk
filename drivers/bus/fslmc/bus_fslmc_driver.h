@@ -109,6 +109,7 @@ struct rte_dpaa2_device {
 	struct rte_dpaa2_driver *driver;    /**< Associated driver */
 	char name[FSLMC_OBJECT_MAX_LEN];    /**< DPAA2 Object name*/
 	void *mem_pool;
+	int sp_protocol;
 };
 
 typedef int (*rte_dpaa2_obj_create_t)(int vdev_fd,

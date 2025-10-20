@@ -57,6 +57,7 @@ struct dpaa2_dpdmux_dev {
 	uint8_t *key_param;
 	uint64_t key_param_iova;
 	uint16_t flow_num;
+	int sp_protocol;
 	rte_spinlock_t lock;
 	LIST_HEAD(, dpaa2_mux_flow) flows;
 };
@@ -1043,12 +1044,6 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 			spec = pattern[loop].spec;
 			mask = pattern[loop].mask;
 
-			if (!dpaa2_soft_parser_loaded()) {
-				DPAA2_PMD_ERR("eCPRI mux flow: SP not loaded");
-				ret = -ENOTSUP;
-				goto creation_error;
-			}
-
 			ret = dpaa2_mux_add_parser_extract(dpdmux_dev,
 					DPAA2_PARSER_ECPRI_ID,
 					flow, &extract_update);
@@ -1595,6 +1590,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 		goto init_err;
 	}
 	rte_spinlock_init(&dpdmux_dev->lock);
+	dpdmux_dev->sp_protocol = obj->sp_protocol;
 
 	TAILQ_INSERT_TAIL(&dpdmux_dev_list, dpdmux_dev, next);
 
