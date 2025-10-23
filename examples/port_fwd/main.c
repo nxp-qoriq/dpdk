@@ -131,6 +131,7 @@ static int rx_seg_port[RTE_MAX_ETHPORTS];
 
 static struct rte_mempool *pktmbuf_pools[RTE_ETH_DPAA_RX_MAX_MPOOLS];
 static struct rte_mempool *pktmbuf_per_port_pool[RTE_MAX_ETHPORTS];
+static int s_default_pool[RTE_MAX_ETHPORTS];
 
 static struct rte_mempool *pktmbuf_pool_tx_only;
 
@@ -2082,8 +2083,14 @@ init_mem(unsigned int nb_mbuf, uint16_t buf_size, uint16_t nb_ports)
 			for (i = 0; i < nb_ports; i++) {
 				snprintf(s, sizeof(s),
 					"port_fwd_mbuf_pool_port%d", i);
-				pktmbuf_per_port_pool[i] = rte_pktmbuf_pool_create(s,
-					nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0);
+				if (s_default_pool[i]) {
+					pktmbuf_per_port_pool[i] = rte_pktmbuf_pool_create_by_ops(s,
+						nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0,
+						RTE_MBUF_DEFAULT_MEMPOOL_OPS);
+				} else {
+					pktmbuf_per_port_pool[i] = rte_pktmbuf_pool_create(s,
+						nb_mbuf, MEMPOOL_CACHE_SIZE, 0, buf_size, 0);
+				}
 				if (pktmbuf_per_port_pool[i]) {
 					RTE_LOG(INFO, port_fwd,
 						"mbuf pool(%s)(count=%d) created\n",
@@ -2191,6 +2198,7 @@ static void *perf_statistics(void *arg)
 	uint64_t tx_jumbo_bytes[RTE_MAX_ETHPORTS];
 	uint64_t rx_reassemble_count[RTE_MAX_ETHPORTS];
 	uint64_t rx_reassemble_bytes[RTE_MAX_ETHPORTS];
+	uint32_t hw_count, available_count;
 
 	memset(rx_bytes_oh_old, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
 	memset(tx_bytes_oh_old, 0, RTE_MAX_ETHPORTS * sizeof(uint64_t));
@@ -2250,8 +2258,7 @@ loop:
 			struct rte_eth_stats stats;
 			int get_st_ret;
 
-			RTE_LOG(INFO, port_fwd,
-				"PORT%d:\r\n", port_id);
+			RTE_LOG(INFO, port_fwd, "PORT%d:\r\n", port_id);
 			get_st_ret = rte_eth_stats_get(port_id, &stats);
 			if (get_st_ret)
 				goto skip_print_hw_status;
@@ -2259,6 +2266,13 @@ loop:
 			port_fwd_dump_port_status(&stats);
 
 skip_print_hw_status:
+			hw_count = rte_mempool_ops_get_count(pktmbuf_per_port_pool[port_id]);
+			available_count = rte_mempool_avail_count(pktmbuf_per_port_pool[port_id]);
+			RTE_LOG(INFO, port_fwd,
+				"Mem pool(%s): %d packets in HW, %d packets available\r\n",
+				pktmbuf_per_port_pool[port_id]->name, hw_count,
+				available_count);
+
 			if (tx_jumbo_count[port_id]) {
 				RTE_LOG(INFO, port_fwd,
 					"TX jumbo: %ld pkts, %ld bytes\r\n",
@@ -2470,8 +2484,15 @@ main(int argc, char **argv)
 	port_conf.rxmode.max_lro_pkt_size = data_room_size;
 
 	RTE_ETH_FOREACH_DEV(portid) {
+		char env_name[64];
+
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
+
+		sprintf(env_name, "PORT%d_DEFAULT_MEM_POOL", portid);
+		penv = getenv(env_name);
+		if (penv)
+			s_default_pool[portid] = atoi(penv);
 
 		nb_rx_queue[portid] = get_port_n_rx_queues(portid,
 			rx_queues[portid]);
