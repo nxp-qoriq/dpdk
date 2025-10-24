@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020-2024 NXP
+ * Copyright 2020-2025 NXP
  */
 
 #include <unistd.h>
@@ -1636,7 +1636,7 @@ pcie_dw_msix_bar_resize(struct lsx_pciep_hw_low *hw,
 	int pf, int is_vf, uint32_t end,
 	uint8_t bar)
 {
-	int ret, bar_64b, bar_update = 0;
+	int ret, bar_64b;
 	uint64_t bar_size;
 
 	if (pcie_dw_using_32b_bar(bar)) {
@@ -1657,13 +1657,17 @@ pcie_dw_msix_bar_resize(struct lsx_pciep_hw_low *hw,
 		return ret;
 	}
 
-	while (bar_size < end) {
-		bar_update = 1;
-		bar_size = bar_size * 2;
-	}
+	LSX_PCIEP_BUS_INFO("MSIX bar(%d)'s original size is 0x%lx",
+		bar, bar_size);
 
-	if (!bar_update)
-		return 0;
+	if (!bar_size)
+		bar_size = end;
+
+	while (bar_size < end)
+		bar_size = bar_size * 2;
+
+	if (bar_size < (LSX_PCIEP_DW_WIN_MASK + 1))
+		bar_size = (LSX_PCIEP_DW_WIN_MASK + 1);
 
 	ret = pcie_dw_set_bar_size(hw, pf, is_vf, bar, bar_size,
 			!pcie_dw_using_32b_bar(bar));
