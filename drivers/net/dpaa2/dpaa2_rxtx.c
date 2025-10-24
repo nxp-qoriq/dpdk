@@ -1411,7 +1411,7 @@ uint16_t dpaa2_dev_tx_conf(void *txq, int drain)
 	struct dpaa2_queue *dpaa2_q = dpaa2_txq->tx_conf_queue;
 	struct qbman_result *dq_storage, *dq_storage1 = NULL;
 	uint32_t fqid = dpaa2_q->fqid;
-	int ret, num_tx_conf, pull_size, total = 0, bulk_free;
+	int ret, pull_size, total = 0, bulk_free;
 	uint8_t pending, status, idx, buf_idx;
 	struct qbman_swp *swp;
 	const struct qbman_fd *fd;
@@ -1429,7 +1429,6 @@ uint16_t dpaa2_dev_tx_conf(void *txq, int drain)
 
 conf_again:
 	bulk_free = true;
-	num_tx_conf = 0;
 	idx = 0;
 	q_storage = dpaa2_q->q_storage[rte_lcore_id()];
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
@@ -1536,8 +1535,8 @@ conf_again:
 		}
 		idx++;
 		dq_storage++;
-		num_tx_conf++;
-		dpaa2_q->to_cnfd--;
+		if (idx >= dpaa2_dqrr_size)
+			break;
 	} while (pending);
 
 	if (check_swp_active_dqs(swp_idx)) {
@@ -1558,11 +1557,6 @@ conf_again:
 	q_storage->active_dpio_id = swp_idx;
 	set_swp_active_dqs(swp_idx, dq_storage1);
 
-	if (unlikely(dpaa2_q->to_cnfd < 0)) {
-		rte_panic("%s: to be confirmed count(%d) < 0",
-			__func__, dpaa2_q->to_cnfd);
-	}
-
 	if (bulk_free) {
 		rte_pktmbuf_free_bulk(mbufs, idx);
 	} else {
@@ -1574,9 +1568,9 @@ conf_again:
 		}
 	}
 
-	dpaa2_q->rx_pkts += num_tx_conf;
-	total += num_tx_conf;
-	if (drain && dpaa2_q->to_cnfd > 0)
+	dpaa2_q->rx_pkts += idx;
+	total += idx;
+	if (drain && pending)
 		goto conf_again;
 
 	return total;
@@ -1651,8 +1645,7 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	}
 	hw_mp = priv->bp_list->mp;
 
-	if (dpaa2_q->tx_conf_queue &&
-		dpaa2_q->tx_conf_queue->to_cnfd > 0)
+	if (dpaa2_q->tx_conf_queue)
 		dpaa2_dev_tx_conf(dpaa2_q, false);
 
 	/*Prepare enqueue descriptor*/
@@ -1751,8 +1744,6 @@ skip_fast_mbuf2fd:
 	nb_pkts -= loop;
 	if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 		for (i = 0; i < loop; i++) {
-			if (dy_conf[i])
-				dpaa2_q->tx_conf_queue->to_cnfd++;
 			if (tstamp[i])
 				dpaa2_q->tx_conf_queue->ts_to_cnfd++;
 		}
@@ -1761,8 +1752,6 @@ skip_fast_mbuf2fd:
 		goto tx_again;
 
 	dpaa2_q->tx_pkts += num_tx;
-	if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF)
-		dpaa2_q->tx_conf_queue->to_cnfd += num_tx;
 
 	return num_tx;
 
@@ -1786,8 +1775,6 @@ send_n_return:
 	if (priv->tx_conf_type != DPAA2_TX_NO_CONF) {
 		loop = i;
 		for (i = 0; i < loop; i++) {
-			if (dy_conf[i])
-				dpaa2_q->tx_conf_queue->to_cnfd++;
 			if (tstamp[i])
 				dpaa2_q->tx_conf_queue->ts_to_cnfd++;
 		}
@@ -1795,8 +1782,6 @@ send_n_return:
 
 skip_tx:
 	dpaa2_q->tx_pkts += num_tx;
-	if (priv->tx_conf_type == DPAA2_TX_ABSOLUTE_CONF)
-		dpaa2_q->tx_conf_queue->to_cnfd += num_tx;
 
 	return num_tx;
 }
@@ -1900,8 +1885,7 @@ tx_again:
 
 	for (loop = 0; loop < frames_to_send; loop++) {
 		dpaa2_q[loop] = queue[loop];
-		if (dpaa2_q[loop]->tx_conf_queue &&
-			dpaa2_q[loop]->tx_conf_queue->to_cnfd > 0)
+		if (dpaa2_q[loop]->tx_conf_queue)
 			dpaa2_dev_tx_conf(dpaa2_q[loop], false);
 		eth_data = dpaa2_q[loop]->eth_data;
 		priv = eth_data->dev_private;
@@ -2008,8 +1992,6 @@ send_frames:
 	nb_pkts -= loop;
 	sent += loop;
 	for (i = 0; i < loop; i++) {
-		if (dy_conf[i])
-			dpaa2_q[i]->tx_conf_queue->to_cnfd++;
 		if (tstamp[i] && dpaa2_q[i]->tx_conf_queue)
 			dpaa2_q[i]->tx_conf_queue->ts_to_cnfd++;
 	}
