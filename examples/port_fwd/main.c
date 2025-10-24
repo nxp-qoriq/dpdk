@@ -110,6 +110,9 @@ struct port_queue_lcore_param {
 static struct port_queue_lcore_param s_pqc[MAX_LCORE_PARAMS];
 static uint16_t s_pqc_num;
 
+static struct port_queue_lcore_param s_tx_pqc[MAX_LCORE_PARAMS];
+static uint16_t s_tx_pqc_num;
+
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = RTE_ETH_MQ_RX_RSS,
@@ -197,6 +200,85 @@ struct loop_mode {
 #define PORT_FWD_MBUF_OVERHEAD(mbuf) \
 	(mbuf->pkt_len + PKTGEN_ETH_OVERHEAD_SIZE * mbuf->nb_segs)
 
+struct port_fwd_ring {
+	uint32_t total_size;
+	uint32_t head;
+	uint32_t tail;
+	void **obj_buf;
+};
+
+static __rte_noinline uint32_t
+port_fwd_ring_eq(void *_ring, void **objs, uint32_t num)
+{
+	uint32_t idx = 0;
+	struct port_fwd_ring *ring = _ring;
+
+	if (!num)
+		return 0;
+
+	while (((ring->tail + 1) & (ring->total_size - 1)) !=
+		ring->head) {
+		ring->obj_buf[ring->tail] = objs[idx];
+		idx++;
+		rte_io_wmb();
+		ring->tail = (ring->tail + 1) & (ring->total_size - 1);
+		if (idx == num)
+			break;
+	}
+
+	return idx;
+}
+
+static __rte_noinline uint32_t
+port_fwd_ring_dq(void *_ring, void **objs, uint32_t num)
+{
+	uint32_t idx = 0;
+	struct port_fwd_ring *ring = _ring;
+
+	while (ring->tail != ring->head) {
+		objs[idx] = ring->obj_buf[ring->head];
+		idx++;
+		rte_io_wmb();
+		ring->head = (ring->head + 1) & (ring->total_size - 1);
+		if (idx == num)
+			break;
+	}
+
+	return idx;
+}
+
+static struct port_fwd_ring *
+port_fwd_ring_init(uint32_t size)
+{
+	struct port_fwd_ring *ring = NULL;
+
+	if (!RTE_IS_POWER_OF_2(size))
+		return NULL;
+	if (size < 1024)
+		return NULL;
+	ring = rte_zmalloc(NULL, sizeof(struct port_fwd_ring), 0);
+	if (!ring)
+		return NULL;
+	ring->obj_buf = rte_zmalloc(NULL, (size + 10) * sizeof(void *),
+		RTE_CACHE_LINE_SIZE);
+	if (!ring->obj_buf) {
+		rte_free(ring);
+		return NULL;
+	}
+	ring->total_size = size;
+
+	return ring;
+}
+
+static void
+port_fwd_ring_release(void *_ring)
+{
+	struct port_fwd_ring *ring = _ring;
+
+	rte_free(ring->obj_buf);
+	rte_free(ring);
+}
+
 static int parse_port_fwd_dst(int portid)
 {
 	char *penv;
@@ -263,7 +345,7 @@ port_fwd_drain_tx_cnf(struct lcore_conf *qconf)
 		dstportid = port_fwd_dst_port(portid);
 		if (dstportid < 0)
 			continue;
-		queueid = qconf->tx_queue_id[dstportid];
+		queueid = qconf->rx_queue_list[i].queue_id;
 		if (!rte_pmd_dpaa2_dev_is_dpaa2(dstportid))
 			continue;
 		rte_delay_us(10000);
@@ -664,6 +746,28 @@ copy_clean_again:
 }
 
 static void
+port_fwd_simple_xmit_burst(struct rte_mbuf **pkts_burst,
+	uint16_t dstportid, uint8_t queueid, uint16_t nb_tx,
+	uint64_t tx_len[], struct lcore_conf *qconf)
+{
+	uint16_t sent, i;
+
+	sent = rte_eth_tx_burst(dstportid, queueid, pkts_burst, nb_tx);
+	for (i = 0; i < sent; i++) {
+		qconf->tx_statistic[dstportid].bytes += tx_len[i];
+		qconf->tx_statistic[dstportid].bytes_fcs +=
+			tx_len[i] + PKTGEN_ETH_FCS_SIZE;
+		qconf->tx_statistic[dstportid].bytes_overhead +=
+			tx_len[i] + PKTGEN_ETH_OVERHEAD_SIZE;
+	}
+	qconf->tx_statistic[dstportid].packets += sent;
+
+	/* Free any unsent packets. */
+	for (i = sent; i < nb_tx; i++)
+		rte_pktmbuf_free(pkts_burst[i]);
+}
+
+static void
 port_fwd_reassemble_process(struct lcore_rx_queue *lc_rxq,
 	struct rte_mbuf *mbufs[], uint16_t nb_rx)
 {
@@ -733,20 +837,18 @@ static int
 main_frag_tx_test_loop(void)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
-	uint16_t tx_len[MAX_PKT_BURST * MAX_FRAG_NUM];
+	uint64_t tx_len[MAX_PKT_BURST * MAX_FRAG_NUM];
 	unsigned int lcore_id;
 	int i, j, num, k;
-	uint16_t portid;
 	int dstportid;
 	uint8_t queueid;
 	struct lcore_conf *qconf;
 	char *penv;
-	uint16_t burst_size = 1, frag_count, nb_tx, sent;
+	uint16_t burst_size = 1, frag_count, nb_tx, portid, wait_s = 0;
 	uint16_t inject_size = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
 	struct rte_mbuf *frag_pkts[MAX_PKT_BURST * MAX_FRAG_NUM], **pkts;
 	struct rte_ether_hdr eth_hdr;
 	struct rte_ipv4_hdr *ip_hdr;
-	uint16_t wait_s = 0;
 
 	penv = getenv("PORT_FWD_INJECTION_BURST_SIZE");
 	if (penv) {
@@ -796,8 +898,7 @@ main_frag_tx_test_loop(void)
 				continue;
 
 			nb_tx = port_fwd_dup_mbufs(dstportid,
-				qconf->tx_queue_id[dstportid],
-				pkts_burst, NULL, burst_size);
+				queueid, pkts_burst, NULL, burst_size);
 			if (!nb_tx)
 				continue;
 
@@ -835,22 +936,8 @@ main_frag_tx_test_loop(void)
 				frag_count += num;
 			}
 
-			sent = rte_eth_tx_burst(dstportid,
-					qconf->tx_queue_id[dstportid],
-					frag_pkts, frag_count);
-			for (j = 0; j < sent; j++) {
-				qconf->tx_statistic[dstportid].bytes +=
-					tx_len[j];
-				qconf->tx_statistic[dstportid].bytes_fcs +=
-					tx_len[j] + PKTGEN_ETH_FCS_SIZE;
-				qconf->tx_statistic[dstportid].bytes_overhead +=
-					tx_len[j] + PKTGEN_ETH_OVERHEAD_SIZE;
-			}
-			qconf->tx_statistic[dstportid].packets += sent;
-
-			/* Free any unsent packets. */
-			for (j = sent; j < frag_count; j++)
-				rte_pktmbuf_free(frag_pkts[j]);
+			port_fwd_simple_xmit_burst(frag_pkts, dstportid,
+				queueid, frag_count, tx_len, qconf);
 		}
 
 		if (wait_s)
@@ -938,50 +1025,52 @@ main_reassemble_rx_loop(void)
 	return 0;
 }
 
-static int
+static __rte_noinline int
 main_injection_test_loop(void)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST], *pkt;
-	uint16_t tx_len[MAX_PKT_BURST];
+	uint64_t tx_len[MAX_PKT_BURST];
 	unsigned int lcore_id;
 	int i, nb_rx, j;
-	uint16_t nb_tx, sent;
-	uint16_t portid;
 	int dstportid;
 	uint8_t queueid;
 	struct lcore_conf *qconf;
 	char *penv;
-	uint16_t burst_size = MAX_PKT_BURST, total;
+	struct rte_ring *tx_ring;
+	uint16_t burst_size = MAX_PKT_BURST, total, nb_tx, portid;
 	uint16_t inject_size = s_inject_pkt_size - PKTGEN_ETH_FCS_SIZE;
 
-	penv = getenv("PORT_FWD_INJECTION_BURST_SIZE");
-	if (penv) {
-		burst_size = atoi(penv);
-		if (burst_size < 1 || burst_size > MAX_PKT_BURST)
-			burst_size = MAX_PKT_BURST;
+	if (s_inject) {
+		penv = getenv("PORT_FWD_INJECTION_BURST_SIZE");
+		if (penv) {
+			burst_size = atoi(penv);
+			if (burst_size < 1 || burst_size > MAX_PKT_BURST)
+				burst_size = MAX_PKT_BURST;
+		}
+		RTE_LOG(INFO, port_fwd,
+			"Inject pkt size is %d and burst size is %d\n",
+			s_inject_pkt_size, burst_size);
 	}
-	RTE_LOG(INFO, port_fwd,
-		"Inject pkt size is %d and burst size is %d\n",
-		s_inject_pkt_size, burst_size);
 
 	lcore_id = rte_lcore_id();
 	qconf = &s_lcore_conf[lcore_id];
 
-	if (qconf->n_rx_queue == 0) {
-		RTE_LOG(INFO, port_fwd,
-			"lcore %u has nothing to do\n", lcore_id);
-		return 0;
-	}
-
 	RTE_LOG(INFO, port_fwd,
-		"entering injection test loop on lcore %u\n",
-		lcore_id);
+		"entering loop on lcore %u, %d rxqs and %d txqs\n",
+		lcore_id, qconf->n_rx_queue, qconf->n_tx_queue);
 
 	for (i = 0; i < qconf->n_rx_queue; i++) {
 		portid = qconf->rx_queue_list[i].port_id;
 		queueid = qconf->rx_queue_list[i].queue_id;
 		RTE_LOG(INFO, port_fwd,
-			" -- lcoreid=%u portid=%u rxqueueid=%hhu\n",
+			" -- lcoreid=%u RX portid=%u qid=%hhu\n",
+			lcore_id, portid, queueid);
+	}
+	for (i = 0; i < qconf->n_tx_queue; i++) {
+		portid = qconf->tx_queue_list[i].port_id;
+		queueid = qconf->tx_queue_list[i].queue_id;
+		RTE_LOG(INFO, port_fwd,
+			" -- lcoreid=%u TX portid=%u qid=%hhu\n",
 			lcore_id, portid, queueid);
 	}
 
@@ -992,10 +1081,10 @@ main_injection_test_loop(void)
 			portid = qconf->rx_queue_list[i].port_id;
 			queueid = qconf->rx_queue_list[i].queue_id;
 
-			dstportid = portid;
-
 			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst,
 				MAX_PKT_BURST);
+			if (!nb_rx)
+				continue;
 
 			for (j = 0; j < nb_rx; j++) {
 				qconf->rx_statistic[portid].bytes +=
@@ -1004,51 +1093,60 @@ main_injection_test_loop(void)
 					PORT_FWD_MBUF_FCS(pkts_burst[j]);
 				qconf->rx_statistic[portid].bytes_overhead +=
 					PORT_FWD_MBUF_OVERHEAD(pkts_burst[j]);
+				tx_len[j] = pkts_burst[j]->pkt_len;
 			}
 			qconf->rx_statistic[portid].packets += nb_rx;
 
-			rte_pktmbuf_free_bulk(pkts_burst, nb_rx);
+			if (qconf->rx_queue_list[i].send_q) {
+				tx_ring = qconf->rx_queue_list[i].send_q;
+				nb_tx = port_fwd_ring_eq(tx_ring, (void **)pkts_burst,
+					nb_rx);
+				rte_pktmbuf_free_bulk(&pkts_burst[nb_tx],
+					nb_rx - nb_tx);
+				continue;
+			}
+			dstportid = port_fwd_dst_port(portid);
+			if (dstportid < 0) {
+				rte_pktmbuf_free_bulk(pkts_burst, nb_rx);
+				continue;
+			}
+			port_fwd_simple_xmit_burst(pkts_burst, dstportid,
+				queueid, nb_rx, tx_len, qconf);
+		}
 
-			nb_tx = port_fwd_dup_mbufs(dstportid,
-				qconf->tx_queue_id[dstportid],
-				pkts_burst, NULL, burst_size);
+		for (i = 0; i < qconf->n_tx_queue; i++) {
+			dstportid = qconf->tx_queue_list[i].port_id;
+			queueid = qconf->tx_queue_list[i].queue_id;
+			if (qconf->tx_queue_list[i].tx_ring) {
+				tx_ring = qconf->tx_queue_list[i].tx_ring;
+				nb_tx = port_fwd_ring_dq(tx_ring, (void **)pkts_burst,
+					MAX_PKT_BURST);
+			} else {
+				nb_tx = port_fwd_dup_mbufs(dstportid,
+					queueid, pkts_burst, NULL, burst_size);
+				for (j = 0; j < nb_tx; j++) {
+					total = 0;
+					pkts_burst[j]->data_off = RTE_PKTMBUF_HEADROOM;
+					pkts_burst[j]->pkt_len = inject_size;
+					pkts_burst[j]->data_len = inject_size / s_tx_seg;
+					total += pkts_burst[j]->data_len;
+					pkt = pkts_burst[j];
+					while (pkt->next) {
+						pkt = pkt->next;
+						pkt->data_off = RTE_PKTMBUF_HEADROOM;
+						pkt->data_len = pkt->next ?
+							(inject_size / s_tx_seg) :
+							(inject_size - total);
+						total += pkt->data_len;
+					}
+					tx_len[j] = inject_size;
+				}
+			}
 			if (!nb_tx)
 				continue;
 
-			for (j = 0; j < nb_tx; j++) {
-				total = 0;
-				pkts_burst[j]->data_off = RTE_PKTMBUF_HEADROOM;
-				pkts_burst[j]->pkt_len = inject_size;
-				pkts_burst[j]->data_len = inject_size / s_tx_seg;
-				total += pkts_burst[j]->data_len;
-				pkt = pkts_burst[j];
-				while (pkt->next) {
-					pkt = pkt->next;
-					pkt->data_off = RTE_PKTMBUF_HEADROOM;
-					pkt->data_len = pkt->next ?
-						(inject_size / s_tx_seg) : (inject_size - total);
-					total += pkt->data_len;
-				}
-				tx_len[j] = inject_size;
-			}
-
-			sent = rte_eth_tx_burst(dstportid,
-					qconf->tx_queue_id[dstportid],
-					pkts_burst, nb_tx);
-
-			for (j = 0; j < sent; j++) {
-				qconf->tx_statistic[dstportid].bytes +=
-					tx_len[j];
-				qconf->tx_statistic[dstportid].bytes_fcs +=
-					tx_len[j] + PKTGEN_ETH_FCS_SIZE;
-				qconf->tx_statistic[dstportid].bytes_overhead +=
-					tx_len[j] + PKTGEN_ETH_OVERHEAD_SIZE;
-			}
-			qconf->tx_statistic[dstportid].packets += sent;
-
-			/* Free any unsent packets. */
-			for (j = sent; j < nb_tx; j++)
-				rte_pktmbuf_free(pkts_burst[j]);
+			port_fwd_simple_xmit_burst(pkts_burst, dstportid,
+				queueid, nb_tx, tx_len, qconf);
 		}
 	}
 
@@ -1171,7 +1269,7 @@ tx_again:
 static uint16_t
 port_fwd_handle_seg_rx(struct rte_mbuf **pkts_rx,
 	struct rte_mbuf *pkts_single[], struct lcore_conf *qconf,
-	uint16_t rx_portid, uint16_t nb_rx,
+	uint16_t rx_portid, uint16_t nb_rx, uint16_t queue_id,
 	int re_send_max)
 {
 	uint16_t i, single_nb = 0, j, nb_tx, nb_tx_expected;
@@ -1220,8 +1318,7 @@ port_fwd_handle_seg_rx(struct rte_mbuf **pkts_rx,
 		if (dstportid < 0)
 			continue;
 		nb_tx = port_fwd_xmit_burst(pkts_tx, nb_tx_expected,
-			rx_portid, dstportid, qconf->tx_queue_id[rx_portid],
-			sent, re_send_max);
+			rx_portid, dstportid, queue_id, sent, re_send_max);
 		for (j = 0; j < nb_tx_expected; j++) {
 			if (!sent[j])
 				continue;
@@ -1247,9 +1344,7 @@ main_loop(__attribute__((unused)) void *dummy)
 	struct rte_mbuf **tx_pkts;
 	unsigned int lcore_id;
 	int i, nb_rx, j;
-	uint16_t idx;
-	uint16_t nb_tx, rx_left, re_send, sent;
-	uint16_t portid, rx_burst;
+	uint16_t nb_tx, rx_left, idx, portid, rx_burst;
 	int dstportid;
 	uint8_t queueid;
 	struct lcore_conf *qconf;
@@ -1261,7 +1356,7 @@ main_loop(__attribute__((unused)) void *dummy)
 	uint8_t sents[MAX_PKT_BURST];
 	int re_send_max = 0, fragment_tx = 0, reassemble_rx = 0;
 
-	if (s_inject) {
+	if (s_inject || s_tx_pqc_num) {
 		main_injection_test_loop();
 		return 0;
 	}
@@ -1371,34 +1466,8 @@ main_loop(__attribute__((unused)) void *dummy)
 			if (nb_rx == 0)
 				continue;
 
-			tx_pkts = pkts_burst;
-			sent = 0;
-			re_send = 0;
-ring_fwd_tx_again:
-			nb_tx = rte_eth_tx_burst(portid,
-					qconf->tx_queue_id[portid],
-					tx_pkts, nb_rx - sent);
-			for (j = sent; j < sent + nb_tx; j++) {
-				qconf->tx_statistic[portid].bytes +=
-					bytes[j];
-				qconf->tx_statistic[portid].bytes_fcs +=
-					bytes_fcs[j];
-				qconf->tx_statistic[portid].bytes_overhead +=
-					bytes_overhead[j];
-			}
-			sent += nb_tx;
-			qconf->tx_statistic[portid].packets += nb_tx;
-			if (sent < nb_rx && re_send < re_send_max) {
-				tx_pkts = &pkts_burst[sent];
-				re_send++;
-				goto ring_fwd_tx_again;
-			}
-
-			/* Free any unsent packets. */
-			if (unlikely(sent < nb_rx)) {
-				for (idx = sent; idx < nb_rx; idx++)
-					rte_pktmbuf_free(pkts_burst[idx]);
-			}
+			port_fwd_simple_xmit_burst(pkts_burst, portid, queueid,
+				nb_rx, bytes, qconf);
 		}
 		continue;
 
@@ -1426,7 +1495,7 @@ port_forwarding:
 			}
 
 			rx_left = port_fwd_handle_seg_rx(pkts_burst,
-				tx_burst, qconf, portid, nb_rx,
+				tx_burst, qconf, portid, nb_rx, queueid,
 				re_send_max);
 
 			for (j = 0; j < rx_left; j++) {
@@ -1454,17 +1523,14 @@ port_forwarding:
 			tx_pkts = tx_burst;
 			if (pktmbuf_pool_tx_only) {
 				rx_left = port_fwd_dup_mbufs(dstportid,
-					qconf->tx_queue_id[dstportid],
-					tx_burst_dup, tx_burst, rx_left);
+					queueid, tx_burst_dup, tx_burst, rx_left);
 				if (!rx_left)
 					continue;
 				tx_pkts = tx_burst_dup;
 			}
 
 			nb_tx = port_fwd_xmit_burst(tx_pkts, rx_left,
-				portid, dstportid,
-				qconf->tx_queue_id[dstportid], sents,
-				re_send_max);
+				portid, dstportid, queueid, sents, re_send_max);
 			for (j = 0; j < rx_left; j++) {
 				if (!sents[j])
 					continue;
@@ -1725,6 +1791,61 @@ init_lcore_rx_queues(void)
 	return 0;
 }
 
+static void
+init_lcore_rx_port_2_tx_ring(struct lcore_rx_queue *rx_queue,
+	struct lcore_tx_queue *tx_queue)
+{
+	if (fwd_dst_port[rx_queue->port_id] != tx_queue->port_id)
+		return;
+	if (rx_queue->queue_id != tx_queue->queue_id)
+		return;
+
+	rx_queue->send_q = tx_queue->tx_ring;
+}
+
+static int
+init_lcore_tx_queues(void)
+{
+	uint16_t i, j, nb_tx_queue;
+	uint8_t lcore;
+	struct lcore_rx_queue *rx_queue;
+	struct lcore_tx_queue *tx_queue;
+
+	for (i = 0; i < s_tx_pqc_num; ++i) {
+		if (s_tx_pqc[i].lcore_id < 0) {
+			/**Don't handle this queue by core.*/
+			continue;
+		}
+		lcore = s_tx_pqc[i].lcore_id;
+		nb_tx_queue = s_lcore_conf[lcore].n_tx_queue;
+		if (nb_tx_queue >= MAX_TX_QUEUE_PER_LCORE) {
+			RTE_LOG(ERR, port_fwd,
+				"too many txqs (%u) for lcore: %u\n",
+				nb_tx_queue + 1, lcore);
+			return -EINVAL;
+		}
+		s_lcore_conf[lcore].n_tx_queue++;
+
+		tx_queue = &s_lcore_conf[lcore].tx_queue_list[nb_tx_queue];
+		tx_queue->port_id = s_tx_pqc[i].port_id;
+		tx_queue->queue_id = s_tx_pqc[i].queue_id;
+		if (s_inject)
+			continue;
+		tx_queue->tx_ring = port_fwd_ring_init(2048);
+		if (!tx_queue->tx_ring) {
+			rte_panic("%s: Failed to create ring for TX port%d-queue%d\n",
+				__func__, s_tx_pqc[i].port_id, s_tx_pqc[i].queue_id);
+		}
+		for (lcore = 0; lcore < RTE_MAX_LCORE; lcore++) {
+			rx_queue = s_lcore_conf[lcore].rx_queue_list;
+			for (j = 0; j < s_lcore_conf[lcore].n_rx_queue; j++)
+				init_lcore_rx_port_2_tx_ring(&rx_queue[j], tx_queue);
+		}
+	}
+
+	return 0;
+}
+
 static int
 parse_portmask(const char *portmask)
 {
@@ -1743,7 +1864,8 @@ parse_portmask(const char *portmask)
 }
 
 static int
-parse_config(const char *q_arg)
+parse_config(const char *q_arg,
+	struct port_queue_lcore_param *param)
 {
 	char s[256];
 	const char *p, *p0 = q_arg;
@@ -1754,20 +1876,15 @@ parse_config(const char *q_arg)
 		FLD_LCORE,
 		_NUM_FLD
 	};
-	int int_fld[_NUM_FLD];
+	int int_fld[_NUM_FLD], i, num, param_num = 0;
 	char *str_fld[_NUM_FLD];
-	int i, num;
-	unsigned int size;
-	struct port_queue_lcore_param *param;
-
-	s_pqc_num = 0;
+	uint32_t size;
 
 	for (i = 0; i < MAX_LCORE_PARAMS; i++) {
-		s_pqc[i].port_id = -1;
-		s_pqc[i].queue_id = -1;
-		s_pqc[i].lcore_id = -1;
+		param[i].port_id = -1;
+		param[i].queue_id = -1;
+		param[i].lcore_id = -1;
 	}
-	param = s_pqc;
 
 	p = strchr(p0, '(');
 	while (p) {
@@ -1791,10 +1908,10 @@ parse_config(const char *q_arg)
 			if (errno || end == str_fld[i])
 				return -EINVAL;
 		}
-		if (s_pqc_num >= MAX_LCORE_PARAMS) {
+		if (param_num >= MAX_LCORE_PARAMS) {
 			RTE_LOG(ERR, port_fwd,
 				"exceeded max number port/queue/core params: %hu\n",
-				s_pqc_num);
+				param_num);
 			return -EINVAL;
 		}
 		if (num > FLD_PORT)
@@ -1803,15 +1920,13 @@ parse_config(const char *q_arg)
 			param->queue_id = int_fld[FLD_QUEUE];
 		if (num > FLD_LCORE)
 			param->lcore_id = int_fld[FLD_LCORE];
-		if (param->port_id >= 0 && param->queue_id >= 0)
-			s_pq_map[param->port_id][param->queue_id] = 1;
 
-		s_pqc_num++;
+		param_num++;
 		param++;
 		p = strchr(p0, '(');
 	}
 
-	return 0;
+	return param_num;
 }
 
 #define MEMPOOL_CACHE_SIZE 256
@@ -1822,6 +1937,8 @@ static const char short_options[] =
 	;
 
 #define CMD_LINE_OPT_CONFIG "config"
+#define CMD_LINE_OPT_CONFIG_TX_RING "config_tx_ring"
+
 #define CMD_LINE_OPT_DIRECT_RSP_CONFIG "direct-rsp"
 #define CMD_LINE_OPT_DIRECT_REMOTE_CONFIG "direct-remote"
 #define CMD_LINE_OPT_DIRECT_DEF_CONFIG "direct-def"
@@ -1842,6 +1959,7 @@ enum {
 	 */
 	CMD_LINE_OPT_MIN_NUM = 256,
 	CMD_LINE_OPT_CONFIG_NUM,
+	CMD_LINE_OPT_CONFIG_TX_RING_NUM,
 	CMD_LINE_OPT_DIRECT_RSP_CONFIG_NUM,
 	CMD_LINE_OPT_DIRECT_REMOTE_CONFIG_NUM,
 	CMD_LINE_OPT_DIRECT_DEF_CONFIG_NUM,
@@ -1856,6 +1974,8 @@ enum {
 static const struct option lgopts[] = {
 	{CMD_LINE_OPT_CONFIG, 1, 0,
 		CMD_LINE_OPT_CONFIG_NUM},
+	{CMD_LINE_OPT_CONFIG_TX_RING, 1, 0,
+		CMD_LINE_OPT_CONFIG_TX_RING_NUM},
 	{CMD_LINE_OPT_DIRECT_RSP_CONFIG, 0, 0,
 		CMD_LINE_OPT_DIRECT_RSP_CONFIG_NUM},
 	{CMD_LINE_OPT_DIRECT_REMOTE_CONFIG, 1, 0,
@@ -1919,11 +2039,20 @@ parse_args(int argc, char **argv)
 
 		/* long options */
 		case CMD_LINE_OPT_CONFIG_NUM:
-			ret = parse_config(optarg);
-			if (ret) {
+			ret = parse_config(optarg, s_pqc);
+			if (ret < 0) {
 				RTE_LOG(ERR, port_fwd, "Invalid config\n");
 				return ret;
 			}
+			s_pqc_num = ret;
+			break;
+		case CMD_LINE_OPT_CONFIG_TX_RING_NUM:
+			ret = parse_config(optarg, s_tx_pqc);
+			if (ret < 0) {
+				RTE_LOG(ERR, port_fwd, "Invalid TX ring config\n");
+				return ret;
+			}
+			s_tx_pqc_num = ret;
 			break;
 		case CMD_LINE_OPT_DIRECT_RSP_CONFIG_NUM:
 			s_remote_dir |= RTE_REMOTE_DIR_RSP;
@@ -2372,10 +2501,8 @@ main(int argc, char **argv)
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf *txconf;
 	int ret;
-	uint32_t nb_ports;
-	uint16_t queueid, portid;
-	uint32_t lcore_id;
-	uint32_t nb_lcores;
+	uint32_t nb_ports, lcore_id, nb_lcores, nb_mbuf;
+	uint16_t portid;
 	uint8_t queue;
 	struct rte_ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 	uint16_t nb_rx_queue[RTE_MAX_ETHPORTS];
@@ -2384,11 +2511,11 @@ main(int argc, char **argv)
 	uint16_t rx_queues[RTE_MAX_ETHPORTS][MAX_LCORE_PARAMS];
 	uint16_t tx_queues[RTE_MAX_ETHPORTS][MAX_LCORE_PARAMS];
 	uint32_t total_tx_queues = 0, total_rx_queues = 0;
-	uint32_t nb_mbuf;
 	struct rte_eth_conf local_port_conf[RTE_MAX_ETHPORTS];
 	uint16_t data_room_size = RTE_MBUF_DEFAULT_DATAROOM;
 	char *penv;
 	struct lcore_rx_queue *rx_queue;
+	struct lcore_tx_queue *tx_queue;
 	pthread_t pid;
 
 	/* init EAL */
@@ -2459,6 +2586,12 @@ main(int argc, char **argv)
 			s_mpool_select_by_size_debug = atoi(penv);
 	}
 
+	if (s_inject && !s_tx_pqc_num) {
+		rte_memcpy(s_tx_pqc, s_pqc,
+			sizeof(struct port_queue_lcore_param) * MAX_LCORE_PARAMS);
+		s_tx_pqc_num = s_pqc_num;
+	}
+
 	ret = init_lcore_rx_queues();
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "init_lcore_rx_queues failed\n");
@@ -2514,30 +2647,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE,
 			"global mem pool(count=%d) init failed\n",
 			nb_mbuf);
-
-	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
-		if (rte_lcore_is_enabled(lcore_id) == 0)
-			continue;
-
-		qconf = &s_lcore_conf[lcore_id];
-		/* init RX queues */
-		for (queue = 0; queue < qconf->n_rx_queue; ++queue) {
-			portid = qconf->rx_queue_list[queue].port_id;
-			queueid = qconf->rx_queue_list[queue].queue_id;
-
-			socketid[portid][queueid] =
-				rte_lcore_to_socket_id(lcore_id);
-
-			RTE_LOG(INFO, port_fwd,
-				"rxq/txq=%d,%d,%d\r\n",
-				portid, queueid, socketid[portid][queueid]);
-
-			qconf->tx_queue_id[portid] = queueid;
-
-			qconf->tx_port_id[qconf->n_tx_port] = portid;
-			qconf->n_tx_port++;
-		}
-	}
 
 	/* initialize all ports */
 	RTE_ETH_FOREACH_DEV(portid) {
@@ -2694,6 +2803,8 @@ main(int argc, char **argv)
 		}
 	}
 
+	init_lcore_tx_queues();
+
 	ret = pthread_create(&pid, NULL,
 			port_fwd_check_link_stat, NULL);
 	if (ret) {
@@ -2754,6 +2865,12 @@ main(int argc, char **argv)
 			if (rx_queue[queue].tbl)
 				rte_ip_frag_table_destroy(rx_queue[queue].tbl);
 			rx_queue[queue].tbl = NULL;
+		}
+		tx_queue = s_lcore_conf[lcore_id].tx_queue_list;
+		for (queue = 0; queue < MAX_TX_QUEUE_PER_LCORE; queue++) {
+			if (!tx_queue[queue].tx_ring)
+				continue;
+			port_fwd_ring_release(tx_queue[queue].tx_ring);
 		}
 	}
 

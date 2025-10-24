@@ -10,6 +10,7 @@
 #define MAX_PKT_BURST     32
 
 #define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_TX_QUEUE_PER_LCORE 16
 
 /*
  * Try to avoid TX buffering if we have at least MAX_TX_BURST packets to send.
@@ -32,6 +33,12 @@ struct lcore_rx_queue {
 	struct rte_ip_frag_death_row dr;
 } __rte_cache_aligned;
 
+struct lcore_tx_queue {
+	void *tx_ring;
+	uint16_t port_id;
+	uint8_t queue_id;
+} __rte_cache_aligned;
+
 struct lcore_statistic {
 	uint64_t packets;
 	uint64_t bytes;
@@ -50,9 +57,8 @@ struct lcore_statistic {
 struct lcore_conf {
 	uint16_t n_rx_queue;
 	struct lcore_rx_queue rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
-	uint16_t n_tx_port;
-	uint16_t tx_port_id[RTE_MAX_ETHPORTS];
-	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
+	uint16_t n_tx_queue;
+	struct lcore_tx_queue tx_queue_list[MAX_TX_QUEUE_PER_LCORE];
 	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
 
 	struct lcore_statistic tx_statistic[RTE_MAX_ETHPORTS];
