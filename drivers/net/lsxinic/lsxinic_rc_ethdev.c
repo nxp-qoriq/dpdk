@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2024 NXP
+ * Copyright 2018-2025 NXP
  */
 
 #include <time.h>
@@ -1626,7 +1626,7 @@ eth_lsnic_dev_init(struct rte_eth_dev *eth_dev)
 		LXSNIC_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	struct lsinic_dev_reg *ep_reg = NULL;
 	struct lsinic_rcs_reg *rcs_reg = NULL;
-	int error = 0, snoop;
+	int error = 0, snoop, single_bar;
 	const struct rte_memzone *rc_ring_mem = NULL;
 	char *penv;
 	struct rte_mem_resource *reg_mem_res;
@@ -1649,8 +1649,7 @@ eth_lsnic_dev_init(struct rte_eth_dev *eth_dev)
 	hw->vendor_id = pci_dev->id.vendor_id;
 
 	LSXINIC_PMD_DBG("device_id %d vendor_id %d",
-		hw->device_id,
-		hw->vendor_id);
+		hw->device_id, hw->vendor_id);
 
 	reg_mem_res = &pci_dev->mem_resource[LSX_PCIEP_REG_BAR_IDX];
 	ring_mem_res = &pci_dev->mem_resource[LSX_PCIEP_RING_BAR_IDX];
@@ -1691,18 +1690,25 @@ eth_lsnic_dev_init(struct rte_eth_dev *eth_dev)
 
 	LSXINIC_PMD_DBG("adapter->hw_addr = 0x%p", hw->hw_addr);
 
-	adapter->ep_ring_win_size = ring_mem_res->len;
-	/* eb_ring pci phy mem get */
-	adapter->ep_ring_phy_base = ring_mem_res->phys_addr;
-	/* ep_ring pci bar addr get */
-	adapter->ep_ring_virt_base = ring_mem_res->addr;
+	single_bar = LSINIC_READ_REG(&ep_reg->single_bar);
+	if (single_bar) {
+		adapter->ep_ring_phy_base = reg_mem_res->phys_addr +
+			lsinic_reg_ring_bar_offset(0);
+		adapter->ep_ring_virt_base = (uint8_t *)reg_mem_res->addr +
+			lsinic_reg_ring_bar_offset(0);
+		adapter->rc_ring_win_size = lsinic_ring_bar_size();
+	} else {
+		/* eb_ring pci phy mem get */
+		adapter->ep_ring_phy_base = ring_mem_res->phys_addr;
+		/* ep_ring pci bar addr get */
+		adapter->ep_ring_virt_base = ring_mem_res->addr;
+		adapter->rc_ring_win_size = ring_mem_res->len;
+	}
 	if (!adapter->ep_ring_phy_base) {
 		LSXINIC_PMD_ERR("eb_ring_phy_base if err");
 		return -ENOMEM;
 	}
-	LSXINIC_PMD_DBG("ep_ring size %ld, vir %p",
-		(unsigned long)adapter->ep_ring_win_size,
-		adapter->ep_ring_virt_base);
+	LSXINIC_PMD_DBG("ep_ring vir %p", adapter->ep_ring_virt_base);
 
 	if (!adapter->ep_ring_virt_base) {
 		LSXINIC_PMD_ERR("eb_ring_virt_base reg is null");
@@ -1719,7 +1725,6 @@ eth_lsnic_dev_init(struct rte_eth_dev *eth_dev)
 	 * requeset a similar card eb_ring space
 	 * (pci mem) to rc ring (local mem)
 	 */
-	adapter->rc_ring_win_size = ring_mem_res->len;
 	rc_ring_mem = rte_eth_dma_zone_reserve(eth_dev, "rc_ring", 0,
 			adapter->rc_ring_win_size,
 			adapter->rc_ring_win_size,

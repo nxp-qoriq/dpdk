@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2024 NXP
+ * Copyright 2019-2025 NXP
  */
 
 #ifndef _RTE_LSX_PCIEP_BUS_H_
@@ -121,6 +121,7 @@ struct rte_lsx_pciep_device {
 	void **msix_addr;
 	uint32_t *msix_data;
 
+	int single_bar;
 	/*PCIe inbound*/
 	uint8_t *virt_addr[PCI_MAX_RESOURCE];
 	uint64_t phy_addr[PCI_MAX_RESOURCE];

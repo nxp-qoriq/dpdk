@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2024 NXP
+ * Copyright 2019-2025 NXP
  */
 
 #ifndef _LSXINIC_EP_ETHDEV_H_
@@ -106,7 +106,6 @@ struct lsinic_adapter {
 
 	uint8_t *ep_ring_virt_base;  /* EP ring base */
 	rte_iova_t ep_ring_phy_base;
-	uint64_t ep_ring_win_size;
 
 	uint8_t *rc_ring_virt_base;  /* RC ring shadow base */
 	rte_iova_t rc_ring_phy_base;

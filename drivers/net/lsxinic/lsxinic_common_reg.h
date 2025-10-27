@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2024 NXP
+ * Copyright 2019-2025 NXP
  */
 
 #ifndef _LSXINIC_COMMON_REG_H_
@@ -481,7 +481,8 @@ struct lsinic_dev_reg {  /* offset 0x000-0x1FF */
 	uint32_t vf_idx;		/* 0x014 */
 	uint32_t init_flag;		/* 0x018 */
 	uint32_t snoop;			/* 0x01c */
-	uint32_t cap[62];		/* 0x020 - 0x114 */
+	uint32_t single_bar;	/* 0x020 */
+	uint32_t cap[61];		/* 0x024 - 0x114 */
 	uint32_t rx_ring_max_num;	/* 0x118 */
 	uint32_t rx_entry_max_num;	/* 0x11c */
 	uint32_t tx_ring_max_num;	/* 0x120 */
@@ -646,6 +647,36 @@ struct lsinic_eth_reg {  /* offset 0x300-0x3FF */
 
 #define LSINIC_REG_BAR_MAX_SIZE \
 	(LSINIC_ETH_REG_OFFSET + sizeof(struct lsinic_eth_reg))
+
+#define LSXINIC_BAR_MIN_SIZE 0x1000
+static inline uint64_t lsinic_reg_bar_size(void)
+{
+	uint64_t size = rte_align64pow2(LSINIC_REG_BAR_MAX_SIZE);
+
+	return size > LSXINIC_BAR_MIN_SIZE ? size : LSXINIC_BAR_MIN_SIZE;
+}
+
+static inline uint64_t lsinic_ring_bar_size(void)
+{
+	uint64_t size = LSINIC_RING_PAIR_SIZE(LSINIC_RING_MAX_COUNT);
+
+	size += LSINIC_RING_BD_OFFSET;
+
+	size = rte_align64pow2(size);
+	return size > LSXINIC_BAR_MIN_SIZE ? size : LSXINIC_BAR_MIN_SIZE;
+}
+
+static inline uint64_t lsinic_reg_ring_bar_size(void)
+{
+	return lsinic_reg_bar_size() + lsinic_ring_bar_size();
+}
+
+static inline uint64_t lsinic_reg_ring_bar_offset(int is_reg)
+{
+	if (is_reg)
+		return 0;
+	return lsinic_reg_bar_size();
+}
 
 #define LSINIC_RC_BD_DESC(R, i)	(&(R)->rc_bd_desc[i])
 #define LSINIC_EP_BD_DESC(R, i)	(&(R)->ep_bd_desc[i])

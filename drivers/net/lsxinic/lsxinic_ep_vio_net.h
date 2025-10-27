@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-/* Copyright 2020-2023 NXP  */
+/* Copyright 2020-2023,2025 NXP  */
 
 #ifndef _LSXINIC_EP_VIO_NET_H_
 #define _LSXINIC_EP_VIO_NET_H_
@@ -58,7 +58,6 @@ struct lsxvio_adapter {
 
 	char *ep_ring_virt_base;  /* EP ring base */
 	uint64_t ep_ring_phy_base;
-	uint64_t ep_ring_win_size;
 
 	uint8_t *rc_ring_virt_base;  /* RC ring shadow base */
 	uint64_t rc_ring_phy_base;

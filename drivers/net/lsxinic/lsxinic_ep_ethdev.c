@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2019-2024 NXP
+ * Copyright 2019-2025 NXP
  */
 
 #include <time.h>
@@ -213,12 +213,13 @@ lsinic_set_netdev(struct lsinic_adapter *adapter, int cmd)
 }
 
 static int
-lsinic_set_init_flag(struct lsinic_adapter *adapter)
+lsinic_set_init_flag(struct lsinic_adapter *adapter, int single_bar)
 {
 	struct lsinic_dev_reg *reg =
 		LSINIC_REG_OFFSET(adapter->hw_addr, LSINIC_DEV_REG_OFFSET);
 
 	LSINIC_WRITE_REG(&reg->init_flag, LSINIC_INIT_FLAG);
+	LSINIC_WRITE_REG(&reg->single_bar, single_bar);
 
 	return 0;
 }
@@ -229,7 +230,8 @@ lsinic_init_bar_addr(struct rte_lsx_pciep_device *lsinic_dev)
 	struct rte_eth_dev *eth_dev = lsinic_dev->eth_dev;
 	struct lsinic_adapter *adapter = eth_dev->process_private;
 	int sim, rbp, ret;
-	uint64_t size, mask;
+	uint8_t *base_vir;
+	uint64_t size_reg, size_ring, total_size, base_phy;
 	void *vir_ob;
 
 	adapter->pf_idx = lsinic_dev->pf;
@@ -248,35 +250,42 @@ lsinic_init_bar_addr(struct rte_lsx_pciep_device *lsinic_dev)
 			return -ENOMEM;
 	}
 
-	mask = rte_lsx_pciep_bus_win_mask(lsinic_dev);
+	size_reg = lsinic_reg_bar_size();
+	size_ring = lsinic_ring_bar_size();
 
-	size = LSINIC_REG_BAR_MAX_SIZE;
-	while (mask && (size & mask))
-		size++;
-	ret = rte_lsx_pciep_set_ib_win(lsinic_dev,
-		LSX_PCIEP_REG_BAR_IDX, size);
-	if (ret) {
-		LSXINIC_PMD_ERR("%s: IB win[%d] size(0x%lx) set failed",
-			lsinic_dev->name, LSX_PCIEP_REG_BAR_IDX, size);
+	if (lsinic_dev->single_bar) {
+		total_size = lsinic_reg_ring_bar_size();
+		ret = rte_lsx_pciep_set_ib_win(lsinic_dev,
+			LSX_PCIEP_REG_BAR_IDX, total_size);
+		if (ret) {
+			LSXINIC_PMD_ERR("%s: IB win[%d] size(0x%lx) set failed",
+				lsinic_dev->name, LSX_PCIEP_REG_BAR_IDX,
+				total_size);
 
-		return ret;
+			return ret;
+		}
+	} else {
+		ret = rte_lsx_pciep_set_ib_win(lsinic_dev,
+			LSX_PCIEP_REG_BAR_IDX, size_reg);
+		if (ret) {
+			LSXINIC_PMD_ERR("%s: IB win[%d] size(0x%lx) set failed",
+				lsinic_dev->name, LSX_PCIEP_REG_BAR_IDX, size_reg);
+
+			return ret;
+		}
+
+		ret = rte_lsx_pciep_set_ib_win(lsinic_dev,
+			LSX_PCIEP_RING_BAR_IDX, size_ring);
+		if (ret) {
+			LSXINIC_PMD_ERR("%s: IB win[%d] size(0x%lx) set failed",
+				lsinic_dev->name, LSX_PCIEP_RING_BAR_IDX, size_ring);
+
+			return ret;
+		}
 	}
+
 	/**Always mark reg bar noncache.*/
 	rte_lsx_pciep_ib_cache_mark(lsinic_dev, LSX_PCIEP_REG_BAR_IDX, 0);
-
-	size = LSINIC_RING_PAIR_SIZE(adapter->max_qpairs);
-	size += LSINIC_RING_BD_OFFSET;
-	while (mask && (size & mask))
-		size++;
-	ret = rte_lsx_pciep_set_ib_win(lsinic_dev,
-		LSX_PCIEP_RING_BAR_IDX, size);
-	if (ret) {
-		LSXINIC_PMD_ERR("%s: IB win[%d] size(0x%lx) set failed",
-			lsinic_dev->name, LSX_PCIEP_RING_BAR_IDX, size);
-
-		return ret;
-	}
-	adapter->ep_ring_win_size = size;
 
 	if (sim && !lsinic_dev->is_vf &&
 		!(adapter->cap & LSINIC_CAP_XFER_HOST_ACCESS_EP_MEM)) {
@@ -286,6 +295,18 @@ lsinic_init_bar_addr(struct rte_lsx_pciep_device *lsinic_dev)
 				lsinic_dev->name, ret);
 			return ret;
 		}
+	}
+
+	if (lsinic_dev->single_bar) {
+		base_vir = lsinic_dev->virt_addr[LSX_PCIEP_REG_BAR_IDX];
+		base_phy = lsinic_dev->iov_addr[LSX_PCIEP_REG_BAR_IDX];
+		adapter->hw_addr = base_vir;
+		adapter->ep_ring_virt_base = base_vir + lsinic_reg_ring_bar_offset(0);
+		adapter->ep_ring_phy_base = base_phy + lsinic_reg_ring_bar_offset(0);
+		adapter->bd_desc_base =
+			adapter->ep_ring_virt_base + LSINIC_RING_BD_OFFSET;
+
+		return 0;
 	}
 
 	adapter->hw_addr =
@@ -544,6 +565,10 @@ lsinic_netdev_env_init(struct rte_eth_dev *eth_dev)
 		rte_lsx_pciep_type_get(lsinic_dev->pcie_id);
 	const char *cnf_env = "LSINIC_EP_RXQ_CONFIRM";
 	const char *notify_env = "LSINIC_EP_TXQ_NOTIFY";
+
+	penv = getenv("LSINIC_SINGLE_BAR");
+	if (penv && atoi(penv) > 0)
+		lsinic_dev->single_bar = true;
 
 	adapter->max_qpairs = LSINIC_RING_DEFAULT_MAX_QP;
 	penv = getenv("LSINIC_RING_MAX_QUEUE_PAIRS");
@@ -1155,7 +1180,7 @@ lsinic_dev_configure(struct rte_eth_dev *eth_dev)
 		LSXINIC_PMD_ERR("lsinic_sw_init failed");
 		return -ENODEV;
 	}
-	lsinic_set_init_flag(adapter);
+	lsinic_set_init_flag(adapter, lsinic_dev->single_bar);
 	lsinic_set_netdev(adapter, PCIDEV_COMMAND_INIT);
 #ifdef LSXINIC_LATENCY_PROFILING
 	adapter->cycs_per_us = calculate_cycles_per_us();
@@ -1684,11 +1709,6 @@ lsinic_dev_map_rc_ring(struct lsinic_adapter *adapter,
 
 	adapter->rc_ring_bus_base = rc_reg_addr;
 	adapter->rc_ring_size = size;
-	if (adapter->rc_ring_size != adapter->ep_ring_win_size) {
-		LSXINIC_PMD_WARN("RC ring size(%lx) != EP ring size(%lx)",
-			adapter->rc_ring_size,
-			adapter->ep_ring_win_size);
-	}
 
 	return 0;
 }

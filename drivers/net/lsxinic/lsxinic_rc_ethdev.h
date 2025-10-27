@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2024 NXP
+ * Copyright 2018-2025 NXP
  */
 
 #ifndef _LSXINIC_RC_ETHDEV_H_
@@ -340,7 +340,6 @@ struct lxsnic_adapter {
 	uint8_t *bd_desc_base;
 	uint8_t *ep_ring_virt_base;  /* EP ring base */
 	dma_addr_t ep_ring_phy_base;
-	uint64_t ep_ring_win_size;
 
 	uint8_t *ep_memzone_vir;
 	dma_addr_t ep_memzone_phy;
