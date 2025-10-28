@@ -357,7 +357,7 @@ lxsnic_dev_start(struct rte_eth_dev *dev)
 	struct lsinic_ring_reg *tx_ring_reg;
 	uint32_t reg_val = 0, i;
 	char *penv = getenv("LSINIC_RC_PRINT_STATUS");
-	int print_status = 0, ret;
+	int print_status = 0, ret, q_pair = 1;
 	struct lxsnic_ring *tx_queue;
 	const uint32_t cap = adapter->cap;
 
@@ -390,7 +390,11 @@ lxsnic_dev_start(struct rte_eth_dev *dev)
 				adapter->pkt_addr_interval);
 	}
 
-	lxsnic_dev_rx_tx_bind(dev);
+	penv = getenv("LSINIC_RC_QUEUE_PAIR");
+	if (penv)
+		q_pair = atoi(penv);
+	if (q_pair)
+		lxsnic_dev_rx_tx_bind(dev);
 
 	for (i = 0; i < adapter->eth_dev->data->nb_tx_queues; i++) {
 		tx_queue = adapter->eth_dev->data->tx_queues[i];

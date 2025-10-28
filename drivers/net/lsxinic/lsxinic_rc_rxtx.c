@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2024 NXP
+ * Copyright 2018-2025 NXP
  */
 
 #include <stdio.h>
@@ -888,8 +888,9 @@ _lxsnic_eth_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	if (unlikely(!RTE_PER_LCORE(pthrd_id)))
 		RTE_PER_LCORE(pthrd_id) = pthread_self();
 
-	if (unlikely(tx_ring->core_id != rte_lcore_id() ||
-		!pthread_equal(tx_ring->pid, RTE_PER_LCORE(pthrd_id)))) {
+	if (tx_ring->pair && unlikely(tx_ring->core_id !=
+		rte_lcore_id() || !pthread_equal(tx_ring->pid,
+		RTE_PER_LCORE(pthrd_id)))) {
 		if (!tx_ring->multi_core_ring) {
 			char ring_name[RTE_MEMZONE_NAMESIZE];
 
@@ -1791,7 +1792,7 @@ static void lxsnic_txq_loop(void)
 {
 	struct lxsnic_ring *q, *tq;
 	struct rte_mbuf *tx_pkts[DEFAULT_TX_RS_THRESH];
-	uint16_t ret, i, xmit_ret;
+	uint16_t ret, i, xmit_ret, sent, wait = 0;
 
 	if (RTE_PER_LCORE(lxsnic_txq_num_in_list) == 0)
 		return;
@@ -1803,8 +1804,14 @@ static void lxsnic_txq_loop(void)
 			ret = rte_ring_sc_dequeue_burst(q->multi_core_ring,
 				(void **)tx_pkts, DEFAULT_TX_RS_THRESH, NULL);
 			if (ret) {
-				xmit_ret = lxsnic_eth_xmit_pkts(q,
-					tx_pkts, ret);
+				xmit_ret = 0;
+xmit_again:
+				sent = lxsnic_eth_xmit_pkts(q,
+					&tx_pkts[xmit_ret], ret - xmit_ret);
+				xmit_ret += sent;
+				wait++;
+				if (xmit_ret < ret && wait < 10000)
+					goto xmit_again;
 				for (i = xmit_ret; i < ret; i++)
 					rte_pktmbuf_free(tx_pkts[i]);
 			}
