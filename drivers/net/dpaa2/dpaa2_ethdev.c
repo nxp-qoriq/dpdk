@@ -3012,6 +3012,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	struct dpni_buffer_layout layout;
 	int ret, hw_id, i, entry_num;
 	struct dpaa2_key_extract *extract;
+	uint64_t iova;
 	char *penv;
 
 	dpni_dev = rte_zmalloc(NULL, sizeof(struct fsl_mc_io), 0);
@@ -3104,9 +3105,6 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->num_channels = attr.num_channels;
 	priv->channel_inuse = 0;
 	rte_spinlock_init(&priv->lpbk_qp_lock);
-	priv->default_tc = priv->num_rx_tc - 1;
-	priv->default_flow = RTE_MIN(priv->fs_entries,
-		priv->dist_queues) - 1;
 
 	/* only if the custom CG is enabled */
 	if (attr.options & DPNI_OPT_CUSTOM_CG)
@@ -3266,6 +3264,19 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 			RTE_CACHE_LINE_SIZE);
 		if (!extract->extract_param)
 			goto init_err;
+		iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(extract->extract_param,
+			DPAA2_EXTRACT_PARAM_MAX_SIZE);
+		extract->default_drop = false;
+		if (i < MAX_TCS) {
+			extract->tc_cfg.dist_size = priv->dist_queues;
+			extract->tc_cfg.key_cfg_iova = iova;
+			extract->tc_cfg.tc = i;
+			extract->default_queue.index = priv->dist_queues - 1;
+		} else {
+			extract->qos_cfg.key_cfg_iova = iova;
+			extract->qos_cfg.keep_entries = true;
+			extract->default_jump.group = priv->num_rx_tc - 1;
+		}
 
 		extract->entry_map = rte_zmalloc(NULL, entry_num / 8 + 1, 0);
 		if (!extract->entry_map)

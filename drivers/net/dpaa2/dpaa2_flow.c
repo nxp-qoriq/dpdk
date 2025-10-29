@@ -52,10 +52,7 @@ struct dpaa2_dev_flow_qos_action {
 
 struct dpaa2_dev_flow_fs_action {
 	enum rte_flow_action_type action_type;
-	union {
-		uint16_t rss_queues;
-		struct dpni_fs_action_cfg fs_action_cfg;
-	};
+	struct dpni_fs_action_cfg fs_action_cfg;
 	char dst_name[RTE_ETH_NAME_MAX_LEN];
 };
 
@@ -3487,6 +3484,31 @@ dpaa2_flow_verify_fs_action(struct dpaa2_dev_priv *priv,
 	return 0;
 }
 
+static struct dpaa2_queue *
+dpaa2_flow_queue_action_to_queue(struct dpaa2_dev_priv *priv,
+	uint8_t tc_id, uint16_t queue_id)
+{
+	struct dpaa2_queue *dest_q;
+
+	if (queue_id >= MAX_RX_QUEUES ||
+		!priv->rx_vq[queue_id]) {
+		DPAA2_PMD_ERR("Invalid FSQ index(%d)", queue_id);
+
+		return NULL;
+	}
+	dest_q = priv->rx_vq[queue_id];
+	if (tc_id != dest_q->tc_index) {
+		DPAA2_PMD_ERR("RXQ[%d](%d.%d) not in TC[%d]",
+			queue_id,
+			dest_q->tc_index, dest_q->flow_id,
+			tc_id);
+
+		return NULL;
+	}
+
+	return dest_q;
+}
+
 static int
 dpaa2_flow_fs_action_config(struct dpaa2_dev_priv *priv,
 	struct dpaa2_generic_flow *flow,
@@ -3506,22 +3528,11 @@ dpaa2_flow_fs_action_config(struct dpaa2_dev_priv *priv,
 
 	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_QUEUE) {
 		dest_queue = rte_action->conf;
-		if (dest_queue->index >= MAX_RX_QUEUES ||
-			!priv->rx_vq[dest_queue->index]) {
-			DPAA2_PMD_ERR("Invalid FSQ index(%d)",
-				dest_queue->index);
-
+		dest_q = dpaa2_flow_queue_action_to_queue(priv,
+			flow->tc_id, dest_queue->index);
+		if (!dest_q)
 			return -EINVAL;
-		}
-		dest_q = priv->rx_vq[dest_queue->index];
-		if (flow->tc_id != dest_q->tc_index) {
-			DPAA2_PMD_ERR("RXQ[%d](%d.%d) not in TC[%d]",
-				dest_queue->index,
-				dest_q->tc_index, dest_q->flow_id,
-				flow->tc_id);
 
-			return -EINVAL;
-		}
 		fs_action->fs_action_cfg.options =
 			DPNI_FS_OPT_SET_FLC | DPNI_FS_OPT_SET_STASH_CONTROL;
 
@@ -3618,14 +3629,54 @@ dpaa2_flow_clear_fs_table(struct dpaa2_dev_priv *priv,
 }
 
 static int
+dpaa2_flow_fs_table_set_default(struct dpaa2_dev_priv *priv,
+	uint8_t tc_id, int discard, uint16_t default_queue)
+{
+	int ret;
+	struct dpni_rx_dist_cfg *tc_cfg;
+	struct fsl_mc_io *dpni = priv->hw;
+	struct dpaa2_key_extract *extract;
+	struct dpaa2_queue *queue;
+
+	extract = &priv->extract.tc_key_extract[tc_id];
+
+	if (!extract->enabled) {
+		DPAA2_PMD_ERR("TC[%d] FS table not configured!", tc_id);
+		return -EINVAL;
+	}
+	tc_cfg = &extract->tc_cfg;
+
+	tc_cfg->enable = true;
+	if (discard) {
+		extract->default_drop = true;
+		tc_cfg->fs_miss_flow_id = DPNI_FS_MISS_ACTION_DROP;
+	} else {
+		queue = dpaa2_flow_queue_action_to_queue(priv, tc_id,
+			default_queue);
+		if (!queue)
+			return -EINVAL;
+		extract->default_drop = false;
+		extract->default_queue.index = default_queue;
+		tc_cfg->fs_miss_flow_id = queue->flow_id;
+	}
+	ret = dpni_set_rx_fs_dist(dpni, CMD_PRI_LOW,
+		priv->token, tc_cfg);
+	if (ret < 0) {
+		DPAA2_PMD_ERR("TC[%d] FS configured failed", tc_id);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
 dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
-	uint8_t tc_id, uint16_t dist_size, int rss_dist)
+	uint8_t tc_id, int rss_dist)
 {
 	struct dpaa2_key_extract *tc_extract;
 	uint8_t *key_cfg_buf;
-	uint64_t key_cfg_iova;
 	int ret;
-	struct dpni_rx_dist_cfg tc_cfg;
+	struct dpni_rx_dist_cfg *tc_cfg;
 	struct fsl_mc_io *dpni = priv->hw;
 	uint16_t entry_size;
 	uint16_t key_max_size;
@@ -3641,14 +3692,6 @@ dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
 		return 0;
 
 	key_cfg_buf = priv->extract.tc_key_extract[tc_id].extract_param;
-	key_cfg_iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(key_cfg_buf,
-		DPAA2_EXTRACT_PARAM_MAX_SIZE);
-	if (key_cfg_iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for key cfg(%p)",
-			__func__, key_cfg_buf);
-
-		return -ENOBUFS;
-	}
 
 	key_max_size = tc_extract->key_profile.key_max_size;
 	entry_size = dpaa2_flow_entry_size(key_max_size);
@@ -3661,16 +3704,13 @@ dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
 		return ret;
 	}
 
-	memset(&tc_cfg, 0, sizeof(struct dpni_rx_dist_cfg));
-	tc_cfg.dist_size = dist_size;
-	tc_cfg.key_cfg_iova = key_cfg_iova;
+	tc_cfg = &tc_extract->tc_cfg;
 	if (rss_dist)
-		tc_cfg.enable = true;
+		tc_cfg->enable = true;
 	else
-		tc_cfg.enable = false;
-	tc_cfg.tc = tc_id;
+		tc_cfg->enable = false;
 	ret = dpni_set_rx_hash_dist(dpni, CMD_PRI_LOW,
-			priv->token, &tc_cfg);
+			priv->token, tc_cfg);
 	if (ret < 0) {
 		if (rss_dist) {
 			DPAA2_PMD_ERR("RSS TC[%d] set failed",
@@ -3686,14 +3726,18 @@ dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
 	if (rss_dist)
 		return 0;
 
-	tc_cfg.enable = true;
-	tc_cfg.fs_miss_flow_id = priv->default_flow;
+	tc_cfg->enable = true;
+	if (tc_extract->default_drop)
+		tc_cfg->fs_miss_flow_id = DPNI_FS_MISS_ACTION_DROP;
+	else
+		tc_cfg->fs_miss_flow_id = tc_extract->default_queue.index;
 	ret = dpni_set_rx_fs_dist(dpni, CMD_PRI_LOW,
-			priv->token, &tc_cfg);
+			priv->token, tc_cfg);
 	if (ret < 0) {
 		DPAA2_PMD_ERR("TC[%d] FS configured failed", tc_id);
 		return ret;
 	}
+	tc_extract->enabled = true;
 
 	ret = dpaa2_flow_rule_add_all(priv, DPAA2_FLOW_FS_TYPE,
 			entry_size, tc_id);
@@ -3704,14 +3748,47 @@ dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
 }
 
 static int
+dpaa2_flow_qos_table_set_default(struct dpaa2_dev_priv *priv,
+	int discard, uint8_t default_tc)
+{
+	int ret;
+	struct dpni_qos_tbl_cfg *qos_cfg;
+	struct fsl_mc_io *dpni = priv->hw;
+	struct dpaa2_key_extract *extract;
+
+	extract = &priv->extract.qos_key_extract;
+	if (!extract->enabled) {
+		DPAA2_PMD_ERR("QoS table not configured!");
+		return -EINVAL;
+	}
+	qos_cfg = &extract->qos_cfg;
+	qos_cfg->default_tc = default_tc;
+	if (discard) {
+		extract->default_drop = true;
+		qos_cfg->discard_on_miss = true;
+	} else {
+		extract->default_drop = false;
+		extract->default_jump.group = default_tc;
+		qos_cfg->discard_on_miss = false;
+	}
+
+	ret = dpni_set_qos_table(dpni, CMD_PRI_LOW, priv->token, qos_cfg);
+	if (ret < 0) {
+		DPAA2_PMD_ERR("QoS table set failed(%d)", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
 dpaa2_flow_qos_table_config(struct dpaa2_dev_priv *priv,
 	int rss_dist)
 {
 	struct dpaa2_key_extract *qos_extract;
 	uint8_t *key_cfg_buf;
-	uint64_t key_cfg_iova;
 	int ret;
-	struct dpni_qos_tbl_cfg qos_cfg;
+	struct dpni_qos_tbl_cfg *qos_cfg;
 	struct fsl_mc_io *dpni = priv->hw;
 	uint16_t entry_size;
 	uint16_t key_max_size;
@@ -3746,14 +3823,6 @@ dpaa2_flow_qos_table_config(struct dpaa2_dev_priv *priv,
 		return 0;
 
 	key_cfg_buf = priv->extract.qos_key_extract.extract_param;
-	key_cfg_iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(key_cfg_buf,
-		DPAA2_EXTRACT_PARAM_MAX_SIZE);
-	if (key_cfg_iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for key cfg(%p)",
-			__func__, key_cfg_buf);
-
-		return -ENOBUFS;
-	}
 
 	key_max_size = qos_extract->key_profile.key_max_size;
 	entry_size = dpaa2_flow_entry_size(key_max_size);
@@ -3766,22 +3835,23 @@ dpaa2_flow_qos_table_config(struct dpaa2_dev_priv *priv,
 		DPAA2_PMD_ERR("QoS prepare extract failed");
 		return ret;
 	}
-	memset(&qos_cfg, 0, sizeof(struct dpni_qos_tbl_cfg));
-	qos_cfg.keep_entries = true;
-	qos_cfg.key_cfg_iova = key_cfg_iova;
+	qos_cfg = &qos_extract->qos_cfg;
 	if (rss_dist) {
-		qos_cfg.discard_on_miss = true;
+		qos_cfg->discard_on_miss = true;
 	} else {
-		qos_cfg.discard_on_miss = false;
-		qos_cfg.default_tc = priv->default_tc;
+		qos_cfg->default_tc = qos_extract->default_jump.group;
+		if (qos_extract->default_drop)
+			qos_cfg->discard_on_miss = true;
+		else
+			qos_cfg->discard_on_miss = false;
 	}
 
-	ret = dpni_set_qos_table(dpni, CMD_PRI_LOW,
-			priv->token, &qos_cfg);
+	ret = dpni_set_qos_table(dpni, CMD_PRI_LOW, priv->token, qos_cfg);
 	if (ret < 0) {
-		DPAA2_PMD_ERR("QoS table set failed");
+		DPAA2_PMD_ERR("QoS table set failed(%d)", ret);
 		return ret;
 	}
+	qos_extract->enabled = true;
 
 	ret = dpaa2_flow_rule_add_all(priv, DPAA2_FLOW_QOS_TYPE,
 			entry_size, 0);
@@ -3832,14 +3902,12 @@ dpaa2_flow_item_convert(const struct rte_flow_item pattern[],
 
 static int
 dpaa2_flow_table_update(struct dpaa2_dev_priv *priv,
-	uint16_t dist_size, enum dpaa2_flow_dist_type dist_type,
-	uint8_t tc_id, int is_rss)
+	enum dpaa2_flow_dist_type dist_type, uint8_t tc_id, int is_rss)
 {
 	int ret;
 
 	if (dist_type == DPAA2_FLOW_FS_TYPE) {
-		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id,
-			dist_size, is_rss);
+		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id, is_rss);
 		if (ret)
 			return ret;
 	} else if (dist_type == DPAA2_FLOW_QOS_TYPE) {
@@ -4097,7 +4165,6 @@ dpaa2_flow_fs_action_update(struct dpaa2_dev_priv *priv,
 				goto end_action_set;
 			}
 			fs_action->action_type = RTE_FLOW_ACTION_TYPE_RSS;
-			fs_action->rss_queues = priv->dist_queues;
 
 			break;
 		case RTE_FLOW_ACTION_TYPE_METER_MARK:
@@ -4334,8 +4401,7 @@ dpaa2_flow_generic_extract_rule_set(struct dpaa2_generic_flow *flow,
 	if (!extract_cfg)
 		goto end_extract_set;
 
-	ret = dpaa2_flow_table_update(priv, priv->dist_queues,
-		dist_type, attr->group, is_rss);
+	ret = dpaa2_flow_table_update(priv, dist_type, attr->group, is_rss);
 
 end_extract_set:
 	if (dpaa2_pattern)
@@ -4962,7 +5028,7 @@ dpaa2_flow_generic_flow_destroy(struct rte_eth_dev *dev,
 	struct dpaa2_generic_flow *flow, enum dpaa2_flow_dist_type type)
 {
 	int ret = 0, update;
-	uint8_t dist_size, tc_id = 0;
+	uint8_t tc_id = 0;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 
 	dpaa2_dump_extract_map(priv, "Start destroying flow", type,
@@ -4978,9 +5044,8 @@ dpaa2_flow_generic_flow_destroy(struct rte_eth_dev *dev,
 	update = dpaa2_flow_remove_invalid_extract(dev, type, tc_id);
 	if (update > 0) {
 		if (type == DPAA2_FLOW_FS_TYPE) {
-			dist_size = priv->nb_rx_queues / priv->num_rx_tc;
 			ret = dpaa2_flow_fs_rss_table_config(priv,
-				flow->tc_id, dist_size, false);
+				flow->tc_id, false);
 			if (ret)
 				DPAA2_PMD_ERR("Re-configure FS table failed(%d)", ret);
 		} else {
@@ -5398,6 +5463,66 @@ dpaa2_flow_destroy(struct rte_eth_dev *dev,
 }
 
 static int
+dpaa2_flow_set_miss_actions(struct rte_eth_dev *dev,
+	uint32_t group_id, const struct rte_flow_group_attr *attr,
+	const struct rte_flow_action actions[], struct rte_flow_error *err)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	enum dpaa2_flow_dist_type flow_type = DPAA2_FLOW_NULL_TYPE;
+	int end_of_list = 0, i = 0, discard = false;
+	const struct rte_flow_action_jump *action_jump = NULL;
+	const struct rte_flow_action_queue *dest_queue = NULL;
+
+	RTE_SET_USED(attr);
+	RTE_SET_USED(err);
+	if (group_id >= priv->num_rx_tc)
+		flow_type = DPAA2_FLOW_QOS_TYPE;
+	else
+		flow_type = DPAA2_FLOW_FS_TYPE;
+
+	while (!end_of_list) {
+		switch (actions[i].type) {
+		case RTE_FLOW_ACTION_TYPE_QUEUE:
+			if (flow_type == DPAA2_FLOW_FS_TYPE)
+				dest_queue = actions[i].conf;
+			break;
+		case RTE_FLOW_ACTION_TYPE_JUMP:
+			if (flow_type == DPAA2_FLOW_QOS_TYPE)
+				action_jump = actions[i].conf;
+			break;
+		case RTE_FLOW_ACTION_TYPE_DROP:
+			discard = true;
+			break;
+		case RTE_FLOW_ACTION_TYPE_END:
+			end_of_list = 1;
+			break;
+		default:
+			DPAA2_PMD_WARN("Invalid default action type[%d]:(%d)",
+				i, actions[i].type);
+			break;
+		}
+		i++;
+	}
+
+	if (flow_type == DPAA2_FLOW_QOS_TYPE) {
+		if (!discard && !action_jump) {
+			DPAA2_PMD_ERR("No miss action set for QoS table");
+			return -EINVAL;
+		}
+		return dpaa2_flow_qos_table_set_default(priv, discard,
+			action_jump ? action_jump->group : 0);
+	}
+
+	if (!discard && !dest_queue) {
+		DPAA2_PMD_ERR("No miss action set for FS table[%d]",
+			group_id);
+		return -EINVAL;
+	}
+	return dpaa2_flow_fs_table_set_default(priv, group_id, discard,
+		dest_queue ? dest_queue->index : 0);
+}
+
+static int
 dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	struct rte_flow *_flow,
 	const struct rte_flow_action actions[],
@@ -5406,7 +5531,7 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct dpaa2_dev_flow *flow;
 	struct dpaa2_key_extract *tc_ext;
-	uint16_t dist_size = 0, tc_id;
+	uint16_t tc_id;
 	int ret, is_rss = false;
 	struct dpaa2_dev_flow_fs_action *fs_action;
 	uint8_t qos_action_num = 0, fs_action_num = 0;
@@ -5453,10 +5578,9 @@ action_update:
 	}
 	tc_id = flow->fs_flow->tc_id;
 	tc_ext = &priv->extract.tc_key_extract[tc_id];
-	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS) {
+	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS)
 		is_rss = true;
-		dist_size = fs_action->rss_queues;
-	}
+
 	ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, fs_actions,
 		&tc_ext->dpkg);
 	if (ret) {
@@ -5466,8 +5590,7 @@ action_update:
 		goto quit;
 	}
 	if (is_rss) {
-		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id,
-			dist_size, true);
+		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id, true);
 		if (ret)
 			goto quit;
 	} else {
@@ -5822,6 +5945,7 @@ const struct rte_flow_ops dpaa2_flow_ops = {
 	.create	= dpaa2_flow_create,
 	.validate = dpaa2_flow_validate,
 	.destroy = dpaa2_flow_destroy,
+	.group_set_miss_actions = dpaa2_flow_set_miss_actions,
 	.actions_update = dpaa2_flow_actions_update,
 	.flush	= dpaa2_flow_flush,
 	.query	= dpaa2_flow_query,

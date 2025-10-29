@@ -281,6 +281,16 @@ struct dpaa2_key_extract {
 	uint8_t *extract_param;
 	int entry_num;
 	uint8_t *entry_map;
+	int enabled;
+	union {
+		struct dpni_qos_tbl_cfg qos_cfg;
+		struct dpni_rx_dist_cfg tc_cfg;
+	};
+	int default_drop;
+	union {
+		struct rte_flow_action_jump default_jump;
+		struct rte_flow_action_queue default_queue;
+	};
 };
 
 struct extract_s {
@@ -346,8 +356,6 @@ struct dpaa2_dev_priv {
 	uint8_t en_loose_ordered;
 	uint8_t max_cgs;
 	uint8_t cgid_in_use[MAX_RX_QUEUES];
-	uint8_t default_tc;
-	uint16_t default_flow;
 	rte_spinlock_t meter_lock;
 
 	uint16_t dpni_ver_major;
