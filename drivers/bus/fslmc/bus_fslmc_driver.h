@@ -110,6 +110,7 @@ struct rte_dpaa2_device {
 	char name[FSLMC_OBJECT_MAX_LEN];    /**< DPAA2 Object name*/
 	void *mem_pool;
 	int sp_protocol;
+	uint64_t mc_rev;
 };
 
 typedef int (*rte_dpaa2_obj_create_t)(int vdev_fd,

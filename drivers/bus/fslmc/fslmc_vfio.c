@@ -1622,14 +1622,14 @@ fslmc_process_mcp(struct rte_dpaa2_device *dev)
 		goto cleanup;
 	}
 
-	if ((mc_ver_info.major != MC_VER_MAJOR) ||
-	    (mc_ver_info.minor < MC_VER_MINOR)) {
-		DPAA2_BUS_ERR("DPAA2 MC version not compatible!"
-			      " Expected %d.%d.x, Detected %d.%d.%d",
-			      MC_VER_MAJOR, MC_VER_MINOR,
-			      mc_ver_info.major, mc_ver_info.minor,
-			      mc_ver_info.revision);
-		ret = -1;
+	rte_fslmc_bus.rev = RTE_FSL_MC_REV(mc_ver_info.major,
+		mc_ver_info.minor, mc_ver_info.revision);
+
+	if (rte_fslmc_bus.rev < RTE_FSL_MC_REV(MC_VER_MAJOR, MC_VER_MINOR, 0)) {
+		DPAA2_BUS_ERR("DPAA2 MC version not compatible! %d.%d.%d < %d.%d.0",
+			mc_ver_info.major, mc_ver_info.minor, mc_ver_info.revision,
+			MC_VER_MAJOR, MC_VER_MINOR);
+		ret = -EPERM;
 		goto cleanup;
 	}
 	rte_mcp_ptr_list[MC_PORTAL_INDEX] = (void *)v_addr;

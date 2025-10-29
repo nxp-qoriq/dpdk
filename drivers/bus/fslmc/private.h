@@ -22,6 +22,7 @@ struct rte_fslmc_bus {
 				/**< Count of all devices scanned */
 	void *mem_pool;
 	int sp_protocol_support;
+	uint64_t rev;
 };
 
 extern struct rte_fslmc_bus rte_fslmc_bus;

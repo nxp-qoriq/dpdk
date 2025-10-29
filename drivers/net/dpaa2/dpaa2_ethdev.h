@@ -24,6 +24,8 @@
 #include "base/dpaa2_hw_dpni_annot.h"
 #include "dpaa2_parser_decode.h"
 
+#define DPAA2_FLOW_FRM_REPLICATION_ACTION_MC_REV RTE_FSL_MC_REV(10, 39, 106)
+
 #define DPAA2_MIN_RX_BUF_SIZE 512
 #define DPAA2_MAX_RX_PKT_LEN  10240 /*WRIOP support*/
 #define NET_DPAA2_PMD_DRIVER_NAME net_dpaa2

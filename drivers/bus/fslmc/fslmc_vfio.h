@@ -63,6 +63,9 @@ extern uint32_t dpaa2_cluster_size;
 #define SVR_LS2088A	0x87090000
 #define SVR_LX2160A	0x87360000
 
+#define RTE_FSL_MC_REV(major, minor, revision) \
+	((((uint64_t)(major)) << 32) + (((uint64_t)(major)) << 16) + (revision))
+
 __rte_internal
 int rte_dpaa2_intr_enable(struct rte_intr_handle *intr_handle, int index);
 

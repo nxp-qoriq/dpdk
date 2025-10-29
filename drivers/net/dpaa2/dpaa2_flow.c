@@ -53,7 +53,7 @@ struct dpaa2_dev_flow_qos_action {
 struct dpaa2_dev_flow_fs_action {
 	enum rte_flow_action_type action_type;
 	struct dpni_fs_action_cfg fs_action_cfg;
-	char dst_name[RTE_ETH_NAME_MAX_LEN];
+	char dst_name[DPNI_FS_REDIR_MAX_NUM][RTE_ETH_NAME_MAX_LEN];
 };
 
 union dpaa2_dev_flow_action {
@@ -357,8 +357,13 @@ dpaa2_flow_fs_entry_log(const char *log_info,
 			fs_action->fs_action_cfg.flow_id);
 	} else if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_PORT_ID ||
 		fs_action->action_type == RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT) {
-		DPAA2_FLOW_DUMP("Re-direct to port %s\r\n\n",
-			fs_action->dst_name);
+		DPAA2_FLOW_DUMP("Re-direct to port(s): ");
+		for (idx = 0; idx < fs_action->fs_action_cfg.num_tokens; idx++) {
+			DPAA2_FLOW_DUMP("%s", fs_action->dst_name[idx]);
+			if ((idx + 1) < fs_action->fs_action_cfg.num_tokens)
+				DPAA2_FLOW_DUMP(", ");
+		}
+		DPAA2_FLOW_DUMP("\r\n");
 	} else if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_DROP) {
 		DPAA2_FLOW_DUMP("Drop\r\n\n");
 	} else {
@@ -540,9 +545,13 @@ static int
 dpaa2_flow_add_fs_rule(struct dpaa2_dev_priv *priv,
 	struct dpaa2_generic_flow *flow)
 {
+	struct rte_device *rte_dev = priv->eth_dev->device;
+	struct rte_dpaa2_device *dpaa2_dev;
 	struct dpaa2_key_extract *extract;
 	int ret;
 	struct fsl_mc_io *dpni = priv->hw;
+
+	dpaa2_dev = container_of(rte_dev, struct rte_dpaa2_device, device);
 
 	extract = &priv->extract.tc_key_extract[flow->tc_id];
 	if (dpaa2_flow_entry_map_get(extract->entry_map,
@@ -554,9 +563,15 @@ dpaa2_flow_add_fs_rule(struct dpaa2_dev_priv *priv,
 
 	dpaa2_flow_fs_entry_log("Add", flow);
 
-	ret = dpni_add_fs_entry(dpni, CMD_PRI_LOW,
-		priv->token, flow->tc_id, flow->entry_index,
-		&flow->rule_cfg, &flow->flow_action.fs_action.fs_action_cfg);
+	if (dpaa2_dev->mc_rev >= DPAA2_FLOW_FRM_REPLICATION_ACTION_MC_REV) {
+		ret = dpni_add_fs_entry(dpni, CMD_PRI_LOW,
+			priv->token, flow->tc_id, flow->entry_index,
+			&flow->rule_cfg, &flow->flow_action.fs_action.fs_action_cfg);
+	} else {
+		ret = dpni_add_fs_entry_legacy(dpni, CMD_PRI_LOW,
+			priv->token, flow->tc_id, flow->entry_index,
+			&flow->rule_cfg, &flow->flow_action.fs_action.fs_action_cfg);
+	}
 	if (ret < 0) {
 		DPAA2_PMD_ERR("Add rule(%d) to FS table(%d) failed",
 			flow->entry_index, flow->tc_id);
@@ -3515,16 +3530,35 @@ dpaa2_flow_fs_action_config(struct dpaa2_dev_priv *priv,
 	struct dpaa2_generic_flow *flow,
 	const struct rte_flow_action *rte_action)
 {
+	struct rte_device *rte_dev = priv->eth_dev->device;
+	struct rte_dpaa2_device *dpaa2_dev;
 	struct rte_eth_dev *dest_dev;
 	struct dpaa2_dev_priv *dest_priv;
 	const struct rte_flow_action_queue *dest_queue;
 	struct dpaa2_queue *dest_q;
 	uint64_t flc = 0;
+	uint16_t num_tokens;
 	struct dpaa2_dev_flow_fs_action *fs_action;
 
-	memset(&flow->flow_action, 0,
-		sizeof(union dpaa2_dev_flow_action));
+	dpaa2_dev = container_of(rte_dev, struct rte_dpaa2_device, device);
+
 	fs_action = &flow->flow_action.fs_action;
+	if (fs_action->action_type != RTE_FLOW_ACTION_TYPE_END) {
+		if (dpaa2_dev->mc_rev >= DPAA2_FLOW_FRM_REPLICATION_ACTION_MC_REV &&
+			(fs_action->action_type == RTE_FLOW_ACTION_TYPE_PORT_ID ||
+			fs_action->action_type == RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR)) {
+			if (rte_action->type != RTE_FLOW_ACTION_TYPE_PORT_ID &&
+				rte_action->type != RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR) {
+				DPAA2_PMD_ERR("Redirect action can't mix with other action(%d)",
+					rte_action->type);
+				return -EINVAL;
+			}
+		} else {
+			DPAA2_PMD_ERR("Single action support only with action(%d)",
+				fs_action->action_type);
+			return -EINVAL;
+		}
+	}
 	fs_action->action_type = rte_action->type;
 
 	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_QUEUE) {
@@ -3563,13 +3597,24 @@ dpaa2_flow_fs_action_config(struct dpaa2_dev_priv *priv,
 		}
 
 		dest_priv = dest_dev->data->dev_private;
-		dest_q = dest_priv->tx_vq[0];
-		fs_action->fs_action_cfg.options =
-			DPNI_FS_OPT_REDIRECT_TO_DPNI_TX;
-		fs_action->fs_action_cfg.redirect_obj_token =
-			dest_priv->token;
-		fs_action->fs_action_cfg.flow_id = dest_q->flow_id;
-		strcpy(fs_action->dst_name, dest_priv->eth_dev->data->name);
+		num_tokens = fs_action->fs_action_cfg.num_tokens;
+		if (num_tokens >= DPNI_FS_REDIR_MAX_NUM)
+			return -EINVAL;
+		fs_action->fs_action_cfg.redir_tokens[num_tokens] = dest_priv->token;
+		strcpy(fs_action->dst_name[num_tokens], dest_priv->eth_dev->data->name);
+		fs_action->fs_action_cfg.num_tokens++;
+		if (fs_action->fs_action_cfg.num_tokens > 1) {
+			if (!(priv->options & DPNI_OPT_V8_HAS_REPLICATION)) {
+				DPAA2_PMD_ERR("0x%08x missed in DPNI creating options(0x%08x)",
+					DPNI_OPT_V8_HAS_REPLICATION, priv->options);
+				return -ENOTSUP;
+			}
+			fs_action->fs_action_cfg.options =
+				DPNI_FS_OPT_REDIRECT_TO_MULTIPLE_DPNI_TX;
+		} else {
+			fs_action->fs_action_cfg.options =
+				DPNI_FS_OPT_REDIRECT_TO_DPNI_TX;
+		}
 	} else if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_DROP) {
 		fs_action->fs_action_cfg.options = DPNI_FS_OPT_DISCARD;
 	} else {
@@ -4150,6 +4195,7 @@ dpaa2_flow_fs_action_update(struct dpaa2_dev_priv *priv,
 	const struct rte_flow_action_meter *meter;
 	struct rte_flow_action_meter_mark meter_mark;
 
+	memset(&flow->flow_action, 0, sizeof(union dpaa2_dev_flow_action));
 	fs_action = &flow->flow_action.fs_action;
 
 	while (!end_of_list) {

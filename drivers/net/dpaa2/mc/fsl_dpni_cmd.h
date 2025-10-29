@@ -83,7 +83,8 @@
 #define DPNI_CMDID_ADD_QOS_ENT			DPNI_CMD_V2(0x241)
 #define DPNI_CMDID_REMOVE_QOS_ENT		DPNI_CMD(0x242)
 #define DPNI_CMDID_CLR_QOS_TBL			DPNI_CMD(0x243)
-#define DPNI_CMDID_ADD_FS_ENT			DPNI_CMD_V2(0x244)
+#define DPNI_CMDID_ADD_FS_ENT_LEGACY	DPNI_CMD_V2(0x244)
+#define DPNI_CMDID_ADD_FS_ENT			DPNI_CMD_V3(0x244)
 #define DPNI_CMDID_REMOVE_FS_ENT		DPNI_CMD(0x245)
 #define DPNI_CMDID_CLR_FS_ENT			DPNI_CMD(0x246)
 
@@ -639,6 +640,10 @@ struct dpni_cmd_remove_qos_entry {
 	uint64_t mask_iova;
 };
 
+#ifndef DPNI_FS_REDIR_MAX_NUM
+#define DPNI_FS_REDIR_MAX_NUM 8
+#endif
+
 struct dpni_cmd_add_fs_entry {
 	uint16_t options;
 	uint8_t tc_id;
@@ -648,7 +653,8 @@ struct dpni_cmd_add_fs_entry {
 	uint64_t key_iova;
 	uint64_t mask_iova;
 	uint64_t flc;
-	uint16_t redir_token;
+	uint16_t redir_tokens[DPNI_FS_REDIR_MAX_NUM];
+	uint8_t token_num;
 };
 
 struct dpni_cmd_remove_fs_entry {

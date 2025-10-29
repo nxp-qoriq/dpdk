@@ -2080,6 +2080,7 @@ int dpni_add_fs_entry(struct fsl_mc_io *mc_io,
 {
 	struct dpni_cmd_add_fs_entry *cmd_params;
 	struct mc_command cmd = { 0 };
+	int i;
 
 	/* prepare command */
 	cmd.header = mc_encode_cmd_header(DPNI_CMDID_ADD_FS_ENT,
@@ -2094,7 +2095,36 @@ int dpni_add_fs_entry(struct fsl_mc_io *mc_io,
 	cmd_params->options = cpu_to_le16(action->options);
 	cmd_params->flow_id = cpu_to_le16(action->flow_id);
 	cmd_params->flc = cpu_to_le64(action->flc);
-	cmd_params->redir_token = cpu_to_le16(action->redirect_obj_token);
+	cmd_params->token_num = action->num_tokens;
+	for (i = 0; i < DPNI_FS_REDIR_MAX_NUM; i++)
+		cmd_params->redir_tokens[i] = cpu_to_le16(action->redir_tokens[i]);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_add_fs_entry_legacy(struct fsl_mc_io *mc_io,
+	uint32_t cmd_flags, uint16_t token,
+	uint8_t tc_id, uint16_t index,
+	const struct dpni_rule_cfg *cfg,
+	const struct dpni_fs_action_cfg *action)
+{
+	struct dpni_cmd_add_fs_entry *cmd_params;
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_ADD_FS_ENT_LEGACY,
+		cmd_flags, token);
+	cmd_params = (struct dpni_cmd_add_fs_entry *)cmd.params;
+	cmd_params->tc_id = tc_id;
+	cmd_params->key_size = cfg->key_size;
+	cmd_params->index = cpu_to_le16(index);
+	cmd_params->key_iova = cpu_to_le64(cfg->key_iova);
+	cmd_params->mask_iova = cpu_to_le64(cfg->mask_iova);
+	cmd_params->options = cpu_to_le16(action->options);
+	cmd_params->flow_id = cpu_to_le16(action->flow_id);
+	cmd_params->flc = cpu_to_le64(action->flc);
+	cmd_params->redir_tokens[0] = cpu_to_le16(action->redir_tokens[0]);
 
 	/* send command to mc*/
 	return mc_send_command(mc_io, &cmd);

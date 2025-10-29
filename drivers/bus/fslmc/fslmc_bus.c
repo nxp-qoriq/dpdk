@@ -584,6 +584,7 @@ rte_fslmc_probe(void)
 				dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
 				dev->mem_pool = rte_fslmc_bus.mem_pool;
 				dev->sp_protocol = rte_fslmc_bus.sp_protocol_support;
+				dev->mc_rev = rte_fslmc_bus.rev;
 				ret = drv->probe(drv, dev);
 				if (ret) {
 					DPAA2_BUS_ERR("Failed(%d) to probe %s",

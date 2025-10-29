@@ -122,6 +122,7 @@ struct fsl_mc_io;
  */
 #define DPNI_OPT_STASHING_DIS			0x002000
 
+#define DPNI_OPT_V8_HAS_REPLICATION		0x00004000
 #define DPNI_OPT_V1_PFDR_IN_PEB			0x80000000
 
 /**
@@ -1617,6 +1618,16 @@ int dpni_clear_qos_table(struct fsl_mc_io *mc_io,
 #define DPNI_FS_OPT_REDIRECT_TO_DPNI_TX		0x10
 
 /**
+ * Redirect matching traffic into multiple Tx queues of other dpni objects.
+ * The frame will be transmitted directly
+ */
+#define DPNI_FS_OPT_REDIRECT_TO_MULTIPLE_DPNI_TX	0x20
+
+#ifndef DPNI_FS_REDIR_MAX_NUM
+#define DPNI_FS_REDIR_MAX_NUM 8
+#endif
+
+/**
  * struct dpni_fs_action_cfg - Action configuration for table look-up
  * @flc: FLC value for traffic matching this rule.  Please check the Frame
  * Descriptor section in the hardware documentation for more information.
@@ -1633,15 +1644,49 @@ int dpni_clear_qos_table(struct fsl_mc_io *mc_io,
  * - if DPNI_FS_OPT_DISCARD is cleared the frame will be enqueued in queue with
  *   index provided in flow_id parameter.
  * @options: Any combination of DPNI_FS_OPT_ values.
+ * @token_num: Number of tokens supplied. For DPNI_FS_OPT_REDIRECT_TO_DPNI_RX
+ *	 or DPNI_FS_OPT_REDIRECT_TO_DPNI_TX, the token_num must be 1 since there is
+ *	 only one token which is necessary. Accepted values are in the
+ *	 [1-8] range in case a REDIRECT option is requested.
+ * @redir_tokens: Array of tokens that identify the object where frame is redirected
+ *	 when this rule is hit. This parameter is used only when one
+ *	 of the flags DPNI_FS_OPT_REDIRECT_TO_DPNI_RX,
+ *	 DPNI_FS_OPT_REDIRECT_TO_DPNI_TX or
+ *	 DPNI_FS_OPT_REDIRECT_TO_MULTIPLE_DPNI_TX is set. The tokens
+ *	 are obtained using dpni_open() API call. The objects must
+ *	 stay open during the operation to ensure the fact that
+ *	 application has access on them.
+ *	 If the object is destroyed of closed, the following actions
+ *	 will take place:
+ *	 - In case of DPNI_FS_OPT_REDIRECT_TO_DPNI_TX and
+ *	 DPNI_FS_OPT_REDIRECT_TO_DPNI_RX:
+ *			 + if DPNI_FS_OPT_DISCARD is set the frame will be
+ *			 discarded by current dpni
+ *			 + if DPNI_FS_OPT_DISCARD is cleared the frame will be
+ *			 enqueued in queue with index provided in flow_id
+ *			 parameter.
+ *	 - In case of DPNI_FS_OPT_REDIRECT_TO_MULTIPLE_DPNI_TX, the
+ *	 frame will be redirected to the remaining opened target
+ *	 DPNIs. If there are no more opened target DPNIs, the frame
+ *	 will be discarded.
  */
 struct dpni_fs_action_cfg {
 	uint64_t flc;
 	uint16_t flow_id;
-	uint16_t redirect_obj_token;
 	uint16_t options;
+	uint16_t num_tokens;
+	uint16_t redir_tokens[DPNI_FS_REDIR_MAX_NUM];
 };
 
 int dpni_add_fs_entry(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      uint8_t tc_id,
+		      uint16_t index,
+		      const struct dpni_rule_cfg *cfg,
+		      const struct dpni_fs_action_cfg *action);
+
+int dpni_add_fs_entry_legacy(struct fsl_mc_io *mc_io,
 		      uint32_t cmd_flags,
 		      uint16_t token,
 		      uint8_t tc_id,
