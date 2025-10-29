@@ -392,7 +392,7 @@ struct dpaa2_dev_priv {
 
 	struct rte_mempool *tx_sg_pool;
 
-	struct dpaa2_dev_flow *curr;
+	struct dpaa2_generic_flow *cur_flow;
 	LIST_HEAD(, dpaa2_dev_flow) flows;
 	LIST_HEAD(, dpaa2_dev_meter_profile) profiles;
 	LIST_HEAD(, dpaa2_dev_meter_policy) policies;

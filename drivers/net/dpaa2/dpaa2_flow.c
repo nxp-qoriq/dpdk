@@ -299,7 +299,7 @@ dpaa2_flow_extracts_log(const struct dpaa2_dev_priv *priv,
 
 static inline void
 dpaa2_flow_qos_entry_log(const char *log_info,
-	const struct dpaa2_generic_flow *flow, uint16_t index)
+	const struct dpaa2_generic_flow *flow)
 {
 	int idx;
 	struct rte_eth_dev *dev = flow->priv->eth_dev;
@@ -308,7 +308,7 @@ dpaa2_flow_qos_entry_log(const char *log_info,
 		return;
 
 	DPAA2_FLOW_DUMP("%s: %s QoS entry[%d](size %d/%d) to select FS[%d]\n",
-		dev->data->name, log_info, index, flow->rule_size,
+		dev->data->name, log_info, flow->entry_index, flow->rule_size,
 		flow->rule_cfg.key_size, flow->flow_action.fs_tc_id);
 
 	DPAA2_FLOW_DUMP("key:\r\n");
@@ -364,9 +364,10 @@ dpaa2_flow_fs_entry_log(const char *log_info,
 
 static inline void
 dpaa2_dump_extract_map(const struct dpaa2_dev_priv *priv,
-	const char *prefix)
+	const char *prefix, enum dpaa2_flow_dist_type dist_type,
+	uint8_t group)
 {
-	int idx, offset, i, valid_fs = 0;
+	int idx, offset = 0;
 	char string[2048];
 	const struct dpaa2_key_extract *extract;
 
@@ -375,51 +376,45 @@ dpaa2_dump_extract_map(const struct dpaa2_dev_priv *priv,
 
 	DPAA2_FLOW_DUMP("%s: %s\n", priv->eth_dev->data->name, prefix);
 
-	if (priv->num_rx_tc <= 1)
-		goto skip_dump_qos;
+	if (dist_type == DPAA2_FLOW_QOS_TYPE) {
+		extract = &priv->extract.qos_key_extract;
+		offset += sprintf(&string[offset], "QoS entry map:");
+		if (!extract->entry_num) {
+			offset += sprintf(&string[offset], " empty\n");
+			goto qos_dump_end;
+		} else {
+			offset += sprintf(&string[offset], "\n");
+		}
+		for (idx = 0; idx < priv->qos_entries; idx++) {
+			offset += sprintf(&string[offset], "%d ",
+				dpaa2_flow_entry_map_get(extract->entry_map, idx) ?
+					1 : 0);
+			if (!((idx + 1) % 16) || (idx + 1) == priv->qos_entries)
+				offset += sprintf(&string[offset], "\n");
+		}
 
-	extract = &priv->extract.qos_key_extract;
-	offset = 0;
-	offset += sprintf(&string[offset], "QoS entry map:");
-	if (!extract->entry_num) {
-		offset += sprintf(&string[offset], " empty\n");
-		goto start_dump_qos;
-	} else {
-		offset += sprintf(&string[offset], "\n");
+qos_dump_end:
+		DPAA2_FLOW_DUMP("%s\n", string);
+
+		return;
 	}
-	for (idx = 0; idx < priv->qos_entries; idx++) {
+
+	extract = &priv->extract.tc_key_extract[group];
+	if (!extract->entry_num) {
+		DPAA2_FLOW_DUMP("FS[%d] table is empty\n\n", group);
+		return;
+	}
+
+	offset = sprintf(&string[offset],
+		"FS[%d] %d entries:\n", group, extract->entry_num);
+	for (idx = 0; idx < priv->fs_entries; idx++) {
 		offset += sprintf(&string[offset], "%d ",
 			dpaa2_flow_entry_map_get(extract->entry_map, idx) ?
 			1 : 0);
-		if (!((idx + 1) % 16) || (idx + 1) == priv->qos_entries)
+		if (!((idx + 1) % 16) || (idx + 1) == priv->fs_entries)
 			offset += sprintf(&string[offset], "\n");
 	}
-
-start_dump_qos:
-	DPAA2_FLOW_DUMP("%s", string);
-
-skip_dump_qos:
-	for (i = 0; i < MAX_TCS; i++) {
-		extract = &priv->extract.tc_key_extract[i];
-		if (!extract->entry_num)
-			continue;
-		valid_fs++;
-		offset = 0;
-		offset += sprintf(&string[offset],
-			"FS[%d] %d entries:\n", i, extract->entry_num);
-		for (idx = 0; idx < priv->fs_entries; idx++) {
-			offset += sprintf(&string[offset], "%d ",
-				dpaa2_flow_entry_map_get(extract->entry_map,
-					idx) ? 1 : 0);
-			if (!((idx + 1) % 16) || (idx + 1) == priv->fs_entries)
-				offset += sprintf(&string[offset], "\n");
-		}
-		DPAA2_FLOW_DUMP("%s", string);
-	}
-	if (valid_fs)
-		DPAA2_FLOW_DUMP("\n");
-	else
-		DPAA2_FLOW_DUMP("No FS table extracts\n\n");
+	DPAA2_FLOW_DUMP("%s\n", string);
 }
 
 static int
@@ -478,7 +473,7 @@ dpaa2_flow_l4_dst_port_extract(enum net_prot prot,
 
 static int
 dpaa2_flow_add_qos_rule(struct dpaa2_dev_priv *priv,
-	struct dpaa2_generic_flow *flow, const struct rte_flow_attr *attr)
+	struct dpaa2_generic_flow *flow)
 {
 	struct dpaa2_key_extract *extract;
 	int ret;
@@ -489,12 +484,6 @@ dpaa2_flow_add_qos_rule(struct dpaa2_dev_priv *priv,
 		return -EINVAL;
 	}
 
-	/* QoS entry added is only effective for multiple TCs.*/
-	if (attr) {
-		/** New added.*/
-		flow->entry_index = attr->group * priv->fs_entries + attr->priority;
-		flow->flow_action.fs_tc_id = attr->group;
-	}
 	if (flow->entry_index >= priv->qos_entries) {
 		DPAA2_PMD_ERR("QoS table full(%d >= %d)",
 			flow->entry_index, priv->qos_entries);
@@ -508,14 +497,14 @@ dpaa2_flow_add_qos_rule(struct dpaa2_dev_priv *priv,
 		return -EINVAL;
 	}
 
-	dpaa2_flow_qos_entry_log("Add", flow, flow->entry_index);
+	dpaa2_flow_qos_entry_log("Add", flow);
 
 	ret = dpni_add_qos_entry(dpni, CMD_PRI_LOW,
 			priv->token, &flow->rule_cfg,
 			flow->flow_action.fs_tc_id, flow->entry_index,
 			0, 0);
 	if (ret < 0) {
-		DPAA2_PMD_ERR("Add entry(%d)->FS(%d) to QoS table failed",
+		DPAA2_PMD_ERR("Add entry(%d) to table(%d) failed",
 			flow->entry_index, flow->flow_action.fs_tc_id);
 		return ret;
 	}
@@ -559,7 +548,7 @@ dpaa2_flow_add_fs_rule(struct dpaa2_dev_priv *priv,
 }
 
 static int
-dpaa2_flow_rule_insert_hole(struct dpaa2_generic_flow *flow,
+_dpaa2_flow_rule_insert_hole(struct dpaa2_generic_flow *flow,
 	int offset, int size)
 {
 	if (offset < flow->rule_size) {
@@ -602,7 +591,7 @@ dpaa2_flow_rule_add_all(struct dpaa2_dev_priv *priv,
 			(fs_action && fs_action->action_type ==
 			RTE_FLOW_ACTION_TYPE_RSS))) {
 			qos_flow->rule_cfg.key_size = entry_size;
-			ret = dpaa2_flow_add_qos_rule(priv, qos_flow, NULL);
+			ret = dpaa2_flow_add_qos_rule(priv, qos_flow);
 			if (ret)
 				return ret;
 		} else if (dist_type == DPAA2_FLOW_FS_TYPE &&
@@ -619,44 +608,31 @@ dpaa2_flow_rule_add_all(struct dpaa2_dev_priv *priv,
 }
 
 static void
-dpaa2_flow_qos_rule_insert_hole(struct dpaa2_dev_priv *priv,
-	int offset, int size)
+dpaa2_flow_rule_insert_hole(struct dpaa2_dev_priv *priv,
+	int offset, int size, int tc_id,
+	enum dpaa2_flow_dist_type dist_type)
 {
-	struct dpaa2_dev_flow *curr;
+	struct dpaa2_dev_flow *flow;
+	struct dpaa2_generic_flow *curr;
 
-	curr = priv->curr;
+	curr = priv->cur_flow;
 	if (curr)
-		dpaa2_flow_rule_insert_hole(curr->qos_flow, offset, size);
+		_dpaa2_flow_rule_insert_hole(curr, offset, size);
 
-	curr = LIST_FIRST(&priv->flows);
-	while (curr) {
-		if (curr->qos_flow->ip_src || curr->qos_flow->ip_dst)
-			dpaa2_flow_rule_insert_hole(curr->qos_flow, offset, size);
-
-		curr = LIST_NEXT(curr, next);
-	}
-}
-
-static void
-dpaa2_flow_fs_rule_insert_hole(struct dpaa2_dev_priv *priv,
-	int offset, int size, int tc_id)
-{
-	struct dpaa2_dev_flow *curr;
-
-	curr = priv->curr;
-	if (curr && curr->fs_flow->tc_id == tc_id)
-		dpaa2_flow_rule_insert_hole(curr->fs_flow, offset, size);
-
-	curr = LIST_FIRST(&priv->flows);
-	while (curr) {
-		if (curr->fs_flow->tc_id != tc_id)
-			goto continue_next;
-
-		if (curr->fs_flow->ip_src || curr->fs_flow->ip_dst)
-			dpaa2_flow_rule_insert_hole(curr->fs_flow, offset, size);
-
-continue_next:
-		curr = LIST_NEXT(curr, next);
+	flow = LIST_FIRST(&priv->flows);
+	while (flow) {
+		if (dist_type == DPAA2_FLOW_QOS_TYPE)
+			curr = flow->qos_flow;
+		else
+			curr = flow->fs_flow;
+		flow = LIST_NEXT(flow, next);
+		if (!curr)
+			continue;
+		if (dist_type == DPAA2_FLOW_FS_TYPE &&
+			curr->tc_id != tc_id)
+			continue;
+		if (curr->ip_src || curr->ip_dst)
+			_dpaa2_flow_rule_insert_hole(curr, offset, size);
 	}
 }
 
@@ -684,10 +660,8 @@ dpaa2_flow_faf_advance(struct dpaa2_dev_priv *priv,
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		1, &offset, insert_offset, &prot);
 	if (offset != 0xff) {
-		if (dist_type == DPAA2_FLOW_QOS_TYPE)
-			dpaa2_flow_qos_rule_insert_hole(priv, offset, 1);
-		else
-			dpaa2_flow_fs_rule_insert_hole(priv, offset, 1, tc_id);
+		dpaa2_flow_rule_insert_hole(priv, offset, 1, tc_id,
+			dist_type);
 	}
 
 	return idx;
@@ -718,13 +692,8 @@ dpaa2_flow_pr_advance(struct dpaa2_dev_priv *priv,
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		pr_size, &offset, insert_offset, &prot);
 	if (offset != 0xff) {
-		if (dist_type == DPAA2_FLOW_QOS_TYPE) {
-			dpaa2_flow_qos_rule_insert_hole(priv, offset,
-				pr_size);
-		} else {
-			dpaa2_flow_fs_rule_insert_hole(priv, offset,
-				pr_size, tc_id);
-		}
+		dpaa2_flow_rule_insert_hole(priv, offset, pr_size, tc_id,
+			dist_type);
 	}
 
 	return idx;
@@ -768,13 +737,8 @@ dpaa2_flow_key_profile_advance(enum net_prot prot,
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		field_size, &offset, insert_offset, &prot_field);
 	if (offset != 0xff) {
-		if (dist_type == DPAA2_FLOW_QOS_TYPE) {
-			dpaa2_flow_qos_rule_insert_hole(priv, offset,
-				field_size);
-		} else {
-			dpaa2_flow_fs_rule_insert_hole(priv, offset,
-				field_size, tc_id);
-		}
+		dpaa2_flow_rule_insert_hole(priv, offset,
+			field_size, tc_id, dist_type);
 	}
 
 	if (dpaa2_flow_l4_src_port_extract(prot, field)) {
@@ -1814,6 +1778,8 @@ dpaa2_flow_eth_extract_rule_set(struct dpaa2_generic_flow *flow,
 		ret = dpaa2_flow_identify_by_faf(priv, flow,
 				bit_offset, dist_type,
 				attr->group, &local_cfg);
+		if (extract_cfg && !ret)
+			(*extract_cfg) |= local_cfg;
 
 		return ret;
 	}
@@ -3302,28 +3268,62 @@ quit:
 
 static inline int
 dpaa2_flow_verify_entry(struct dpaa2_dev_priv *priv,
-	const struct rte_flow_attr *attr)
+	uint16_t tc, uint16_t entry_idx,
+	enum dpaa2_flow_dist_type dist_type)
 {
 	struct dpaa2_dev_flow *curr = LIST_FIRST(&priv->flows);
 
 	while (curr) {
-		if (curr->qos_flow && curr->qos_flow->entry_index ==
-			(attr->group * priv->fs_entries + attr->priority)) {
+		if (dist_type == DPAA2_FLOW_QOS_TYPE &&
+			curr->qos_flow &&
+			curr->qos_flow->entry_index == entry_idx) {
 			DPAA2_PMD_ERR("Flow QoS.entry[%d] exists",
 				curr->qos_flow->entry_index);
-			return -EINVAL;
+			return -EEXIST;
 		}
-		if (curr->fs_flow &&
-			curr->fs_flow->tc_id == attr->group &&
-			curr->fs_flow->entry_index == attr->priority) {
-			DPAA2_PMD_ERR("Flow FS[%d].entry[%d] exists",
-				attr->group, curr->fs_flow->entry_index);
-			return -EINVAL;
+		if (dist_type == DPAA2_FLOW_FS_TYPE &&
+			curr->fs_flow && curr->fs_flow->tc_id == tc &&
+			curr->fs_flow->entry_index == entry_idx) {
+			DPAA2_PMD_ERR("Flow TC[%d].entry[%d] exists",
+				tc, curr->fs_flow->entry_index);
+			return -EEXIST;
 		}
 		curr = LIST_NEXT(curr, next);
 	}
 
 	return 0;
+}
+
+static inline int
+dpaa2_flow_acquire_entry_idx(struct dpaa2_dev_priv *priv,
+	uint16_t idx, enum dpaa2_flow_dist_type dist_type,
+	uint8_t group)
+{
+	int occupied = -1;
+	uint16_t max_entries;
+	struct dpaa2_key_extract *extract;
+
+	if (dist_type == DPAA2_FLOW_QOS_TYPE) {
+		extract = &priv->extract.qos_key_extract;
+		max_entries = priv->qos_entries;
+	} else {
+		extract = &priv->extract.tc_key_extract[group];
+		max_entries = priv->fs_entries;
+	}
+
+	if (!dpaa2_flow_entry_map_get(extract->entry_map, idx))
+		return idx;
+
+	idx = 0;
+	while (idx < max_entries) {
+		if (!dpaa2_flow_entry_map_get(extract->entry_map, idx)) {
+			occupied = idx;
+			break;
+		}
+		idx++;
+	}
+
+	return occupied;
 }
 
 static inline struct rte_eth_dev *
@@ -4413,288 +4413,6 @@ not_valid_params:
 	return ret;
 }
 
-static struct rte_flow *
-dpaa2_flow_create(struct rte_eth_dev *dev,
-	const struct rte_flow_attr *attr,
-	const struct rte_flow_item pattern[],
-	const struct rte_flow_action actions[],
-	struct rte_flow_error *error)
-{
-	struct dpaa2_dev_flow *flow = NULL, *curr;
-	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	int ret, is_rss;
-	uint64_t iova;
-	struct dpaa2_key_extract *key_extract;
-
-	if (getenv("DPAA2_FLOW_CONTROL_LOG"))
-		dpaa2_flow_control_log = 1;
-
-	if (attr) {
-		if (attr->group >= priv->num_rx_tc) {
-			DPAA2_PMD_ERR("FS flow group(%d) >= max(%d)",
-				attr->group, priv->num_rx_tc);
-			return NULL;
-		}
-		if (attr->priority >= priv->fs_entries) {
-			DPAA2_PMD_ERR("FS flow entry(%d) >= max(%d)",
-				attr->priority, priv->fs_entries);
-			return NULL;
-		}
-	}
-
-	ret = dpaa2_flow_verify_entry(priv, attr);
-	if (ret)
-		return NULL;
-
-	ret = dpaa2_flow_verify_action(priv, attr, actions);
-	if (ret)
-		return NULL;
-
-	dpaa2_dump_extract_map(priv, "Start creating flow");
-
-	flow = rte_zmalloc(NULL, sizeof(struct dpaa2_dev_flow),
-			   RTE_CACHE_LINE_SIZE);
-	if (!flow) {
-		DPAA2_PMD_ERR("Failure to allocate memory for flow");
-		goto mem_failure;
-	}
-	flow->priv = priv;
-
-	flow->qos_flow = rte_zmalloc(NULL,
-		sizeof(struct dpaa2_generic_flow), RTE_CACHE_LINE_SIZE);
-	if (!flow->qos_flow) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	flow->qos_flow->priv = priv;
-
-	flow->fs_flow = rte_zmalloc(NULL,
-		sizeof(struct dpaa2_generic_flow), RTE_CACHE_LINE_SIZE);
-	if (!flow->fs_flow) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	flow->fs_flow->priv = priv;
-
-	/* Allocate DMA'ble memory to write the qos rules */
-	flow->qos_flow->key_addr = rte_zmalloc(NULL,
-		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
-	if (!flow->qos_flow->key_addr) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->qos_flow->key_addr,
-			DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
-	if (iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for qos key(%p)",
-			__func__, flow->qos_flow->key_addr);
-		goto mem_failure;
-	}
-	flow->qos_flow->rule_cfg.key_iova = iova;
-
-	flow->qos_flow->mask_addr = rte_zmalloc(NULL,
-		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
-	if (!flow->qos_flow->mask_addr) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->qos_flow->mask_addr,
-			DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
-	if (iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for qos mask(%p)",
-			__func__, flow->qos_flow->mask_addr);
-		goto mem_failure;
-	}
-	flow->qos_flow->rule_cfg.mask_iova = iova;
-
-	/* Allocate DMA'ble memory to write the FS rules */
-	flow->fs_flow->key_addr = rte_zmalloc(NULL,
-		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
-	if (!flow->fs_flow->key_addr) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->fs_flow->key_addr,
-			DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
-	if (iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for fs key(%p)",
-			__func__, flow->fs_flow->key_addr);
-		goto mem_failure;
-	}
-	flow->fs_flow->rule_cfg.key_iova = iova;
-
-	flow->fs_flow->mask_addr = rte_zmalloc(NULL,
-		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
-	if (!flow->fs_flow->mask_addr) {
-		DPAA2_PMD_ERR("Memory allocation failed");
-		goto mem_failure;
-	}
-	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->fs_flow->mask_addr,
-		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
-	if (iova == RTE_BAD_IOVA) {
-		DPAA2_PMD_ERR("%s: No IOMMU map for fs mask(%p)",
-			__func__, flow->fs_flow->mask_addr);
-		goto mem_failure;
-	}
-	flow->fs_flow->rule_cfg.mask_iova = iova;
-
-	flow->qos_flow->ip_key = NET_PROT_NONE;
-	flow->fs_flow->ip_key = NET_PROT_NONE;
-
-	priv->curr = flow;
-
-	is_rss = dpaa2_flow_action_is_rss(actions);
-
-	ret = dpaa2_flow_generic_extract_rule_set(flow->qos_flow,
-		attr, pattern, false, DPAA2_FLOW_QOS_TYPE);
-	if (ret < 0) {
-		if (error && error->type > RTE_FLOW_ERROR_TYPE_ACTION) {
-			rte_flow_error_set(error, EPERM,
-				RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				attr, "unknown");
-		}
-		DPAA2_PMD_ERR("Create QoS flow failed (%d)", ret);
-		goto creation_error;
-	}
-
-	ret = dpaa2_flow_add_qos_rule(priv, flow->qos_flow, attr);
-	if (ret)
-		goto creation_error;
-
-	ret = dpaa2_flow_generic_extract_rule_set(flow->fs_flow,
-		attr, pattern, is_rss, DPAA2_FLOW_FS_TYPE);
-	if (ret < 0) {
-		if (error && error->type > RTE_FLOW_ERROR_TYPE_ACTION) {
-			rte_flow_error_set(error, EPERM,
-				RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				attr, "unknown");
-		}
-		DPAA2_PMD_ERR("Create FS flow failed (%d)", ret);
-		goto creation_error;
-	}
-
-	key_extract = &priv->extract.tc_key_extract[attr->group];
-
-	flow->fs_flow->tc_id = attr->group;
-	flow->fs_flow->entry_index = attr->priority;
-
-	ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, actions,
-		&key_extract->dpkg);
-	if (ret)
-		goto creation_error;
-	ret = dpaa2_flow_add_fs_rule(priv, flow->fs_flow);
-	if (ret)
-		goto creation_error;
-
-	dpaa2_dump_extract_map(priv, "Complete creating flow");
-
-	priv->curr = NULL;
-
-	/* New rules are inserted. */
-	curr = LIST_FIRST(&priv->flows);
-	if (!curr) {
-		LIST_INSERT_HEAD(&priv->flows, flow, next);
-	} else {
-		while (LIST_NEXT(curr, next))
-			curr = LIST_NEXT(curr, next);
-		LIST_INSERT_AFTER(curr, flow, next);
-	}
-
-	return (struct rte_flow *)flow;
-
-mem_failure:
-	rte_flow_error_set(error, EPERM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-		"memory alloc");
-
-creation_error:
-	if (flow) {
-		if (flow->qos_flow && flow->qos_flow->key_addr)
-			rte_free(flow->qos_flow->key_addr);
-		if (flow->qos_flow && flow->qos_flow->mask_addr)
-			rte_free(flow->qos_flow->mask_addr);
-		if (flow->fs_flow && flow->fs_flow->key_addr)
-			rte_free(flow->fs_flow->key_addr);
-		if (flow->fs_flow && flow->fs_flow->mask_addr)
-			rte_free(flow->fs_flow->mask_addr);
-		if (flow->qos_flow)
-			rte_free(flow->qos_flow);
-		if (flow->fs_flow)
-			rte_free(flow->fs_flow);
-		rte_free(flow);
-	}
-	priv->curr = NULL;
-
-	return NULL;
-}
-
-static int
-dpaa2_flow_rule_data_valid(struct dpaa2_dev_flow *flow,
-	uint8_t key_offset, uint8_t key_size,
-	enum dpaa2_flow_dist_type type)
-{
-	uint8_t *key, *mask, i;
-	int valid = 0;
-	struct dpaa2_generic_flow *_flow;
-
-	_flow = type == DPAA2_FLOW_QOS_TYPE ?
-		flow->qos_flow : flow->fs_flow;
-	key = _flow->key_addr + key_offset;
-	mask = _flow->mask_addr + key_offset;
-
-	for (i = 0; i < key_size; i++) {
-		if (key[i] & mask[i]) {
-			valid = 1;
-			break;
-		}
-	}
-
-	return valid;
-}
-
-static void
-dpaa2_flow_remove_invalid_rule_data(struct dpaa2_dev_priv *priv,
-	enum dpaa2_flow_dist_type type, uint8_t tc_id,
-	uint8_t key_offset, uint8_t key_size)
-{
-	struct dpaa2_dev_flow *flow, *next;
-	struct dpaa2_generic_flow *_flow;
-
-	flow = LIST_FIRST(&priv->flows);
-	while (flow) {
-		next = LIST_NEXT(flow, next);
-		if (type == DPAA2_FLOW_QOS_TYPE) {
-			_flow = flow->qos_flow;
-			if (!_flow)
-				goto skip_update_flow;
-		} else {
-			_flow = flow->fs_flow;
-			if (!_flow)
-				goto skip_update_flow;
-			if (_flow->tc_id != tc_id)
-				goto skip_update_flow;
-		}
-
-		if (key_offset < _flow->rule_size) {
-			memmove(_flow->key_addr + key_offset,
-				_flow->key_addr + key_offset + key_size,
-				_flow->rule_size - (key_offset + key_size));
-			memmove(_flow->mask_addr + key_offset,
-				_flow->mask_addr + key_offset + key_size,
-				_flow->rule_size - (key_offset + key_size));
-				_flow->rule_size -= key_size;
-		}
-		if (_flow->rule_cfg.key_size > _flow->rule_size) {
-			memset(_flow->key_addr + _flow->rule_size, 0,
-				_flow->rule_cfg.key_size - _flow->rule_size);
-			memset(_flow->mask_addr + _flow->rule_size, 0,
-				_flow->rule_cfg.key_size - _flow->rule_size);
-		}
-
-skip_update_flow:
-		flow = next;
-	}
-}
-
 static int
 dpaa2_flow_is_ip_addr_extract(const struct dpkg_extract *extract)
 {
@@ -4763,6 +4481,74 @@ dpaa2_flow_key_offset_size(struct dpaa2_dev_flow *flow,
 	}
 
 	return 0;
+}
+
+static int
+dpaa2_flow_rule_data_valid(struct dpaa2_dev_flow *flow,
+	uint8_t key_offset, uint8_t key_size,
+	enum dpaa2_flow_dist_type type)
+{
+	uint8_t *key, *mask, i;
+	int valid = 0;
+	struct dpaa2_generic_flow *_flow;
+
+	_flow = type == DPAA2_FLOW_QOS_TYPE ?
+		flow->qos_flow : flow->fs_flow;
+	key = _flow->key_addr + key_offset;
+	mask = _flow->mask_addr + key_offset;
+
+	for (i = 0; i < key_size; i++) {
+		if (key[i] & mask[i]) {
+			valid = 1;
+			break;
+		}
+	}
+
+	return valid;
+}
+
+static void
+dpaa2_flow_remove_invalid_rule_data(struct dpaa2_dev_priv *priv,
+	enum dpaa2_flow_dist_type type, uint8_t tc_id,
+	uint8_t key_offset, uint8_t key_size)
+{
+	struct dpaa2_dev_flow *flow, *next;
+	struct dpaa2_generic_flow *_flow;
+
+	flow = LIST_FIRST(&priv->flows);
+	while (flow) {
+		next = LIST_NEXT(flow, next);
+		if (type == DPAA2_FLOW_QOS_TYPE) {
+			_flow = flow->qos_flow;
+			if (!_flow)
+				goto skip_update_flow;
+		} else {
+			_flow = flow->fs_flow;
+			if (!_flow)
+				goto skip_update_flow;
+			if (_flow->tc_id != tc_id)
+				goto skip_update_flow;
+		}
+
+		if (key_offset < _flow->rule_size) {
+			memmove(_flow->key_addr + key_offset,
+				_flow->key_addr + key_offset + key_size,
+				_flow->rule_size - (key_offset + key_size));
+			memmove(_flow->mask_addr + key_offset,
+				_flow->mask_addr + key_offset + key_size,
+				_flow->rule_size - (key_offset + key_size));
+				_flow->rule_size -= key_size;
+		}
+		if (_flow->rule_cfg.key_size > _flow->rule_size) {
+			memset(_flow->key_addr + _flow->rule_size, 0,
+				_flow->rule_cfg.key_size - _flow->rule_size);
+			memset(_flow->mask_addr + _flow->rule_size, 0,
+				_flow->rule_cfg.key_size - _flow->rule_size);
+		}
+
+skip_update_flow:
+		flow = next;
+	}
 }
 
 static int
@@ -5013,43 +4799,22 @@ skip_ip_addr_extract:
 	return update;
 }
 
-static void
-dpaa2_flow_remove_flow_from_list(struct dpaa2_dev_flow *flow)
-{
-	LIST_REMOVE(flow, next);
-	if (flow->qos_flow && flow->qos_flow->key_addr)
-		rte_free(flow->qos_flow->key_addr);
-	if (flow->qos_flow && flow->qos_flow->mask_addr)
-		rte_free(flow->qos_flow->mask_addr);
-	if (flow->fs_flow && flow->fs_flow->key_addr)
-		rte_free(flow->fs_flow->key_addr);
-	if (flow->fs_flow && flow->fs_flow->mask_addr)
-		rte_free(flow->fs_flow->mask_addr);
-	if (flow->qos_flow)
-		rte_free(flow->qos_flow);
-	if (flow->fs_flow)
-		rte_free(flow->fs_flow);
-	/* Now free the flow */
-	rte_free(flow);
-}
-
 static int
-dpaa2_flow_remove_entry(struct rte_eth_dev *dev,
-	struct dpaa2_dev_flow *flow, int *pqos_removed, int *pfs_removed)
+dpaa2_flow_remove_generic_entry(struct rte_eth_dev *dev,
+	struct dpaa2_generic_flow *flow, enum dpaa2_flow_dist_type type)
 {
 	int ret = 0;
-	int qos_removed = 0, fs_removed = 0;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = priv->hw;
 	struct dpaa2_key_extract *extract;
 	struct dpaa2_dev_flow_fs_action *fs_action;
 	uint8_t tc_id;
 
-	if (!flow->fs_flow)
-		goto skip_remove_fs_flow;
+	if (type == DPAA2_FLOW_QOS_TYPE)
+		goto remove_qos_flow;
 
-	fs_action = &flow->fs_flow->flow_action.fs_action;
-	tc_id = flow->fs_flow->tc_id;
+	fs_action = &flow->flow_action.fs_action;
+	tc_id = flow->tc_id;
 	switch (fs_action->action_type) {
 	case RTE_FLOW_ACTION_TYPE_QUEUE:
 	case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
@@ -5057,18 +4822,17 @@ dpaa2_flow_remove_entry(struct rte_eth_dev *dev,
 	case RTE_FLOW_ACTION_TYPE_DROP:
 		/* Then remove entry from FS table */
 		ret = dpni_remove_fs_entry(dpni, CMD_PRI_LOW, priv->token,
-			flow->fs_flow->tc_id, &flow->fs_flow->rule_cfg);
+			flow->tc_id, &flow->rule_cfg);
 		if (ret) {
 			DPAA2_PMD_ERR("Remove entry from FS[%d] failed(%d)",
-				flow->fs_flow->tc_id, ret);
-			dpaa2_flow_fs_entry_log("Delete failed", flow->fs_flow);
+				flow->tc_id, ret);
+			dpaa2_flow_fs_entry_log("Delete failed", flow);
 		} else {
-			dpaa2_flow_fs_entry_log("Delete success", flow->fs_flow);
-			fs_removed = 1;
+			dpaa2_flow_fs_entry_log("Delete success", flow);
 			extract = &priv->extract.tc_key_extract[tc_id];
 			extract->entry_num--;
 			dpaa2_flow_entry_map_set(extract->entry_map,
-				flow->fs_flow->entry_index, 0);
+				flow->entry_index, 0);
 		}
 		break;
 	case RTE_FLOW_ACTION_TYPE_RSS:
@@ -5081,96 +4845,383 @@ dpaa2_flow_remove_entry(struct rte_eth_dev *dev,
 		break;
 	}
 
-skip_remove_fs_flow:
-	if (priv->num_rx_tc > 1 && flow->qos_flow) {
+	return ret;
+
+remove_qos_flow:
+	if (priv->num_rx_tc > 1) {
 		/* Remove entry from QoS table first */
 		ret = dpni_remove_qos_entry(dpni, CMD_PRI_LOW,
-			priv->token, &flow->qos_flow->rule_cfg);
+			priv->token, &flow->rule_cfg);
 		if (ret) {
 			DPAA2_PMD_ERR("Remove QoS entry failed(%d)", ret);
-			dpaa2_flow_qos_entry_log("Delete failed",
-				flow->qos_flow,
-				flow->qos_flow->entry_index);
+			dpaa2_flow_qos_entry_log("Delete failed", flow);
 			/** Will not remove FS entry.*/
 		} else {
-			dpaa2_flow_qos_entry_log("Delete success",
-				flow->qos_flow,
-				flow->qos_flow->entry_index);
-			qos_removed = 1;
+			dpaa2_flow_qos_entry_log("Delete success", flow);
 			extract = &priv->extract.qos_key_extract;
 			extract->entry_num--;
 			dpaa2_flow_entry_map_set(extract->entry_map,
-				flow->qos_flow->entry_index, 0);
+				flow->entry_index, 0);
 		}
 	}
-
-	if (pqos_removed)
-		*pqos_removed = qos_removed;
-	if (pfs_removed)
-		*pfs_removed = fs_removed;
 
 	return ret;
 }
 
 static int
-dpaa2_flow_destroy(struct rte_eth_dev *dev,
-	struct rte_flow *_flow,
-	struct rte_flow_error *error)
+dpaa2_flow_generic_flow_destroy(struct rte_eth_dev *dev,
+	struct dpaa2_generic_flow *flow, enum dpaa2_flow_dist_type type)
 {
-	int ret = 0, qos_removed = 0, fs_removed = 0, update;
+	int ret = 0, update;
 	uint8_t dist_size, tc_id = 0;
-	struct dpaa2_dev_flow *flow;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 
-	dpaa2_dump_extract_map(priv, "Start destroying flow");
+	dpaa2_dump_extract_map(priv, "Start destroying flow", type,
+		type == DPAA2_FLOW_FS_TYPE ? flow->tc_id : 0);
 
-	flow = (struct dpaa2_dev_flow *)_flow;
-
-	ret = dpaa2_flow_remove_entry(dev, flow, &qos_removed, &fs_removed);
+	ret = dpaa2_flow_remove_generic_entry(dev, flow, type);
 	if (ret)
-		goto error;
+		return ret;
 
-	if (fs_removed)
-		tc_id = flow->fs_flow->tc_id;
+	if (type == DPAA2_FLOW_FS_TYPE)
+		tc_id = flow->tc_id;
 
-	dpaa2_flow_remove_flow_from_list(flow);
-
-	if (fs_removed) {
-		update = dpaa2_flow_remove_invalid_extract(dev,
-			DPAA2_FLOW_FS_TYPE, tc_id);
-		if (update > 0) {
+	update = dpaa2_flow_remove_invalid_extract(dev, type, tc_id);
+	if (update > 0) {
+		if (type == DPAA2_FLOW_FS_TYPE) {
 			dist_size = priv->nb_rx_queues / priv->num_rx_tc;
 			ret = dpaa2_flow_fs_rss_table_config(priv,
-				tc_id, dist_size, false);
-			if (ret) {
+				flow->tc_id, dist_size, false);
+			if (ret)
 				DPAA2_PMD_ERR("Re-configure FS table failed(%d)", ret);
-				goto error;
-			}
-		}
-	}
-
-	if (qos_removed) {
-		update = dpaa2_flow_remove_invalid_extract(dev,
-			DPAA2_FLOW_QOS_TYPE, 0);
-		if (update > 0) {
+		} else {
 			ret = dpaa2_flow_qos_table_config(priv, false);
-			if (ret) {
+			if (ret)
 				DPAA2_PMD_ERR("Re-configure QoS table failed(%d)", ret);
-				goto error;
-			}
 		}
 	}
 
-error:
-	dpaa2_dump_extract_map(priv, "Complete destroying flow");
-	if (ret) {
-		ret = -ret;
-		return rte_flow_error_set(error, ret,
-				RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				NULL, "unknown");
+	if (!ret) {
+		dpaa2_dump_extract_map(priv, "End destroying flow",
+			type, tc_id);
 	}
 
 	return ret;
+}
+
+static struct dpaa2_generic_flow *
+dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
+	const struct rte_flow_attr *attr,
+	const struct rte_flow_item pattern[],
+	const struct rte_flow_action actions[],
+	struct rte_flow_error *error,
+	enum dpaa2_flow_dist_type type, int mix_extract)
+{
+	struct dpaa2_generic_flow *flow = NULL;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	int ret, idx, is_rss = false;
+	uint64_t iova;
+	struct dpaa2_key_extract *key_extract;
+
+	if (type != DPAA2_FLOW_QOS_TYPE && type != DPAA2_FLOW_FS_TYPE)
+		return NULL;
+
+	if (type == DPAA2_FLOW_FS_TYPE && attr) {
+		if (attr->group >= priv->num_rx_tc) {
+			DPAA2_PMD_ERR("Flow group(%d) >= max(%d)",
+				attr->group, priv->num_rx_tc);
+			return NULL;
+		}
+		if (attr->priority >= priv->fs_entries) {
+			DPAA2_PMD_ERR("FS[%d].entry(%d) >= max(%d)",
+				attr->group, attr->priority, priv->fs_entries);
+			return NULL;
+		}
+	}
+
+	if (mix_extract && type == DPAA2_FLOW_QOS_TYPE) {
+		idx = attr->group * priv->fs_entries + attr->priority;
+	} else if (!mix_extract && type == DPAA2_FLOW_QOS_TYPE) {
+		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
+			DPAA2_FLOW_QOS_TYPE, attr->group);
+	} else if (type == DPAA2_FLOW_FS_TYPE) {
+		ret = dpaa2_flow_verify_action(priv, attr, actions);
+		if (ret)
+			return NULL;
+		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
+			DPAA2_FLOW_FS_TYPE, attr->group);
+	} else {
+		DPAA2_PMD_ERR("Invalid flow type(%d) or extract type(%d)",
+			type, mix_extract);
+		return NULL;
+	}
+	if (idx < 0)
+		return NULL;
+
+	ret = dpaa2_flow_verify_entry(priv, attr->group, idx, type);
+	if (ret)
+		return NULL;
+
+	dpaa2_dump_extract_map(priv, "Start creating flow",
+		type, attr->group);
+
+	flow = rte_zmalloc(NULL, sizeof(struct dpaa2_generic_flow),
+		RTE_CACHE_LINE_SIZE);
+	if (!flow) {
+		DPAA2_PMD_ERR("Failure to allocate memory for flow");
+		goto mem_failure;
+	}
+	flow->priv = priv;
+
+	/* Allocate DMA'ble memory to write the qos rules */
+	flow->key_addr = rte_zmalloc(NULL,
+		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
+	if (!flow->key_addr) {
+		DPAA2_PMD_ERR("Memory allocation failed");
+		goto mem_failure;
+	}
+	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->key_addr,
+			DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
+	if (iova == RTE_BAD_IOVA) {
+		DPAA2_PMD_ERR("%s: No IOMMU map for key(%p)",
+			__func__, flow->key_addr);
+		goto mem_failure;
+	}
+	flow->rule_cfg.key_iova = iova;
+
+	flow->mask_addr = rte_zmalloc(NULL,
+		DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE, RTE_CACHE_LINE_SIZE);
+	if (!flow->mask_addr) {
+		DPAA2_PMD_ERR("Memory allocation failed");
+		goto mem_failure;
+	}
+	iova = DPAA2_VADDR_TO_IOVA_AND_CHECK(flow->mask_addr,
+			DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
+	if (iova == RTE_BAD_IOVA) {
+		DPAA2_PMD_ERR("%s: No IOMMU map for mask(%p)",
+			__func__, flow->mask_addr);
+		goto mem_failure;
+	}
+	flow->rule_cfg.mask_iova = iova;
+
+	flow->ip_key = NET_PROT_NONE;
+
+	if (type == DPAA2_FLOW_FS_TYPE)
+		is_rss = dpaa2_flow_action_is_rss(actions);
+	priv->cur_flow = flow;
+	ret = dpaa2_flow_generic_extract_rule_set(flow,
+		attr, pattern, is_rss, type);
+	if (ret < 0) {
+		if (error && error->type > RTE_FLOW_ERROR_TYPE_ACTION) {
+			rte_flow_error_set(error, EPERM,
+				RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				attr, "unknown");
+		}
+		DPAA2_PMD_ERR("Create %s flow failed (%d)",
+			type == DPAA2_FLOW_QOS_TYPE ?
+			"QoS" : "FS", ret);
+		goto creation_error;
+	}
+
+	flow->entry_index = idx;
+	if (type == DPAA2_FLOW_QOS_TYPE) {
+		flow->flow_action.fs_tc_id = attr->group;
+		ret = dpaa2_flow_add_qos_rule(priv, flow);
+		if (ret)
+			goto creation_error;
+	} else {
+		flow->tc_id = attr->group;
+		key_extract = &priv->extract.tc_key_extract[attr->group];
+		ret = dpaa2_flow_fs_action_update(priv, flow, actions,
+			&key_extract->dpkg);
+		if (ret)
+			goto creation_error;
+		ret = dpaa2_flow_add_fs_rule(priv, flow);
+		if (ret)
+			goto creation_error;
+	}
+	priv->cur_flow = NULL;
+
+	dpaa2_dump_extract_map(priv, "Complete creating flow",
+		type, attr->group);
+
+	return flow;
+
+mem_failure:
+	rte_flow_error_set(error, EPERM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+		"memory alloc");
+
+creation_error:
+	if (flow) {
+		if (flow->key_addr)
+			rte_free(flow->key_addr);
+		if (flow->mask_addr)
+			rte_free(flow->mask_addr);
+		rte_free(flow);
+	}
+
+	return NULL;
+}
+
+static struct rte_flow *
+dpaa2_flow_create(struct rte_eth_dev *dev,
+	const struct rte_flow_attr *attr,
+	const struct rte_flow_item pattern[],
+	const struct rte_flow_action actions[],
+	struct rte_flow_error *error)
+{
+	struct dpaa2_dev_flow *flow = NULL, *curr;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	int ret;
+	struct dpaa2_generic_flow *qos_flow = NULL;
+	struct dpaa2_generic_flow *fs_flow = NULL;
+	enum rte_pmd_dpaa2_flow_attr flow_attr = attr->reserved;
+
+	if (getenv("DPAA2_FLOW_CONTROL_LOG"))
+		dpaa2_flow_control_log = 1;
+
+	DPAA2_PMD_DEBUG("Port %s-%s: flow_attr:%d, group:%d, total RX TCs:%d\n",
+		dev->data->name, __func__, flow_attr, attr->group, priv->num_rx_tc);
+
+	if (flow_attr == RTE_DPAA2_ONE_LEVEL_FLOW_CREATE_ATTR) {
+		if (priv->num_rx_tc > 1) {
+			qos_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
+				actions, error, DPAA2_FLOW_QOS_TYPE, true);
+			if (!qos_flow) {
+				DPAA2_PMD_ERR("QoS flow create failed!");
+				return NULL;
+			}
+		}
+		if (priv->fs_entries > 0) {
+			fs_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
+				actions, error, DPAA2_FLOW_FS_TYPE, true);
+			if (!fs_flow) {
+				if (qos_flow) {
+					ret = dpaa2_flow_generic_flow_destroy(dev, qos_flow,
+						DPAA2_FLOW_QOS_TYPE);
+					if (ret) {
+						DPAA2_PMD_ERR("%s: QoS flow destroy failed(%d)!",
+							__func__, ret);
+					}
+				}
+				DPAA2_PMD_ERR("FS flow create failed!");
+				return NULL;
+			}
+		}
+	} else if (flow_attr == RTE_DPAA2_QOS_FLOW_CREATE_ATTR) {
+		qos_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
+			NULL, error, DPAA2_FLOW_QOS_TYPE, false);
+		if (!qos_flow) {
+			DPAA2_PMD_ERR("QoS flow create failed!");
+			return NULL;
+		}
+	} else if (flow_attr == RTE_DPAA2_FS_FLOW_CREATE_ATTR) {
+		fs_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
+			actions, error, DPAA2_FLOW_FS_TYPE, false);
+		if (!fs_flow) {
+			DPAA2_PMD_ERR("FS flow create failed!");
+			return NULL;
+		}
+	} else {
+		DPAA2_PMD_ERR("Invalid flow attribut parameter!");
+		return NULL;
+	}
+	if (!qos_flow && !fs_flow) {
+		DPAA2_PMD_ERR("Both QoS flow and FS flow are NULL!");
+		goto mem_failure;
+	}
+	flow = rte_zmalloc(NULL, sizeof(struct dpaa2_dev_flow),
+		RTE_CACHE_LINE_SIZE);
+	if (!flow) {
+		DPAA2_PMD_ERR("Failure to allocate memory for flow!");
+		goto mem_failure;
+	}
+	flow->qos_flow = qos_flow;
+	flow->fs_flow = fs_flow;
+	flow->priv = priv;
+
+	/* New rules are inserted. */
+	curr = LIST_FIRST(&priv->flows);
+	if (!curr) {
+		LIST_INSERT_HEAD(&priv->flows, flow, next);
+	} else {
+		while (LIST_NEXT(curr, next))
+			curr = LIST_NEXT(curr, next);
+		LIST_INSERT_AFTER(curr, flow, next);
+	}
+
+	return (struct rte_flow *)flow;
+
+mem_failure:
+	rte_flow_error_set(error, EPERM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+		"memory alloc");
+
+	if (flow) {
+		if (flow->qos_flow && flow->qos_flow->key_addr)
+			rte_free(flow->qos_flow->key_addr);
+		if (flow->qos_flow && flow->qos_flow->mask_addr)
+			rte_free(flow->qos_flow->mask_addr);
+		if (flow->fs_flow && flow->fs_flow->key_addr)
+			rte_free(flow->fs_flow->key_addr);
+		if (flow->fs_flow && flow->fs_flow->mask_addr)
+			rte_free(flow->fs_flow->mask_addr);
+		if (flow->qos_flow)
+			rte_free(flow->qos_flow);
+		if (flow->fs_flow)
+			rte_free(flow->fs_flow);
+		rte_free(flow);
+	}
+	priv->cur_flow = NULL;
+
+	return NULL;
+}
+
+static int
+dpaa2_flow_destroy(struct rte_eth_dev *dev,
+	struct rte_flow *_flow, struct rte_flow_error *error)
+{
+	int qos_ret = 0, fs_ret = 0;
+	struct dpaa2_dev_flow *flow;
+
+	RTE_SET_USED(error);
+
+	flow = (struct dpaa2_dev_flow *)_flow;
+	LIST_REMOVE(flow, next);
+
+	if (flow->qos_flow) {
+		qos_ret = dpaa2_flow_generic_flow_destroy(dev, flow->qos_flow,
+			DPAA2_FLOW_QOS_TYPE);
+		if (qos_ret) {
+			DPAA2_PMD_ERR("%s: destroy QoS flow failed(%d)\n",
+				__func__, qos_ret);
+		}
+		if (flow->qos_flow->key_addr)
+			rte_free(flow->qos_flow->key_addr);
+		if (flow->qos_flow->mask_addr)
+			rte_free(flow->qos_flow->mask_addr);
+		rte_free(flow->qos_flow);
+		flow->qos_flow = NULL;
+	}
+	if (flow->fs_flow) {
+		fs_ret = dpaa2_flow_generic_flow_destroy(dev, flow->fs_flow,
+			DPAA2_FLOW_FS_TYPE);
+		if (fs_ret) {
+			DPAA2_PMD_ERR("%s: destroy FS flow failed(%d)\n",
+				__func__, fs_ret);
+		}
+		if (flow->fs_flow->key_addr)
+			rte_free(flow->fs_flow->key_addr);
+		if (flow->fs_flow->mask_addr)
+			rte_free(flow->fs_flow->mask_addr);
+		rte_free(flow->fs_flow);
+		flow->fs_flow = NULL;
+	}
+	rte_free(flow);
+
+	if (!qos_ret && !fs_ret)
+		return 0;
+
+	return qos_ret ? qos_ret : fs_ret;
 }
 
 static int
@@ -5208,14 +5259,15 @@ action_update:
 	if (!flow->fs_flow)
 		goto quit;
 	fs_action = &flow->fs_flow->flow_action.fs_action;
-	ret = dpaa2_flow_remove_entry(dev, flow, NULL, NULL);
+	ret = dpaa2_flow_remove_generic_entry(dev, flow->fs_flow,
+		DPAA2_FLOW_FS_TYPE);
 	if (ret) {
-		DPAA2_PMD_ERR("%s: remove flow entry failed(%d)",
+		DPAA2_PMD_ERR("%s: remove flow fs entry failed(%d)",
 			__func__, ret);
 
 		goto quit;
 	}
-	tc_id = flow->qos_flow->flow_action.fs_tc_id;
+	tc_id = flow->fs_flow->tc_id;
 	tc_ext = &priv->extract.tc_key_extract[tc_id];
 	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS) {
 		is_rss = true;
@@ -5229,26 +5281,12 @@ action_update:
 
 		goto quit;
 	}
-	if (is_rss < 0) {
-		DPAA2_PMD_ERR("%s: action update rss not set",
-			__func__);
-		ret = -EINVAL;
-
-		goto quit;
-	}
 	if (is_rss) {
 		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id,
 			dist_size, true);
 		if (ret)
 			goto quit;
-	}
-	if (priv->num_rx_tc > 1 && flow->qos_flow) {
-		ret = dpaa2_flow_add_qos_rule(priv, flow->qos_flow, NULL);
-		if (ret)
-			goto quit;
-	}
-
-	if (!is_rss && flow->fs_flow) {
+	} else {
 		ret = dpaa2_flow_add_fs_rule(priv, flow->fs_flow);
 		if (ret)
 			goto quit;
@@ -5274,31 +5312,19 @@ dpaa2_flow_flush(struct rte_eth_dev *dev,
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct dpaa2_dev_flow *flow = LIST_FIRST(&priv->flows);
-	int ret = 0, times;
-
-	dpaa2_dump_extract_map(priv, "Start flushing flow");
+	int ret = 0;
 
 	while (flow) {
 		struct dpaa2_dev_flow *next = LIST_NEXT(flow, next);
 
-		times = 10;
-again:
 		ret = dpaa2_flow_destroy(dev, (struct rte_flow *)flow, error);
 		if (ret) {
-			DPAA2_PMD_ERR("%s: Remove flow failed(%d), times=%d",
-				__func__, ret, times);
-		}
-		if (ret == -EAGAIN) {
-			if (times > 0) {
-				times--;
-				goto again;
-			}
-			dpaa2_flow_remove_flow_from_list(flow);
+			DPAA2_PMD_ERR("%s: Remove flow failed(%d)",
+				__func__, ret);
 		}
 
 		flow = next;
 	}
-	dpaa2_dump_extract_map(priv, "Complete flushing flow");
 
 	return ret;
 }
@@ -5574,28 +5600,17 @@ dpaa2_flow_clean(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_flow *flow;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	int ret, times;
+	int ret;
 
-	dpaa2_dump_extract_map(priv, "Start cleaning flow");
 	flow = LIST_FIRST(&priv->flows);
 	while (flow) {
-		times = 10;
-again:
 		ret = dpaa2_flow_destroy(dev, (struct rte_flow *)flow, NULL);
 		if (ret) {
-			DPAA2_PMD_ERR("%s: Remove flow failed(%d), times=%d",
-				__func__, ret, times);
-		}
-		if (ret == -EAGAIN) {
-			if (times > 0) {
-				times--;
-				goto again;
-			}
-			dpaa2_flow_remove_flow_from_list(flow);
+			DPAA2_PMD_ERR("%s: Remove flow failed(%d)",
+				__func__, ret);
 		}
 		flow = LIST_FIRST(&priv->flows);
 	}
-	dpaa2_dump_extract_map(priv, "Complete cleaning flow");
 }
 
 const struct rte_flow_ops dpaa2_flow_ops = {

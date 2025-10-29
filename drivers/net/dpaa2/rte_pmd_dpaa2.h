@@ -14,6 +14,7 @@
 #include <rte_compat.h>
 #include <rte_flow.h>
 #include <rte_ethdev.h>
+#include <rte_flow.h>
 
 /**
  * Create a flow rule to demultiplex ethernet traffic to separate network
@@ -242,4 +243,21 @@ rte_dpaa2_scheduler_rx(void *scheduler_handle, struct rte_mbuf **mbuf,
 int
 rte_pmd_dpaa2_flow_table_query(uint16_t portid);
 
+enum rte_pmd_dpaa2_flow_attr {
+	RTE_DPAA2_ONE_LEVEL_FLOW_CREATE_ATTR = 0, /** Default*/
+	RTE_DPAA2_QOS_FLOW_CREATE_ATTR = 1,
+	RTE_DPAA2_FS_FLOW_CREATE_ATTR = 2
+};
+
+static inline void
+rte_dpaa2_qos_flow_attr_set(struct rte_flow_attr *attr)
+{
+	attr->reserved = RTE_DPAA2_QOS_FLOW_CREATE_ATTR;
+}
+
+static inline void
+rte_dpaa2_fs_flow_attr_set(struct rte_flow_attr *attr)
+{
+	attr->reserved = RTE_DPAA2_FS_FLOW_CREATE_ATTR;
+}
 #endif /* _RTE_PMD_DPAA2_H */
