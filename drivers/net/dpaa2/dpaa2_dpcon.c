@@ -175,6 +175,7 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 				mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
 			else
 				mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
+			dpaa2_dev_rx_print_parser_result(priv, fd, mbuf[rcvd_pkts]);
 			rcvd_pkts++;
 			dq_sch_storage++;
 			iova_storage += sizeof(struct qbman_result);
@@ -293,6 +294,7 @@ pull_active_dqs:
 			mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
 		else
 			mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
+		dpaa2_dev_rx_print_parser_result(priv, fd, mbuf[rcvd_pkts]);
 		rcvd_pkts++;
 
 		dq_storage++;

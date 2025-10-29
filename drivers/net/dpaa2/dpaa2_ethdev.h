@@ -22,6 +22,7 @@
 #include <mc/fsl_dpmac.h>
 
 #include "base/dpaa2_hw_dpni_annot.h"
+#include "dpaa2_parser_decode.h"
 
 #define DPAA2_MIN_RX_BUF_SIZE 512
 #define DPAA2_MAX_RX_PKT_LEN  10240 /*WRIOP support*/
@@ -413,6 +414,42 @@ static inline int dpaa2_dev_cmp_dpni_ver(struct dpaa2_dev_priv *priv,
 }
 
 #define DPAA2_FLOW_DUMP printf
+
+static inline void
+dpaa2_dev_rx_print_parser_result(struct dpaa2_dev_priv *priv,
+	const struct qbman_fd *fd, const struct rte_mbuf *m)
+{
+	size_t fd_addr;
+	void *hw_annot_addr;
+
+	if (likely(!(priv->flags & DPAA2_RX_PRINT_PSR_RESULT_FLAG)))
+		return;
+
+	if (dpaa2_svr_family == SVR_LX2160A)
+		dpaa2_print_fd_frc(fd);
+
+	fd_addr = (size_t)DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
+	hw_annot_addr = (void *)(fd_addr + DPAA2_FD_PTA_SIZE);
+	dpaa2_print_parse_result(hw_annot_addr, priv->sp_protocol);
+	if (m->ol_flags & RTE_MBUF_F_RX_FDIR) {
+		const struct rte_mbuf_sched *sched;
+		uint16_t i;
+		struct dpaa2_queue *rxq;
+
+		sched = &m->hash.sched;
+		for (i = 0; i < MAX_RX_QUEUES; i++) {
+			rxq = priv->rx_vq[i];
+			if (rxq->tc_index == sched->traffic_class &&
+				rxq->flow_id == sched->queue_id)
+				break;
+		}
+		fprintf(stdout, "Directed to %s-TC%d-flow%d(rxq%d), color(%d)\n",
+			priv->eth_dev->data->name,
+			sched->traffic_class, sched->queue_id, i, sched->color);
+	} else if (m->ol_flags & RTE_MBUF_F_RX_RSS_HASH) {
+		fprintf(stdout, "Balanced with hash(0x%08x)\n", m->hash.rss);
+	}
+}
 
 static inline void
 dpaa2_timestamp_debug(struct dpaa2_dev_priv *priv,

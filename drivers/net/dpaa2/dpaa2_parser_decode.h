@@ -19,6 +19,7 @@
 #include <mc/fsl_mc_sys.h>
 
 #include "base/dpaa2_hw_dpni_annot.h"
+#include "dpaa2_pmd_logs.h"
 
 #define DPAA2_PR_PRINT printf
 

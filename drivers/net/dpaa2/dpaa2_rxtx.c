@@ -87,24 +87,6 @@ dpaa2_dev_rx_parse_offset(struct dpaa2_dev_priv *priv,
 } while (0)
 
 static inline void
-dpaa2_dev_rx_print_parser_result(struct dpaa2_dev_priv *priv,
-	const struct qbman_fd *fd)
-{
-	size_t fd_addr;
-	void *hw_annot_addr;
-
-	if (likely(!(priv->flags & DPAA2_RX_PRINT_PSR_RESULT_FLAG)))
-		return;
-
-	if (dpaa2_svr_family == SVR_LX2160A)
-		dpaa2_print_fd_frc(fd);
-
-	fd_addr = (size_t)DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
-	hw_annot_addr = (void *)(fd_addr + DPAA2_FD_PTA_SIZE);
-	dpaa2_print_parse_result(hw_annot_addr, priv->sp_protocol);
-}
-
-static inline void
 dpaa2_dev_rx_mbuf_sched_set(struct rte_mbuf *m,
 	const struct qbman_fd *fd)
 {
@@ -1009,8 +991,6 @@ dump_err_pkts(struct dpaa2_queue *dpaa2_q)
 		hw_annot_addr = (void *)((size_t)v_addr + DPAA2_FD_PTA_SIZE);
 		fas = hw_annot_addr;
 
-		dpaa2_dev_rx_print_parser_result(priv, fd);
-
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_annot_prefetch(fd);
 		if (DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg)
@@ -1022,6 +1002,7 @@ dump_err_pkts(struct dpaa2_queue *dpaa2_q)
 
 		dpaa2_dev_rx_read_timestamp(priv, mbuf);
 
+		dpaa2_dev_rx_print_parser_result(priv, fd, mbuf);
 		DPAA2_PMD_ERR("Err pkt on port[%d]:", eth_data->port_id);
 		DPAA2_PMD_ERR("FD offset: %d, FD err: %x, FAS status: %x",
 			DPAA2_GET_FD_OFFSET(fd), DPAA2_GET_FD_ERR(fd),
@@ -1173,7 +1154,6 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			dpaa2_dev_prefetch_next_psr(dq_storage);
 
 		fd = qbman_result_DQ_fd(dq_storage);
-		dpaa2_dev_rx_print_parser_result(priv, fd);
 
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_annot_prefetch(fd);
@@ -1195,6 +1175,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		if (eth_data->dev_conf.rxmode.offloads &
 				RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 			rte_vlan_strip(bufs[num_rx]);
+		dpaa2_dev_rx_print_parser_result(priv, fd, bufs[num_rx]);
 
 		dq_storage++;
 		num_rx++;
@@ -1367,7 +1348,6 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				dpaa2_dev_prefetch_next_psr(dq_storage);
 
 			fd = qbman_result_DQ_fd(dq_storage);
-			dpaa2_dev_rx_print_parser_result(priv, fd);
 
 			if (priv->psr_dynfield_offset >= 0)
 				dpaa2_dev_rx_annot_prefetch(fd);
@@ -1382,6 +1362,7 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			if (eth_data->dev_conf.rxmode.offloads &
 				RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 				rte_vlan_strip(bufs[num_rx]);
+			dpaa2_dev_rx_print_parser_result(priv, fd, bufs[num_rx]);
 
 			dq_storage++;
 			num_rx++;
