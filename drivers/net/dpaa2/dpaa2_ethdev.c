@@ -73,8 +73,8 @@ static const struct rte_mbuf_dynfield s_dpaa2_rx_protocol_pos_dyn = {
 	.align = __alignof__(struct dpaa2_dyn_rx_protocol_pos),
 };
 
-#define MAX_NB_RX_DESC		11264
-int total_nb_rx_desc;
+#define DPAA2_MAX_NB_RX_DESC_IN_PEB (11 * 1024)
+static uint32_t dpaa2_total_nb_rx_desc;
 
 struct rte_dpaa2_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
@@ -848,11 +848,15 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	DPAA2_PMD_DEBUG("dev =%p, queue =%d, pool = %p, conf =%p",
 			dev, rx_queue_id, mb_pool, rx_conf);
 
-	total_nb_rx_desc += nb_rx_desc;
-	if (total_nb_rx_desc > MAX_NB_RX_DESC) {
-		DPAA2_PMD_WARN("Total nb_rx_desc exceeds %d limit. Please use Normal buffers",
-			       MAX_NB_RX_DESC);
-		DPAA2_PMD_WARN("To use Normal buffers, run 'export DPNI_NORMAL_BUF=1' before running dynamic_dpl.sh script");
+	dpaa2_total_nb_rx_desc += nb_rx_desc;
+	if (dpaa2_total_nb_rx_desc > DPAA2_MAX_NB_RX_DESC_IN_PEB &&
+		(priv->options & DPNI_OPT_V1_PFDR_IN_PEB)) {
+		DPAA2_PMD_WARN("RX descriptor exceeds limit(%d) to load PFDR in PEB",
+			DPAA2_MAX_NB_RX_DESC_IN_PEB);
+		DPAA2_PMD_WARN("Suggest removing 0x%08x from DPNI creating options(0x%08x)",
+			DPNI_OPT_V1_PFDR_IN_PEB, priv->options);
+		DPAA2_PMD_WARN("Or reduce RX descriptor number(%d) per queue",
+			nb_rx_desc);
 	}
 
 	/* Rx deferred start is not supported */
@@ -1196,7 +1200,7 @@ dpaa2_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	memset(&cfg, 0, sizeof(struct dpni_queue));
 	PMD_INIT_FUNC_TRACE();
 
-	total_nb_rx_desc -= dpaa2_q->nb_desc;
+	dpaa2_total_nb_rx_desc -= dpaa2_q->nb_desc;
 
 	if (dpaa2_q->cgid != DPAA2_INVALID_CGID) {
 		options = DPNI_QUEUE_OPT_CLEAR_CGID;

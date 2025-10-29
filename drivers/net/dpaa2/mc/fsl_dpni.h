@@ -121,6 +121,9 @@ struct fsl_mc_io;
  * The stashing is enabled by default.
  */
 #define DPNI_OPT_STASHING_DIS			0x002000
+
+#define DPNI_OPT_V1_PFDR_IN_PEB			0x80000000
+
 /**
  * Software sequence maximum layout size
  */
