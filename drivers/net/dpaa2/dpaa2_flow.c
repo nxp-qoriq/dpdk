@@ -83,6 +83,7 @@ struct dpaa2_dev_flow {
 	struct dpaa2_generic_flow *qos_flow;
 	struct dpaa2_generic_flow *fs_flow;
 	struct dpaa2_dev_priv *priv;
+	int is_meter_flow;
 };
 
 struct rte_dpaa2_flow_item {
@@ -3993,6 +3994,12 @@ dpaa2_flow_set_police_action(struct dpaa2_dev_priv *priv,
 	const struct dpaa2_dev_meter_policy *dpaa2_policy = NULL;
 	int ret;
 
+	if (!(priv->options & DPNI_OPT_HAS_POLICING)) {
+		DPAA2_PMD_ERR("POLICING(0x%08x) was not added in DPNI creating options(0x%08x)",
+			DPNI_OPT_HAS_POLICING, priv->options);
+		return -ENOTSUP;
+	}
+
 	dpaa2_profile = (void *)meter_mark->profile;
 	if (!dpaa2_profile) {
 		DPAA2_PMD_ERR("Meter profile not specified!");
@@ -4048,6 +4055,8 @@ dpaa2_flow_set_police_action(struct dpaa2_dev_priv *priv,
 	DPAA2_PMD_INFO("%s RX TC%d policer configure %s.",
 		priv->eth_dev->data->name, tc_id,
 		ret ? "failed" : "successfully");
+	if (!ret)
+		priv->extract.tc_mtr_profile[tc_id] = (void *)meter_mark->profile;
 
 	return ret;
 }
@@ -5302,6 +5311,52 @@ creation_error:
 }
 
 static struct rte_flow *
+dpaa2_flow_create_meter_flow(struct rte_eth_dev *dev,
+	const struct rte_flow_attr *attr,
+	const struct rte_flow_action meter_action[])
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct dpaa2_dev_flow *flow = NULL;
+	struct dpaa2_generic_flow *fs_flow = NULL;
+	int ret;
+
+	if (attr->group >= priv->num_rx_tc)
+		return NULL;
+
+	if (priv->extract.mtr_flow[attr->group])
+		return NULL;
+
+	fs_flow = rte_zmalloc(NULL, sizeof(struct dpaa2_generic_flow),
+		RTE_CACHE_LINE_SIZE);
+	if (!fs_flow) {
+		DPAA2_PMD_ERR("Failure to allocate memory for flow");
+		return NULL;
+	}
+	flow = rte_zmalloc(NULL, sizeof(struct dpaa2_dev_flow),
+		RTE_CACHE_LINE_SIZE);
+	if (!flow) {
+		rte_free(fs_flow);
+		DPAA2_PMD_ERR("Failure to allocate memory for flow");
+		return NULL;
+	}
+	fs_flow->tc_id = attr->group;
+	fs_flow->priv = priv;
+	flow->fs_flow = fs_flow;
+	flow->priv = priv;
+
+	ret = dpaa2_flow_fs_action_update(priv, fs_flow, meter_action, NULL);
+	if (ret) {
+		rte_free(fs_flow);
+		rte_free(flow);
+		return NULL;
+	}
+	flow->is_meter_flow = true;
+	priv->extract.mtr_flow[fs_flow->tc_id] = flow;
+
+	return (struct rte_flow *)flow;
+}
+
+static struct rte_flow *
 dpaa2_flow_create(struct rte_eth_dev *dev,
 	const struct rte_flow_attr *attr,
 	const struct rte_flow_item pattern[],
@@ -5317,6 +5372,11 @@ dpaa2_flow_create(struct rte_eth_dev *dev,
 
 	if (getenv("DPAA2_FLOW_CONTROL_LOG"))
 		dpaa2_flow_control_log = 1;
+
+	if (!pattern) {
+		/** Assume it's meter flow per TC.*/
+		return dpaa2_flow_create_meter_flow(dev, attr, actions);
+	}
 
 	DPAA2_PMD_DEBUG("Port %s-%s: flow_attr:%d, group:%d, total RX TCs:%d\n",
 		dev->data->name, __func__, flow_attr, attr->group, priv->num_rx_tc);
@@ -5415,6 +5475,32 @@ mem_failure:
 }
 
 static int
+dpaa2_flow_destroy_meter_flow(struct rte_eth_dev *dev,
+	struct dpaa2_dev_flow *flow)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct dpni_rx_tc_policing_cfg cfg;
+	int ret;
+	uint8_t tc_id;
+
+	RTE_ASSERT(!flow->qos_flow && flow->fs_flow);
+	tc_id = flow->fs_flow->tc_id;
+	RTE_ASSERT(priv->extract.mtr_flow[tc_id] == flow);
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.mode = DPNI_POLICER_MODE_NONE;
+	ret = dpni_set_rx_tc_policing(priv->hw, CMD_PRI_LOW,
+		priv->token, tc_id, &cfg);
+	if (ret)
+		return ret;
+	priv->extract.tc_mtr_profile[tc_id] = NULL;
+	priv->extract.mtr_flow[tc_id] = NULL;
+	rte_free(flow->fs_flow);
+	rte_free(flow);
+
+	return 0;
+}
+
+static int
 dpaa2_flow_destroy(struct rte_eth_dev *dev,
 	struct rte_flow *_flow, struct rte_flow_error *error)
 {
@@ -5424,6 +5510,9 @@ dpaa2_flow_destroy(struct rte_eth_dev *dev,
 	RTE_SET_USED(error);
 
 	flow = (struct dpaa2_dev_flow *)_flow;
+	if (flow->is_meter_flow)
+		return dpaa2_flow_destroy_meter_flow(dev, flow);
+
 	LIST_REMOVE(flow, next);
 
 	if (flow->qos_flow) {
@@ -5539,6 +5628,14 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 
 	/* check for the valid flow */
+	flow = (void *)_flow;
+	if (flow->is_meter_flow) {
+		RTE_ASSERT(flow->fs_flow);
+		tc_id = flow->fs_flow->tc_id;
+		RTE_ASSERT(priv->extract.mtr_flow[tc_id] == flow);
+		return dpaa2_flow_fs_action_update(priv, flow->fs_flow,
+			actions, NULL);
+	}
 	LIST_FOREACH(flow, &priv->flows, next) {
 		if ((struct rte_flow *)flow == _flow)
 			goto action_update;

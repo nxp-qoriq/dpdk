@@ -296,6 +296,9 @@ struct dpaa2_key_extract {
 struct extract_s {
 	struct dpaa2_key_extract qos_key_extract;
 	struct dpaa2_key_extract tc_key_extract[MAX_TCS];
+	/** Meter per TC.*/
+	struct dpaa2_dev_meter_profile *tc_mtr_profile[MAX_TCS];
+	void *mtr_flow[MAX_TCS];
 };
 
 struct dpaa2_dev_meter_profile {

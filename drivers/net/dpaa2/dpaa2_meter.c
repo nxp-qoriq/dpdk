@@ -244,12 +244,32 @@ dpaa2_mtr_policy_get(struct rte_eth_dev *dev,
 }
 
 static int
+dpaa2_mtr_profile_tc_check(struct dpaa2_dev_priv *priv,
+	struct dpaa2_dev_meter_profile *dpaa2_profile)
+{
+	int i;
+
+	for (i = 0; i < MAX_TCS; i++) {
+		if (priv->extract.tc_mtr_profile[i] == dpaa2_profile) {
+			DPAA2_PMD_ERR("The TC[%d]'s meter flow is referring this profile.",
+				i);
+			DPAA2_PMD_ERR("The TC[%d]'s meter flow should be destroyed by user.",
+				i);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int
 dpaa2_mtr_profile_delete(struct rte_eth_dev *dev,
 	uint32_t profile_id, struct rte_mtr_error *error)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct dpaa2_dev_meter_profile *dpaa2_profile = NULL, *curr;
 	struct dpaa2_dev_meter *meter, *tmp;
+	int ret;
 
 	rte_spinlock_lock(&priv->meter_lock);
 	curr = LIST_FIRST(&priv->profiles);
@@ -265,6 +285,13 @@ dpaa2_mtr_profile_delete(struct rte_eth_dev *dev,
 		return -rte_mtr_error_set(error, ENOENT,
 			RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
 			&profile_id, "Meter profile is invalid.");
+	}
+
+	ret = dpaa2_mtr_profile_tc_check(priv, dpaa2_profile);
+	if (ret) {
+		return -rte_mtr_error_set(error, -ret,
+			RTE_MTR_ERROR_TYPE_METER_PROFILE,
+			dpaa2_profile, "Meter profile is referred.");
 	}
 
 	meter = LIST_FIRST(&priv->meters);
@@ -285,7 +312,7 @@ dpaa2_mtr_profile_delete(struct rte_eth_dev *dev,
 	rte_free(dpaa2_profile);
 	rte_spinlock_unlock(&priv->meter_lock);
 
-	return 0;
+	return ret;
 }
 
 static int
