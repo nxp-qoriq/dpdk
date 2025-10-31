@@ -43,6 +43,12 @@ enum dpaa2_flow_dist_type {
 #define DPAA2_FLOW_MAX_KEY_SIZE			16
 
 #define VXLAN_HF_VNI 0x08
+#define DPAA2_MAX_ACTION_PER_FLOW_NUM 4
+
+struct dpaa2_dev_flow_qos_action {
+	enum rte_flow_action_type action_jump_type;
+	struct rte_flow_action_jump action_jump_cfg;
+};
 
 struct dpaa2_dev_flow_fs_action {
 	enum rte_flow_action_type action_type;
@@ -54,7 +60,7 @@ struct dpaa2_dev_flow_fs_action {
 };
 
 union dpaa2_dev_flow_action {
-	uint8_t fs_tc_id;
+	struct dpaa2_dev_flow_qos_action qos_action;
 	struct dpaa2_dev_flow_fs_action fs_action;
 };
 
@@ -309,7 +315,8 @@ dpaa2_flow_qos_entry_log(const char *log_info,
 
 	DPAA2_FLOW_DUMP("%s: %s QoS entry[%d](size %d/%d) to select FS[%d]\n",
 		dev->data->name, log_info, flow->entry_index, flow->rule_size,
-		flow->rule_cfg.key_size, flow->flow_action.fs_tc_id);
+		flow->rule_cfg.key_size,
+		flow->flow_action.qos_action.action_jump_cfg.group);
 
 	DPAA2_FLOW_DUMP("key:\r\n");
 	for (idx = 0; idx < flow->rule_size; idx++)
@@ -497,15 +504,32 @@ dpaa2_flow_add_qos_rule(struct dpaa2_dev_priv *priv,
 		return -EINVAL;
 	}
 
+	if (flow->flow_action.qos_action.action_jump_type !=
+		RTE_FLOW_ACTION_TYPE_JUMP) {
+		DPAA2_PMD_ERR("QoS entry[%d]'jump action not set(%d)",
+			flow->entry_index,
+			flow->flow_action.qos_action.action_jump_type);
+		return -EINVAL;
+	}
+	if (flow->flow_action.qos_action.action_jump_cfg.group >=
+		priv->num_rx_tc) {
+		DPAA2_PMD_ERR("QoS entry[%d]'dest table ID(%d) >= max(%d)",
+			flow->entry_index,
+			flow->flow_action.qos_action.action_jump_cfg.group,
+			priv->num_rx_tc);
+		return -EINVAL;
+	}
+
 	dpaa2_flow_qos_entry_log("Add", flow);
 
 	ret = dpni_add_qos_entry(dpni, CMD_PRI_LOW,
 			priv->token, &flow->rule_cfg,
-			flow->flow_action.fs_tc_id, flow->entry_index,
-			0, 0);
+			flow->flow_action.qos_action.action_jump_cfg.group,
+			flow->entry_index, 0, 0);
 	if (ret < 0) {
 		DPAA2_PMD_ERR("Add entry(%d) to table(%d) failed",
-			flow->entry_index, flow->flow_action.fs_tc_id);
+			flow->entry_index,
+			flow->flow_action.qos_action.action_jump_cfg.group);
 		return ret;
 	}
 	dpaa2_flow_entry_map_set(extract->entry_map, flow->entry_index, 1);
@@ -3360,7 +3384,34 @@ dpaa2_flow_redirect_dev(struct dpaa2_dev_priv *priv,
 }
 
 static inline int
-dpaa2_flow_verify_action(struct dpaa2_dev_priv *priv,
+dpaa2_flow_verify_qos_action(struct dpaa2_dev_priv *priv,
+	const struct rte_flow_attr *attr,
+	const struct rte_flow_action actions[])
+{
+	int end_of_list = 0, j = 0;
+
+	RTE_SET_USED(priv);
+	RTE_SET_USED(attr);
+
+	while (!end_of_list) {
+		switch (actions[j].type) {
+		case RTE_FLOW_ACTION_TYPE_JUMP:
+			break;
+		case RTE_FLOW_ACTION_TYPE_END:
+			end_of_list = 1;
+			break;
+		default:
+			DPAA2_PMD_ERR("Invalid action type");
+			return -EINVAL;
+		}
+		j++;
+	}
+
+	return 0;
+}
+
+static inline int
+dpaa2_flow_verify_fs_action(struct dpaa2_dev_priv *priv,
 	const struct rte_flow_attr *attr,
 	const struct rte_flow_action actions[])
 {
@@ -3970,6 +4021,44 @@ dpaa2_flow_action_is_rss(const struct rte_flow_action actions[])
 	}
 
 	return is_rss;
+}
+
+static int
+dpaa2_flow_qos_action_update(struct dpaa2_dev_priv *priv,
+	struct dpaa2_generic_flow *flow,
+	const struct rte_flow_action actions[], int new_flow)
+{
+	int end_of_list = 0, ret = 0, i = 0, set_jump = 0;
+	struct dpaa2_dev_flow_qos_action *qos_action;
+
+	RTE_SET_USED(priv);
+	qos_action = &flow->flow_action.qos_action;
+
+	while (!end_of_list) {
+		switch (actions[i].type) {
+		case RTE_FLOW_ACTION_TYPE_JUMP:
+			qos_action->action_jump_type = actions[i].type;
+			rte_memcpy(&qos_action->action_jump_cfg, actions[i].conf,
+				sizeof(struct rte_flow_action_jump));
+			set_jump++;
+			break;
+		case RTE_FLOW_ACTION_TYPE_END:
+			end_of_list = 1;
+			break;
+		default:
+			DPAA2_PMD_ERR("Invalid action[%d]'s type(%d)",
+				i, actions[i].type);
+			ret = -ENOTSUP;
+			goto end_action_set;
+		}
+		i++;
+	}
+
+end_action_set:
+	if (!set_jump && !ret && new_flow)
+		return -EINVAL;
+
+	return ret;
 }
 
 static int
@@ -4909,6 +4998,55 @@ dpaa2_flow_generic_flow_destroy(struct rte_eth_dev *dev,
 	return ret;
 }
 
+static int
+dpaa2_flow_qos_fs_action_set(const struct rte_flow_action actions[],
+	struct rte_flow_action qos_actions[],
+	struct rte_flow_action fs_actions[],
+	uint8_t *qos_action_num, uint8_t *fs_action_num)
+{
+	uint8_t local_qos_action_num = 0, local_fs_action_num = 0;
+	int end_of_list = 0, j = 0;
+
+	while (!end_of_list) {
+		switch (actions[j].type) {
+		case RTE_FLOW_ACTION_TYPE_QUEUE:
+		case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
+		case RTE_FLOW_ACTION_TYPE_PORT_ID:
+		case RTE_FLOW_ACTION_TYPE_RSS:
+		case RTE_FLOW_ACTION_TYPE_PF:
+		case RTE_FLOW_ACTION_TYPE_DROP:
+		case RTE_FLOW_ACTION_TYPE_METER_MARK:
+		case RTE_FLOW_ACTION_TYPE_METER:
+			fs_actions[local_fs_action_num].type = actions[j].type;
+			fs_actions[local_fs_action_num].conf = actions[j].conf;
+			local_fs_action_num++;
+			break;
+		case RTE_FLOW_ACTION_TYPE_JUMP:
+			qos_actions[local_qos_action_num].type = actions[j].type;
+			qos_actions[local_qos_action_num].conf = actions[j].conf;
+			local_qos_action_num++;
+			break;
+		case RTE_FLOW_ACTION_TYPE_END:
+			qos_actions[local_qos_action_num].type = actions[j].type;
+			fs_actions[local_fs_action_num].type = actions[j].type;
+			if (qos_action_num)
+				*qos_action_num = local_qos_action_num;
+			if (fs_action_num)
+				*fs_action_num = local_fs_action_num;
+			local_qos_action_num++;
+			local_fs_action_num++;
+			end_of_list = 1;
+			break;
+		default:
+			DPAA2_PMD_ERR("Invalid action type(%d)", actions[j].type);
+			return -EINVAL;
+		}
+		j++;
+	}
+
+	return 0;
+}
+
 static struct dpaa2_generic_flow *
 dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 	const struct rte_flow_attr *attr,
@@ -4922,9 +5060,20 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 	int ret, idx, is_rss = false;
 	uint64_t iova;
 	struct dpaa2_key_extract *key_extract;
+	uint8_t qos_action_num = 0, fs_action_num = 0;
+	struct rte_flow_action qos_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
+	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
+	struct rte_flow_action_jump action_jump;
 
 	if (type != DPAA2_FLOW_QOS_TYPE && type != DPAA2_FLOW_FS_TYPE)
 		return NULL;
+
+	if (actions) {
+		ret = dpaa2_flow_qos_fs_action_set(actions, qos_actions,
+			fs_actions, &qos_action_num, &fs_action_num);
+		if (ret)
+			return NULL;
+	}
 
 	if (type == DPAA2_FLOW_FS_TYPE && attr) {
 		if (attr->group >= priv->num_rx_tc) {
@@ -4940,12 +5089,34 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 	}
 
 	if (mix_extract && type == DPAA2_FLOW_QOS_TYPE) {
+		if (qos_action_num > 0) {
+			ret = dpaa2_flow_verify_qos_action(priv, attr, qos_actions);
+			if (ret)
+				return NULL;
+		}
+		/** Move end action.*/
+		rte_memcpy(&qos_actions[qos_action_num + 1],
+			&qos_actions[qos_action_num],
+			sizeof(struct rte_flow_action));
+		/** Jump to FS[group]*/
+		qos_actions[qos_action_num].type = RTE_FLOW_ACTION_TYPE_JUMP;
+		qos_actions[qos_action_num].conf = &action_jump;
+		action_jump.group = attr->group;
+		qos_action_num++;
 		idx = attr->group * priv->fs_entries + attr->priority;
 	} else if (!mix_extract && type == DPAA2_FLOW_QOS_TYPE) {
+		if (qos_action_num > 0) {
+			ret = dpaa2_flow_verify_qos_action(priv, attr, qos_actions);
+			if (ret)
+				return NULL;
+		} else {
+			DPAA2_PMD_ERR("No QoS flow's action!");
+			return NULL;
+		}
 		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
 			DPAA2_FLOW_QOS_TYPE, attr->group);
 	} else if (type == DPAA2_FLOW_FS_TYPE) {
-		ret = dpaa2_flow_verify_action(priv, attr, actions);
+		ret = dpaa2_flow_verify_fs_action(priv, attr, actions);
 		if (ret)
 			return NULL;
 		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
@@ -5025,14 +5196,16 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 
 	flow->entry_index = idx;
 	if (type == DPAA2_FLOW_QOS_TYPE) {
-		flow->flow_action.fs_tc_id = attr->group;
+		ret = dpaa2_flow_qos_action_update(priv, flow, qos_actions, true);
+		if (ret)
+			goto creation_error;
 		ret = dpaa2_flow_add_qos_rule(priv, flow);
 		if (ret)
 			goto creation_error;
 	} else {
 		flow->tc_id = attr->group;
 		key_extract = &priv->extract.tc_key_extract[attr->group];
-		ret = dpaa2_flow_fs_action_update(priv, flow, actions,
+		ret = dpaa2_flow_fs_action_update(priv, flow, fs_actions,
 			&key_extract->dpkg);
 		if (ret)
 			goto creation_error;
@@ -5110,7 +5283,7 @@ dpaa2_flow_create(struct rte_eth_dev *dev,
 		}
 	} else if (flow_attr == RTE_DPAA2_QOS_FLOW_CREATE_ATTR) {
 		qos_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
-			NULL, error, DPAA2_FLOW_QOS_TYPE, false);
+			actions, error, DPAA2_FLOW_QOS_TYPE, false);
 		if (!qos_flow) {
 			DPAA2_PMD_ERR("QoS flow create failed!");
 			return NULL;
@@ -5236,6 +5409,9 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	uint16_t dist_size = 0, tc_id;
 	int ret, is_rss = false;
 	struct dpaa2_dev_flow_fs_action *fs_action;
+	uint8_t qos_action_num = 0, fs_action_num = 0;
+	struct rte_flow_action qos_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
+	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 
 	/* check for the valid flow */
 	LIST_FOREACH(flow, &priv->flows, next) {
@@ -5255,9 +5431,17 @@ action_update:
 			__func__, ret);
 		goto quit;
 	}
+	ret = dpaa2_flow_qos_fs_action_set(actions, qos_actions, fs_actions,
+		&qos_action_num, &fs_action_num);
+	if (ret)
+		return ret;
 	flow = (struct dpaa2_dev_flow *)_flow;
-	if (!flow->fs_flow)
+	if (!flow->fs_flow && fs_action_num > 0)
 		goto quit;
+	if (!flow->qos_flow && qos_action_num > 0)
+		goto quit;
+	if (!flow->fs_flow)
+		goto qos_action_update;
 	fs_action = &flow->fs_flow->flow_action.fs_action;
 	ret = dpaa2_flow_remove_generic_entry(dev, flow->fs_flow,
 		DPAA2_FLOW_FS_TYPE);
@@ -5273,10 +5457,10 @@ action_update:
 		is_rss = true;
 		dist_size = fs_action->rss_queues;
 	}
-	ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, actions,
+	ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, fs_actions,
 		&tc_ext->dpkg);
 	if (ret) {
-		DPAA2_PMD_ERR("%s: action update failed(%d)",
+		DPAA2_PMD_ERR("%s: FS action update failed(%d)",
 			__func__, ret);
 
 		goto quit;
@@ -5291,6 +5475,27 @@ action_update:
 		if (ret)
 			goto quit;
 	}
+qos_action_update:
+	if (!flow->qos_flow)
+		goto quit;
+
+	ret = dpaa2_flow_remove_generic_entry(dev, flow->qos_flow,
+		DPAA2_FLOW_QOS_TYPE);
+	if (ret) {
+		DPAA2_PMD_ERR("%s: remove flow qos entry failed(%d)",
+			__func__, ret);
+
+		goto quit;
+	}
+	ret = dpaa2_flow_qos_action_update(priv, flow->qos_flow, qos_actions,
+		false);
+	if (ret) {
+		DPAA2_PMD_ERR("%s: QoS action update failed(%d)",
+			__func__, ret);
+
+		goto quit;
+	}
+	ret = dpaa2_flow_add_qos_rule(priv, flow->qos_flow);
 
 quit:
 	return rte_flow_error_set(error, -ret,
