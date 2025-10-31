@@ -41,7 +41,12 @@
 #include <rte_string_fns.h>
 #include <rte_pmd_dpaa2.h>
 #include <rte_mtr.h>
+#include "rte_tm.h"
 
+#define L2FWD_POLICER_FCS_SIZE \
+	(RTE_TM_ETH_FRAMING_OVERHEAD_FCS - RTE_TM_ETH_FRAMING_OVERHEAD)
+
+#define L2FWD_POLICER_PRINT_INTERVAL 5
 /* Traffic classes */
 enum {
 	POLICER_TC0 = 0,
@@ -130,6 +135,8 @@ static int enable_flow = 1;
 static int s_flow_table_level = 2;
 
 static int tx_multi_ports = 1;
+
+static int s_print_stat;
 
 #define PORT_MAX_FLOWS 128
 
@@ -382,11 +389,26 @@ struct l2fwd_policer_port_statistics {
 	uint64_t rx;
 	uint64_t dropped;
 } __rte_cache_aligned;
-struct l2fwd_policer_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+
+struct l2fwd_policer_byte_statistics {
+	uint64_t bytes;
+	uint64_t bytes_fcs;
+	uint64_t bytes_overhead;
+};
+
+#define L2FWD_POLICER_MBUF_FCS(mbuf) \
+	(mbuf->pkt_len + L2FWD_POLICER_FCS_SIZE * mbuf->nb_segs)
+
+#define L2FWD_POLICER_MBUF_OVERHEAD(mbuf) \
+	(mbuf->pkt_len + RTE_TM_ETH_FRAMING_OVERHEAD_FCS * mbuf->nb_segs)
+
+static struct l2fwd_policer_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+static struct l2fwd_policer_byte_statistics *tc_statistics;
+static struct l2fwd_policer_byte_statistics *prev_tc_statistics;
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 10; /* default period is 10 seconds */
+static uint16_t timer_period = L2FWD_POLICER_PRINT_INTERVAL;
 
 #define POLICER_UPDATE_RED_DROP "red drop"
 #define POLICER_UPDATE_RED_PASS "red pass"
@@ -411,11 +433,15 @@ l2fwd_policer_tc_map_vlan_prio(uint16_t tc)
 }
 
 /* Print out statistics on packets dropped */
-static void
-print_stats(void)
+static void *l2fwd_policer_print_stats(void *arg)
 {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
 	unsigned portid;
+	int i;
+	struct l2fwd_policer_byte_statistics *curr, *prev;
+	double tc_diff;
+
+	RTE_SET_USED(arg);
 
 	total_packets_dropped = 0;
 	total_packets_tx = 0;
@@ -425,6 +451,9 @@ print_stats(void)
 	const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
 
 		/* Clear screen and move to top left */
+again:
+	if (!s_print_stat)
+		goto skip_print;
 	printf("%s%s", clr, topLeft);
 
 	printf("\nPort statistics ====================================");
@@ -445,6 +474,22 @@ print_stats(void)
 		total_packets_dropped += port_statistics[portid].dropped;
 		total_packets_tx += port_statistics[portid].tx;
 		total_packets_rx += port_statistics[portid].rx;
+		for (i = 0; i < s_port_param[portid].max_tcs; i++) {
+			if (!s_port_param[portid].tc_descs[i].valid)
+				continue;
+			curr = tc_statistics + portid * POLICER_TC_MAX_NUM + i;
+			prev = prev_tc_statistics + portid * POLICER_TC_MAX_NUM + i;
+			if (!curr->bytes_overhead)
+				continue;
+			tc_diff = curr->bytes_overhead - prev->bytes_overhead;
+			printf("\nPort%d.TC%d: %fGbps, %ld\r\n",
+				portid, i, tc_diff * 8 / timer_period /
+				(1000 * 1000 * 1000),
+				curr->bytes_overhead * 8);
+			prev->bytes = curr->bytes;
+			prev->bytes_fcs = curr->bytes_fcs;
+			prev->bytes_overhead = curr->bytes_overhead;
+		}
 	}
 	printf("\nAggregate statistics ==============================="
 		   "\nTotal packets sent: %18"PRIu64
@@ -455,7 +500,12 @@ print_stats(void)
 		   total_packets_dropped);
 	printf("\n====================================================\n");
 
+skip_print:
 	fflush(stdout);
+	sleep(timer_period);
+	goto again;
+
+	return NULL;
 }
 
 static void
@@ -492,12 +542,11 @@ l2fwd_policer_main_loop(void)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
 	struct rte_mbuf *m;
-	uint16_t sent;
-	uint16_t lcore_id, i, nb_rx;
-	uint64_t prev_tsc = 0, diff_tsc, cur_tsc;
+	uint16_t sent, rx_port, lcore_id, i, nb_rx;
 	struct lcore_queue_conf *qconf;
-	uint16_t rx_ports[MAX_PKT_BURST];
 	uint16_t tx_ports[MAX_PKT_BURST];
+	struct rte_mbuf_sched *sched;
+	struct l2fwd_policer_byte_statistics *statics;
 
 	lcore_id = rte_lcore_id();
 	qconf = &s_lcore_queue_conf[lcore_id];
@@ -512,27 +561,6 @@ l2fwd_policer_main_loop(void)
 		"entering main loop on lcore %u\n", lcore_id);
 
 	while (!force_quit) {
-
-		/* Drains TX queue in its main loop. 8< */
-		cur_tsc = rte_rdtsc();
-
-		/*
-		 * TX burst queue drain
-		 */
-		diff_tsc = cur_tsc - prev_tsc;
-		if (unlikely(timer_period > 0 &&
-			diff_tsc > timer_period)) {
-			print_stats();
-
-			prev_tsc = cur_tsc;
-		}
-		/* >8 End of draining TX queue. */
-
-		/* sleep(5);
-		 * can be used for sanity test: high priority packets receive first.
-		 *
-		 * Read packet from RX queues
-		 */
 		nb_rx = rte_dpaa2_scheduler_rx(qconf->sch_handle,
 			pkts_burst, MAX_PKT_BURST);
 		if (unlikely(!nb_rx))
@@ -540,9 +568,17 @@ l2fwd_policer_main_loop(void)
 
 		for (i = 0; i < nb_rx; i++) {
 			m = pkts_burst[i];
-			rx_ports[i] = m->port;
-			port_statistics[rx_ports[i]].rx++;
-			tx_ports[i] = l2fwd_policer_dst_ports[rx_ports[i]];
+			rx_port = m->port;
+			if (m->ol_flags & RTE_MBUF_F_RX_FDIR) {
+				sched = &m->hash.sched;
+				statics = tc_statistics +
+					rx_port * POLICER_TC_MAX_NUM + sched->traffic_class;
+				statics->bytes += m->pkt_len;
+				statics->bytes_fcs += L2FWD_POLICER_MBUF_FCS(m);
+				statics->bytes_overhead += L2FWD_POLICER_MBUF_OVERHEAD(m);
+			}
+			port_statistics[rx_port].rx++;
+			tx_ports[i] = l2fwd_policer_dst_ports[rx_port];
 			if (mac_updating)
 				l2fwd_policer_mac_updating(m, tx_ports[i]);
 			if (!tx_multi_ports)
@@ -597,7 +633,8 @@ l2fwd_policer_usage(const char *prgname)
 		"  --vlan_id vlan ID selected to configure QoS flow\n"
 		"  --queue_config: Configure (port,queue,core)\n"
 		"  --tx_multi_ports: 0 disable, 1 enable, Default: enable.\n"
-		"  --flow_table_level: 1 or 2.\n",
+		"  --flow_table_level: 1 or 2.\n"
+		"  --print_stat: Print port and TC traffic statistics.\n",
 		prgname);
 }
 
@@ -787,6 +824,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_QOS_VLAN_ID_CONFIG "vlan_id"
 #define CMD_LINE_OPT_QUEUE_CONFIG "queue_config"
 #define CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG "flow_table_level"
+#define CMD_LINE_OPT_PRINT_STAT_CONFIG "print_stat"
 
 enum {
 	/* long options mapped to a short option */
@@ -809,12 +847,17 @@ enum {
 	CMD_LINE_OPT_MISS_DROP_ACTION,
 	CMD_LINE_OPT_QOS_VLAN_ID,
 	CMD_LINE_OPT_QUEUE_CONFIG_NUM,
-	CMD_LINE_OPT_FLOW_TABLE_LEVEL
+	CMD_LINE_OPT_FLOW_TABLE_LEVEL,
+	CMD_LINE_OPT_PRINT_STAT
 };
 
 static const struct option lgopts[] = {
 	{CMD_LINE_OPT_NO_MAC_UPDATING, no_argument, 0,
 		CMD_LINE_OPT_NO_MAC_UPDATING_NUM},
+	{CMD_LINE_OPT_PRINT_STAT_CONFIG, no_argument, 0,
+		CMD_LINE_OPT_PRINT_STAT},
+	{CMD_LINE_OPT_MISS_DROP_ACTION_CONFIG, no_argument, 0,
+		CMD_LINE_OPT_MISS_DROP_ACTION},
 	{CMD_LINE_OPT_ENABLE_FLOW, 1, 0, CMD_LINE_OPT_ENABLE_FLOW_CTL},
 	{CMD_LINE_OPT_RATE_UNIT_CONFIG, 1, 0, CMD_LINE_OPT_RATE_UNIT},
 	{CMD_LINE_OPT_RATE_COLOR_CONFIG, 1, 0, CMD_LINE_OPT_RATE_COLOR},
@@ -826,7 +869,6 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_PBS_CONFIG, 1, 0, CMD_LINE_OPT_PBS},
 	{CMD_LINE_OPT_METER_ACTION_CONFIG, 1, 0, CMD_LINE_OPT_METER_ACTION},
 	{CMD_LINE_OPT_TX_MULTI_PORTS_CONFIG, 1, 0, CMD_LINE_OPT_TX_MULTI_PORTS},
-	{CMD_LINE_OPT_MISS_DROP_ACTION_CONFIG, 0, 0, CMD_LINE_OPT_MISS_DROP_ACTION},
 	{CMD_LINE_OPT_QOS_VLAN_ID_CONFIG, 1, 0, CMD_LINE_OPT_QOS_VLAN_ID},
 	{CMD_LINE_OPT_QUEUE_CONFIG, 1, 0, CMD_LINE_OPT_QUEUE_CONFIG_NUM},
 	{CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG, 1, 0,
@@ -957,6 +999,10 @@ l2fwd_policer_parse_args(int argc, char **argv)
 					s_flow_table_level);
 				return -EINVAL;
 			}
+			break;
+
+		case CMD_LINE_OPT_PRINT_STAT:
+			s_print_stat = true;
 			break;
 
 		default:
@@ -1912,6 +1958,21 @@ l2fwd_policer_tc_flow_update(uint16_t portid,
 }
 
 static int
+l2fwd_policer_runtime_control_print_stat(int start)
+{
+	char command[256];
+
+	fprintf(stdout, "%s print stat?",
+		start ? "Start" : "Stop");
+	if (fgets(command, 256, stdin)) {
+		if (command[0] == 'y')
+			return true;
+	}
+
+	return false;
+}
+
+static int
 l2fwd_policer_runtime_update_select_port(uint16_t *portid)
 {
 	int off = 0, i, port_update = -1;
@@ -2440,6 +2501,21 @@ l2fwd_policer_runtime_policer_update(void *arg)
 start_again:
 		if (force_quit)
 			return arg;
+		if (s_print_stat) {
+			ret = l2fwd_policer_runtime_control_print_stat(false);
+			if (ret == true) {
+				s_print_stat = false;
+				sleep(timer_period);
+			} else {
+				goto start_again;
+			}
+		}
+		ret = l2fwd_policer_runtime_control_print_stat(true);
+		if (ret == true) {
+			s_print_stat = true;
+			sleep(timer_period);
+			goto start_again;
+		}
 		update = 0;
 		fprintf(stdout, "\r\nStart flow update:\r\n");
 
@@ -2765,9 +2841,6 @@ main(int argc, char **argv)
 		"Flow classification %s\n",
 		enable_flow ? "enabled" : "disabled");
 
-	/* convert to number of cycles */
-	timer_period *= rte_get_timer_hz();
-
 	nb_ports = rte_eth_dev_count_avail();
 	if (!nb_ports)
 		rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
@@ -3004,8 +3077,29 @@ main(int argc, char **argv)
 			"All available ports are disabled. Please set portmask.\n");
 	}
 
+	tc_statistics = rte_zmalloc(NULL,
+		sizeof(struct l2fwd_policer_byte_statistics) *
+		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM, 0);
+	if (!tc_statistics) {
+		rte_exit(EXIT_FAILURE,
+			"tc statistics malloc failed\n");
+	}
+	prev_tc_statistics = rte_zmalloc(NULL,
+		sizeof(struct l2fwd_policer_byte_statistics) *
+		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM, 0);
+	if (!prev_tc_statistics) {
+		rte_exit(EXIT_FAILURE,
+			"prev tc statistics malloc failed\n");
+	}
+
 	check_all_ports_link_status(l2fwd_policer_enabled_port_mask);
 
+	ret = pthread_create(&pid, NULL, l2fwd_policer_print_stats, NULL);
+	if (ret) {
+		rte_exit(EXIT_FAILURE,
+			"perf statistics thread create failed(%d)\n",
+			ret);
+	}
 	ret = 0;
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_policer_launch_one_lcore, NULL, CALL_MAIN);
@@ -3036,6 +3130,8 @@ main(int argc, char **argv)
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}
+	rte_free(tc_statistics);
+	rte_free(prev_tc_statistics);
 
 	/* clean up the EAL */
 	rte_eal_cleanup();
