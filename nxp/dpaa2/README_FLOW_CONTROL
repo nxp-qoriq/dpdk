@@ -6,8 +6,6 @@ Note: Please first read nxp/README.
 1.Preparations
   - The default flow distribution of DPDK DPAA2 is RSS on TC0.
 #Note: export DPAA2_FLOW_CONTROL_LOG=1 is used to check extracts and rules.
-#Note: Default missed action of flow control is to drop packets.
-       export DPAA2_FLOW_CONTROL_MISS_FLOW=flow_id is used to receive missed packets from flow with flow ID specified.
 #Note: To support vxlan, eCPRI and ROCEV2 flows, the soft parser image should be pre-lodaded in u-boot.
        1) Generate softparser image in host:
           //Build generator tool in nxp/dpaa2:
@@ -127,9 +125,9 @@ Note: Please first read nxp/README.
   #Add flows into TC0 and TC1, TC0 has higher priority.
       #IPv4/UDP packets go to RXQ4, this flow is top priority.
       testpmd> flow create 0 group 0 priority 1 ingress pattern ipv4 / udp / end actions queue index 4 / end
-      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ0, this flow is middle priority.
+      #IPv4 packets whose source IP address is 10.10.10.3 go to RXQ1, this flow is middle priority.
       testpmd> flow create 0 group 0 priority 2 ingress pattern ipv4 src is 10.10.10.3 / end actions queue index 1 / end
-      #Ethernet packets whose source mac address is 11:22:33:44:55:66 go to RXQ2, this flow is lowest priority.
+      #Ethernet packets whose source mac address is 11:22:33:44:55:66 go to RXQ12, this flow is lowest priority.
       testpmd> flow create 0 group 1 priority 0 ingress pattern eth src is 11:22:33:44:55:66 / end actions queue index 12 / end
   #Start the port
       testpmd> start
@@ -147,8 +145,4 @@ Note: Please first read nxp/README.
      testpmd> start
   #Check the packet goes to the expected queue(RXQ12) by stop command.
      testpmd> stop
-  #Remove the lowest priority flow and inject the same packet above.
      testpmd> flow destroy 0 rule 2
-     testpmd> start
-  #Check the packet goes to the default queue(specified by DPAA2_FLOW_CONTROL_MISS_FLOW) or dropped by stop command.
-     testpmd> stop

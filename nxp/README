@@ -1310,33 +1310,53 @@ Currently, The below test cases are not supported on I.MX943:
 
   Execute following commands to run the 'l2fwd-policer' example application:
 
-  Policer unit in bytes:
+  Basic command with least parameters, running on single core(core 1) and handle single port:
 
-  $ ./dpdk-l2fwd-policer -c 0x2 -- -p 0x1 -P --config='(0,100,3)' --unit bytes --cir 2000 --cbs 10240 --pir 2000 --pbs 20480 -T0
+  $ ./dpdk-l2fwd-policer -c 0x2 -- -p 0x1 -P
 
-  Policer unit in frames:
+  Application processes all the RXQs belonging to all TCs(MAX_TCS x MAX_QUEUES), the flows are distributed
+  by vlan ID, vlan priority and least byte of IPv4 source address(0 ~ (max queue number per TC - 1)).
 
-  $ ./dpdk-l2fwd-policer -c 0x2 -- -p 0x1 -P --config='(0,100,3)' --unit frames --cir 2000 --cbs 10240 --pir 2000 --pbs 20480 -T0
+  Static configuration by arguments:
+  --color: configure policer color (color_aware, color_bliend), default: color_aware.
+  --policer_unit: configure policer unit (bytes_l2, bytes_l3, frames), default: bytes_l2.
+  --default_color: configure policer default color (red, yellow or green), default: green.
+  --red_action: configure action of packet marked as red (red drop or red pass), default: red drop.
+  --cir: NUM in bytes/frames as selected, default: 2000.
+  --cbs: NUM in bytes/frames as selected, default: 10240.
+  --pir: NUM in bytes/frames as selected, default: 2000.
+  --pbs: NUM in bytes/frames as selected, default: 20480.
+  --meter_action: Configure meter flow action type (meter_mark, meter, pass), default: meter_mark,
+		which directly gets profile and(or) policy to configure flow action dynamically.
+  --vlan_id Vlan ID selected to configure QoS flow, default: 100.
+  --queue_config: Configure (port,queue,core) to receive packets by scheduler per core, it's mandatary
+		for running on multiple cores.
+  --tx_multi_ports: Send packets to different ports by single burst transmission,
+		disable by 0 and enable by 1, default: 1.
+  --flow_table_level: Create 2-level flow table by 2 and 1-level table by 1, For 2-level flow table,
+		vlan items are used to distribute traffic to TCs and IPv4 items are used to distribute
+		traffic to flows(queues), default: 2.
+  --print_stat: Print port and TC traffic statistics, default: disabled.
 
-  Policer action update by RTE_FLOW_ACTION_TYPE_METER action type:
+  Dynamic configuration by runtime commands:
+  Enter Port ID to update: range[0, enter to skip]:
+  Enter miss TC ID of port0 to update:(default=7) range[0 ~ 7 drop >= 8, enter to skip]:
 
-  $ ./dpdk-l2fwd-policer -c 0x2 -- -p 0x1 -P --config='(0,100,3)' --unit frames --cir 2000 --cbs 10240 --pir 2000 --pbs 20480 -T0 --meter_action=meter
+  Enter QoS flow index of port0 to update item(s): range[0 ~ 7, enter to skip]:
+  Enter index of QoS item of port0 to update item(s): [eth/src:0, vlan/tci:1, ipv4/src:2, enter to skip]:
 
-  In the above commands, the core mask is to execute on core 1.
-  --config:(portid,vlanid,vlan_prio)[,(portid,vlanid,vlan_prio)]
-    portid: acceptable which are used in portmask
-    vlanid: acceptable range 0 to 4095
-    vlan_prio: number of vlan priorities, maximum is 7 i.e.(0 to 7)
-  Policer unit can be modified as bytes or frames.
-  Action update can be executed by RTE_FLOW_ACTION_TYPE_METER_MARK or RTE_FLOW_ACTION_TYPE_METER, default is RTE_FLOW_ACTION_TYPE_METER_MARK.
-  Below parameters can be configured by the user as default policy profile:
-  cir: Committed information rate (CIR) in Kbps or packets/second
-  cbs: Committed burst size (CBS) in bytes or packets
-  pir: Peak information rate (PIR) in Kbps or packets/second
-  pbs: Peak burst size (PBS) in bytes or packets
-  NOTE: In bytes mode, configure L3 rate(kbps) in cir and pir.
+  Enter TC ID to update: range[0 ~ 7, enter to skip]:
+  Enter miss queue ID of port0-tc0 to update:(default=7) range[0, 1, 2, 3, 4, 5, 6, 7,  drop != any enter to skip]:
+  Enter flow ID of port0-tc0 to update item(s): range[0 ~ 7, enter to skip]:
+  Enter index of flow item for port0-tc0-flow2 update: [eth/src:0, vlan/tci:1, ipv4/src:2, enter to skip]:
+  Enter flow ID of port0-tc0 to update action: range[0 ~ 7, enter to skip]:
+  Enter queue ID to update:(default=3) range[0, 1, 2, 3, 4, 5, 6, 7,  enter to skip]:
 
-  Policy profile, RXQ(in same TC) and action(drop or pass) of packets marked as RED can be changed on the fly by user's input commands.
+  Enter cir to update:(default=2000):
+  Enter cbs to update:(default=10240):
+  Enter pir to update:(default=2000):
+  Enter pbs to update:(default=20480):
+  Enter red action to update:(default=drop):
 
   Layer-3 Forwarding 'l3fwd' Application
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2004,30 +2024,18 @@ DPAA2:
 				By default, checksum error and parse error packets are received
 				with normal flow, others are discarded.
 
-14. DPAA2_ENABLE_SOFT_PARSER	Enable Soft parsing of RX packets by H/W(MC). Information
-				related to a packet is shared by H/W along with packet.
-				By default, soft parsing is disabled.
-
-15. DPAA2_FLOW_CONTROL_LOG	Enable flow control logs(for debugging).
+14. DPAA2_FLOW_CONTROL_LOG	Enable flow control logs(for debugging).
 				By default, flow control logs are disabled.
 
-16. DPAA2_FLOW_CONTROL_MISS_FLOW  Set queue id for packets not bound for any queue.
-				  Set it to -1 to drop the missed flow packets.
-				  By default, it is set to queue 0.
-
-17. DPAA2_PRINT_RX_PARSER_RESULT  Print detailed protocol information of RX packet decoded from
+15. DPAA2_PRINT_RX_PARSER_RESULT  Print detailed protocol information of RX packet decoded from
 				  hard and soft parser results.
 
-18. DPAA2_TX_DYNAMIC_CONF	Enable dynamic TX confirmation by source of TX buffer.
+16. DPAA2_TX_DYNAMIC_CONF	Enable dynamic TX confirmation by source of TX buffer.
 				If TX buffer was not allocated from hardware pool(BMan),
 				TX confirmation is generated to release buffer to default memory pool.
 				This configuration is effective with DPAA2_TX_CONF enabled.
 
-19. DPAA2_TX_CONF_FD_OVERFLOW	Clean TX confirm queue to make FD in HW not overflow the number set.
-				Default overflow number is 65535 and it's effective with
-				DPAA2_TX_DYNAMIC_CONF enabled.
-
-20. DPAA2_RX_GET_PROTOCOL_OFFSET User application can get performance optimized direct access to L3,
+17. DPAA2_RX_GET_PROTOCOL_OFFSET User application can get performance optimized direct access to L3,
 				 L4 and L5 positions of RX frame by API "rte_pmd_dpaa2_rx_get_offset".
 
 ================================================================================

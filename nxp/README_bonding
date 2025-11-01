@@ -92,15 +92,13 @@ SETUP:
 
 In the below commands three ports of 2 boards are connected back to back to initiate the LACP flow.
 
-	1. Set the environment variable:
-		export DPAA2_FLOW_CONTROL_MISS_FLOW=0
-	2. Execute the dpdk-testpmd file:
+	1. Execute the dpdk-testpmd file:
 		./dpdk-testpmd -c f -n 1 -- -i --rxq=2 --txq=2
-	3. Set rxonly packet forwarding mode on board 1 using:
+	2. Set rxonly packet forwarding mode on board 1 using:
 		testpmd> set fwd rxonly
-	4. Set txonly packet forwarding mode on board 2 using:
+	3. Set txonly packet forwarding mode on board 2 using:
 		testpmd> set fwd txonly
-	5. Execute the below commands on both the boards.
+	4. Execute the below commands on both the boards.
 
 In the following test port 0,1 and 2 act as slaves to the bonded port 3.
 
