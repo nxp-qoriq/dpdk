@@ -8,7 +8,6 @@ endif
 
 deps += ['mempool_dpaa2']
 sources = files(
-        'base/dpaa2_hw_dpni.c',
         'base/dpaa2_tlu_hash.c',
         'dpaa2_tm.c',
         'dpaa2_mux.c',

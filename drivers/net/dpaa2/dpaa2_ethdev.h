@@ -285,6 +285,8 @@ struct dpaa2_key_extract {
 	int entry_num;
 	uint8_t *entry_map;
 	int enabled;
+	int is_rss;
+	void *rss_flow;
 	union {
 		struct dpni_qos_tbl_cfg qos_cfg;
 		struct dpni_rx_dist_cfg tc_cfg;
@@ -748,18 +750,6 @@ dpaa2_dpkg_insert_extract(struct dpkg_profile_cfg *kg_cfg,
 	kg_cfg->num_extracts++;
 }
 
-int dpaa2_distset_to_dpkg_profile_cfg(uint64_t req_dist_set,
-				      struct dpkg_profile_cfg *kg_cfg);
-
-int dpaa2_setup_flow_dist(struct rte_eth_dev *eth_dev,
-		uint64_t req_dist_set, int tc_index);
-
-int dpaa2_remove_flow_dist(struct rte_eth_dev *eth_dev,
-			   uint8_t tc_index);
-
-int dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
-	struct fsl_mc_io *dpni, void *blist);
-
 __rte_internal
 int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		int eth_rx_queue_id,
@@ -799,7 +789,7 @@ uint16_t dpaa2_dev_tx_multi_txq_ordered(void **queue,
 		struct rte_mbuf **bufs, uint16_t nb_pkts);
 
 void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci, struct dpaa2_queue *dpaa2_q);
-void dpaa2_flow_clean(struct rte_eth_dev *dev);
+void dpaa2_flow_clean(struct rte_eth_dev *dev, uint8_t tc_id);
 uint16_t dpaa2_dev_tx_conf(void *txq, int drain);
 
 void

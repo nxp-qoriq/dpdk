@@ -4,7 +4,6 @@ DPDK_23 {
 	rte_pmd_dpaa2_mux_flow_create;
 	rte_pmd_dpaa2_mux_flow_destroy;
 	rte_pmd_dpaa2_mux_multi_enum;
-	rte_pmd_dpaa2_set_custom_hash;
 	rte_pmd_dpaa2_dev_is_dpaa2;
 	rte_pmd_dpaa2_dev_recycle_qp_setup;
 	rte_pmd_dpaa2_ep_name;

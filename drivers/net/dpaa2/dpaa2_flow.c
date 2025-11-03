@@ -76,6 +76,7 @@ struct dpaa2_generic_flow {
 	struct dpaa2_dev_priv *priv;
 	uint8_t tc_id; /** For FS flow only.*/
 	union dpaa2_dev_flow_action flow_action;
+	int is_rss;
 };
 
 struct dpaa2_dev_flow {
@@ -479,6 +480,216 @@ dpaa2_flow_l4_dst_port_extract(enum net_prot prot,
 		return true;
 
 	return false;
+}
+
+static int
+dpaa2_flow_rss_conf_to_item(uint64_t req_dist_set,
+	struct rte_flow_item *items, uint8_t *spec_buf,
+	uint32_t buf_max)
+{
+	uint32_t i = 0, offset = 0;
+	uint64_t l2_mask, vlan_mask, ipv4_mask, ipv6_mask;
+	uint64_t dist_supported, udp_mask, tcp_mask, sctp_mask;
+	struct rte_flow_item_eth *eth = NULL;
+	struct rte_flow_item_pppoe *pppoe = NULL;
+	struct rte_flow_item_esp *esp = NULL;
+	struct rte_flow_item_ah *ah = NULL;
+	struct rte_flow_item_vlan *vlan = NULL;
+	struct rte_flow_item_mpls *mpls = NULL;
+	struct rte_flow_item_gtp *gtpu = NULL;
+	struct rte_flow_item_udp *udp = NULL;
+	struct rte_flow_item_tcp *tcp = NULL;
+	struct rte_flow_item_sctp *sctp = NULL;
+	struct rte_flow_item_ipv4 *ipv4 = NULL;
+
+	l2_mask = RTE_ETH_RSS_L2_PAYLOAD | RTE_ETH_RSS_ETH;
+	vlan_mask = RTE_ETH_RSS_C_VLAN | RTE_ETH_RSS_S_VLAN;
+	ipv4_mask = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_FRAG_IPV4 |
+		RTE_ETH_RSS_NONFRAG_IPV4_OTHER;
+	ipv6_mask = RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_FRAG_IPV6 |
+		RTE_ETH_RSS_IPV6_EX| RTE_ETH_RSS_NONFRAG_IPV6_OTHER;
+	udp_mask = RTE_ETH_RSS_NONFRAG_IPV4_UDP |
+		RTE_ETH_RSS_NONFRAG_IPV6_UDP |
+		RTE_ETH_RSS_IPV6_UDP_EX;
+	tcp_mask = RTE_ETH_RSS_NONFRAG_IPV4_TCP |
+		RTE_ETH_RSS_NONFRAG_IPV6_TCP |
+		RTE_ETH_RSS_IPV6_TCP_EX;
+	sctp_mask = RTE_ETH_RSS_NONFRAG_IPV4_SCTP |
+		RTE_ETH_RSS_NONFRAG_IPV6_SCTP;
+	dist_supported = l2_mask | vlan_mask | ipv4_mask |
+		ipv6_mask | udp_mask | tcp_mask | sctp_mask |
+		RTE_ETH_RSS_GTPU | RTE_ETH_RSS_PPPOE |
+		RTE_ETH_RSS_ESP | RTE_ETH_RSS_AH | RTE_ETH_RSS_MPLS;
+	if ((~dist_supported) & req_dist_set) {
+		DPAA2_PMD_ERR("%s: Unsupported dist type:0x%lx",
+			__func__, (~dist_supported) & req_dist_set);
+		return -ENOTSUP;
+	}
+
+	if (req_dist_set & l2_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_ETH;
+		eth = (void *)(spec_buf + offset);
+		memset(eth, 0, sizeof(struct rte_flow_item_eth));
+		memset(eth->dst.addr_bytes, 0xff, RTE_ETHER_ADDR_LEN);
+		memset(eth->src.addr_bytes, 0xff, RTE_ETHER_ADDR_LEN);
+		eth->type = RTE_BE16(0xffff);
+		items[i].spec = eth;
+		items[i].mask = eth;
+		i++;
+		offset += sizeof(struct rte_flow_item_eth);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & RTE_ETH_RSS_PPPOE) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_PPPOES;
+		pppoe = (void *)(spec_buf + offset);
+		memset(pppoe, 0, sizeof(struct rte_flow_item_pppoe));
+		pppoe->session_id = RTE_BE16(0xffff);
+		items[i].spec = pppoe;
+		items[i].mask = pppoe;
+		i++;
+		offset += sizeof(struct rte_flow_item_pppoe);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & RTE_ETH_RSS_ESP) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_ESP;
+		esp = (void *)(spec_buf + offset);
+		memset(esp, 0, sizeof(struct rte_flow_item_esp));
+		esp->hdr.spi = RTE_BE32(0xffffffff);
+		items[i].spec = esp;
+		items[i].mask = esp;
+		i++;
+		offset += sizeof(struct rte_flow_item_esp);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & RTE_ETH_RSS_AH) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_AH;
+		ah = (void *)(spec_buf + offset);
+		memset(ah, 0, sizeof(struct rte_flow_item_ah));
+		ah->spi = RTE_BE32(0xffffffff);
+		items[i].spec = ah;
+		items[i].mask = ah;
+		i++;
+		offset += sizeof(struct rte_flow_item_ah);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & vlan_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_VLAN;
+		vlan = (void *)(spec_buf + offset);
+		memset(vlan, 0, sizeof(struct rte_flow_item_vlan));
+		vlan->tci = RTE_BE16(0xffff);
+		items[i].spec = vlan;
+		items[i].mask = vlan;
+		i++;
+		offset += sizeof(struct rte_flow_item_vlan);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & RTE_ETH_RSS_MPLS) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_MPLS;
+		mpls = (void *)(spec_buf + offset);
+		memset(mpls, 0, sizeof(struct rte_flow_item_mpls));
+		memset(mpls->label_tc_s, 0xff, 3);
+		items[i].spec = mpls;
+		items[i].mask = mpls;
+		i++;
+		offset += sizeof(struct rte_flow_item_mpls);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & RTE_ETH_RSS_GTPU) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_GTPU;
+		gtpu = (void *)(spec_buf + offset);
+		memset(gtpu, 0, sizeof(struct rte_flow_item_gtp));
+		gtpu->teid = RTE_BE32(0xffffffff);
+		items[i].spec = gtpu;
+		items[i].mask = gtpu;
+		i++;
+		offset += sizeof(struct rte_flow_item_gtp);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & udp_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_UDP;
+		udp = (void *)(spec_buf + offset);
+		memset(udp, 0, sizeof(struct rte_flow_item_udp));
+		udp->hdr.src_port = RTE_BE16(0xffff);
+		udp->hdr.dst_port = RTE_BE16(0xffff);
+		items[i].spec = udp;
+		items[i].mask = udp;
+		i++;
+		offset += sizeof(struct rte_flow_item_udp);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & tcp_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_TCP;
+		tcp = (void *)(spec_buf + offset);
+		memset(tcp, 0, sizeof(struct rte_flow_item_tcp));
+		tcp->hdr.src_port = RTE_BE16(0xffff);
+		tcp->hdr.dst_port = RTE_BE16(0xffff);
+		items[i].spec = tcp;
+		items[i].mask = tcp;
+		i++;
+		offset += sizeof(struct rte_flow_item_tcp);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & sctp_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_SCTP;
+		sctp = (void *)(spec_buf + offset);
+		memset(sctp, 0, sizeof(struct rte_flow_item_sctp));
+		sctp->hdr.src_port = RTE_BE16(0xffff);
+		sctp->hdr.dst_port = RTE_BE16(0xffff);
+		items[i].spec = sctp;
+		items[i].mask = sctp;
+		i++;
+		offset += sizeof(struct rte_flow_item_sctp);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	if (req_dist_set & ipv4_mask) {
+		items[i].type = RTE_FLOW_ITEM_TYPE_IPV4;
+		ipv4 = (void *)(spec_buf + offset);
+		memset(ipv4, 0, sizeof(struct rte_flow_item_ipv4));
+		ipv4->hdr.src_addr = RTE_BE32(0xffffffff);
+		ipv4->hdr.dst_addr = RTE_BE32(0xffffffff);
+		ipv4->hdr.next_proto_id = 0xff;
+		items[i].spec = ipv4;
+		items[i].mask = ipv4;
+		i++;
+		offset += sizeof(struct rte_flow_item_ipv4);
+		offset = RTE_CACHE_LINE_ROUNDUP(offset);
+		if (offset > buf_max)
+			return -ENOMEM;
+	}
+
+	items[i].type = RTE_FLOW_ITEM_TYPE_END;
+
+	return i;
 }
 
 static int
@@ -3491,15 +3702,17 @@ dpaa2_flow_verify_fs_action(struct dpaa2_dev_priv *priv,
 				DPAA2_PMD_ERR("RSS number too large");
 				return -EINVAL;
 			}
-			for (i = 0; i < (int)rss_conf->queue_num; i++) {
-				if (rss_conf->queue[i] >= priv->nb_rx_queues) {
-					DPAA2_PMD_ERR("RSS queue not in range");
-					return -EINVAL;
-				}
-				rxq = priv->rx_vq[rss_conf->queue[i]];
-				if (rxq->tc_index != attr->group) {
-					DPAA2_PMD_ERR("RSS queue not in group");
-					return -EINVAL;
+			if (rss_conf->queue) {
+				for (i = 0; i < (int)rss_conf->queue_num; i++) {
+					if (rss_conf->queue[i] >= priv->nb_rx_queues) {
+						DPAA2_PMD_ERR("RSS queue not in range");
+						return -EINVAL;
+					}
+					rxq = priv->rx_vq[rss_conf->queue[i]];
+					if (rxq->tc_index != attr->group) {
+						DPAA2_PMD_ERR("RSS queue not in group");
+						return -EINVAL;
+					}
 				}
 			}
 
@@ -3642,6 +3855,8 @@ dpaa2_flow_fs_action_config(struct dpaa2_dev_priv *priv,
 		}
 	} else if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_DROP) {
 		fs_action->fs_action_cfg.options = DPNI_FS_OPT_DISCARD;
+	} else if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS) {
+		/** Do nothing...*/
 	} else {
 		DPAA2_PMD_ERR("Flow action(%d) not supported!",
 			fs_action->action_type);
@@ -3673,18 +3888,31 @@ dpaa2_flow_clear_fs_table(struct dpaa2_dev_priv *priv,
 	uint8_t tc_id)
 {
 	struct dpaa2_dev_flow *curr = LIST_FIRST(&priv->flows);
-	int need_clear = 0, ret;
+	int fs_num = 0, ret, rss_num = 0;
 	struct fsl_mc_io *dpni = priv->hw;
 
 	while (curr) {
 		if (curr->fs_flow && curr->fs_flow->tc_id == tc_id) {
-			need_clear = 1;
-			break;
+			if (curr->fs_flow->is_rss)
+				rss_num++;
+			else
+				fs_num++;
 		}
 		curr = LIST_NEXT(curr, next);
 	}
 
-	if (need_clear) {
+	if (rss_num > 1) {
+		DPAA2_PMD_ERR("TC[%d] should have one RSS flow at most!",
+			tc_id);
+		return -EINVAL;
+	}
+	if (rss_num && fs_num) {
+		DPAA2_PMD_ERR("TC[%d] has RSS flow and %d FS flow(s)!",
+			tc_id, fs_num);
+		return -EINVAL;
+	}
+
+	if (fs_num) {
 		ret = dpni_clear_fs_entries(dpni, CMD_PRI_LOW,
 				priv->token, tc_id);
 		if (ret) {
@@ -3794,8 +4022,12 @@ dpaa2_flow_fs_rss_table_config(struct dpaa2_dev_priv *priv,
 		return ret;
 	}
 
-	if (rss_dist)
+	if (rss_dist) {
+		tc_extract->is_rss = true;
 		return 0;
+	}
+
+	tc_extract->is_rss = false;
 
 	tc_cfg->enable = true;
 	if (tc_extract->default_drop)
@@ -4210,18 +4442,14 @@ end_action_set:
 
 static int
 dpaa2_flow_fs_action_update(struct dpaa2_dev_priv *priv,
-	struct dpaa2_generic_flow *flow,
-	const struct rte_flow_action actions[],
-	struct dpkg_profile_cfg *kg_cfg)
+	struct dpaa2_generic_flow *fs_flow,
+	const struct rte_flow_action actions[])
 {
 	int end_of_list = 0, ret = 0, i = 0;
-	struct dpaa2_dev_flow_fs_action *fs_action;
-	const struct rte_flow_action_rss *rss_conf;
 	const struct rte_flow_action_meter *meter;
 	struct rte_flow_action_meter_mark meter_mark;
 
-	memset(&flow->flow_action, 0, sizeof(union dpaa2_dev_flow_action));
-	fs_action = &flow->flow_action.fs_action;
+	memset(&fs_flow->flow_action, 0, sizeof(union dpaa2_dev_flow_action));
 
 	while (!end_of_list) {
 		switch (actions[i].type) {
@@ -4229,29 +4457,18 @@ dpaa2_flow_fs_action_update(struct dpaa2_dev_priv *priv,
 		case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
 		case RTE_FLOW_ACTION_TYPE_PORT_ID:
 		case RTE_FLOW_ACTION_TYPE_DROP:
-			ret = dpaa2_flow_fs_action_config(priv, flow,
+		case RTE_FLOW_ACTION_TYPE_RSS:
+			ret = dpaa2_flow_fs_action_config(priv, fs_flow,
 					&actions[i]);
 			if (ret)
 				goto end_action_set;
-
-			break;
-		case RTE_FLOW_ACTION_TYPE_RSS:
-			rss_conf = actions[i].conf;
-			ret = dpaa2_distset_to_dpkg_profile_cfg(rss_conf->types,
-					kg_cfg);
-			if (ret) {
-				DPAA2_PMD_ERR("TC[%d] distset RSS failed(%d)",
-					flow->tc_id, ret);
-				goto end_action_set;
-			}
-			fs_action->action_type = RTE_FLOW_ACTION_TYPE_RSS;
 
 			break;
 		case RTE_FLOW_ACTION_TYPE_METER_MARK:
 			rte_memcpy(&meter_mark, actions[i].conf,
 				sizeof(meter_mark));
 			ret = dpaa2_flow_set_police_action(priv,
-				flow->tc_id, &meter_mark);
+				fs_flow->tc_id, &meter_mark);
 			if (ret)
 				goto end_action_set;
 			break;
@@ -4262,7 +4479,7 @@ dpaa2_flow_fs_action_update(struct dpaa2_dev_priv *priv,
 			if (ret)
 				goto end_action_set;
 			ret = dpaa2_flow_set_police_action(priv,
-				flow->tc_id, &meter_mark);
+				fs_flow->tc_id, &meter_mark);
 			if (ret)
 				goto end_action_set;
 
@@ -4301,7 +4518,7 @@ static int
 dpaa2_flow_generic_extract_rule_set(struct dpaa2_generic_flow *flow,
 	const struct rte_flow_attr *attr,
 	const struct rte_flow_item pattern[], int is_rss,
-	enum dpaa2_flow_dist_type dist_type)
+	enum dpaa2_flow_dist_type dist_type, int update)
 {
 	int extract_cfg = 0, end_of_list = 0;
 	int ret = 0, i = 0;
@@ -4318,6 +4535,25 @@ dpaa2_flow_generic_extract_rule_set(struct dpaa2_generic_flow *flow,
 	flow->ip_key = NET_PROT_NONE;
 	flow->ip_src = NET_PROT_NONE;
 	flow->ip_dst = NET_PROT_NONE;
+
+	if (dist_type == DPAA2_FLOW_QOS_TYPE)
+		key_extract = &priv->extract.qos_key_extract;
+	else
+		key_extract = &priv->extract.tc_key_extract[attr->group];
+
+	if (is_rss || (!is_rss && key_extract->is_rss)) {
+		RTE_ASSERT(dist_type == DPAA2_FLOW_FS_TYPE);
+		if (!update) {
+			dpaa2_flow_clean(priv->eth_dev, attr->group);
+			key_extract->rss_flow = NULL;
+		}
+		if (!is_rss)
+			key_extract->tc_cfg.dist_size = priv->dist_queues;
+		memset(&key_extract->dpkg, 0,
+			sizeof(struct dpkg_profile_cfg));
+		memset(&key_extract->key_profile, 0,
+			sizeof(struct dpaa2_key_profile));
+	}
 
 	/* Parse pattern list to get the matching parameters */
 	while (!end_of_list) {
@@ -4469,11 +4705,6 @@ dpaa2_flow_generic_extract_rule_set(struct dpaa2_generic_flow *flow,
 		}
 		i++;
 	}
-
-	if (dist_type == DPAA2_FLOW_QOS_TYPE)
-		key_extract = &priv->extract.qos_key_extract;
-	else
-		key_extract = &priv->extract.tc_key_extract[attr->group];
 
 	key_size = key_extract->key_profile.key_max_size;
 	flow->rule_cfg.key_size = dpaa2_flow_entry_size(key_size);
@@ -5202,13 +5433,14 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 {
 	struct dpaa2_generic_flow *flow = NULL;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	int ret, idx, is_rss = false;
+	int ret, idx = -1, is_rss = false;
 	uint64_t iova;
-	struct dpaa2_key_extract *key_extract;
 	uint8_t qos_action_num = 0, fs_action_num = 0;
 	struct rte_flow_action qos_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 	struct rte_flow_action_jump action_jump;
+	const struct rte_flow_action_rss *action_rss;
+	struct dpaa2_key_extract *tc_ext;
 
 	if (type != DPAA2_FLOW_QOS_TYPE && type != DPAA2_FLOW_FS_TYPE)
 		return NULL;
@@ -5219,6 +5451,9 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 		if (ret)
 			return NULL;
 	}
+
+	if (type == DPAA2_FLOW_FS_TYPE)
+		is_rss = dpaa2_flow_action_is_rss(actions);
 
 	if (type == DPAA2_FLOW_FS_TYPE && attr) {
 		if (attr->group >= priv->num_rx_tc) {
@@ -5258,25 +5493,31 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 			DPAA2_PMD_ERR("No QoS flow's action!");
 			return NULL;
 		}
-		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
-			DPAA2_FLOW_QOS_TYPE, attr->group);
+		if (!is_rss) {
+			idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
+				DPAA2_FLOW_QOS_TYPE, attr->group);
+		}
 	} else if (type == DPAA2_FLOW_FS_TYPE) {
 		ret = dpaa2_flow_verify_fs_action(priv, attr, actions);
 		if (ret)
 			return NULL;
-		idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
-			DPAA2_FLOW_FS_TYPE, attr->group);
+		if (!is_rss) {
+			idx = dpaa2_flow_acquire_entry_idx(priv, attr->priority,
+				DPAA2_FLOW_FS_TYPE, attr->group);
+		}
 	} else {
 		DPAA2_PMD_ERR("Invalid flow type(%d) or extract type(%d)",
 			type, mix_extract);
 		return NULL;
 	}
-	if (idx < 0)
+	if (idx < 0 && !is_rss)
 		return NULL;
 
-	ret = dpaa2_flow_verify_entry(priv, attr->group, idx, type);
-	if (ret)
-		return NULL;
+	if (!is_rss) {
+		ret = dpaa2_flow_verify_entry(priv, attr->group, idx, type);
+		if (ret)
+			return NULL;
+	}
 
 	dpaa2_dump_extract_map(priv, "Start creating flow",
 		type, attr->group);
@@ -5322,11 +5563,14 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 
 	flow->ip_key = NET_PROT_NONE;
 
-	if (type == DPAA2_FLOW_FS_TYPE)
-		is_rss = dpaa2_flow_action_is_rss(actions);
 	priv->cur_flow = flow;
+	if (is_rss) {
+		action_rss = actions[0].conf;
+		tc_ext = &priv->extract.tc_key_extract[attr->group];
+		tc_ext->tc_cfg.dist_size = action_rss->queue_num;
+	}
 	ret = dpaa2_flow_generic_extract_rule_set(flow,
-		attr, pattern, is_rss, type);
+		attr, pattern, is_rss, type, false);
 	if (ret < 0) {
 		if (error && error->type > RTE_FLOW_ERROR_TYPE_ACTION) {
 			rte_flow_error_set(error, EPERM,
@@ -5349,14 +5593,16 @@ dpaa2_flow_generic_flow_create(struct rte_eth_dev *dev,
 			goto creation_error;
 	} else {
 		flow->tc_id = attr->group;
-		key_extract = &priv->extract.tc_key_extract[attr->group];
-		ret = dpaa2_flow_fs_action_update(priv, flow, fs_actions,
-			&key_extract->dpkg);
+		ret = dpaa2_flow_fs_action_update(priv, flow, fs_actions);
 		if (ret)
 			goto creation_error;
-		ret = dpaa2_flow_add_fs_rule(priv, flow);
-		if (ret)
-			goto creation_error;
+		if (!is_rss) {
+			ret = dpaa2_flow_add_fs_rule(priv, flow);
+			if (ret)
+				goto creation_error;
+		} else {
+			flow->is_rss = true;
+		}
 	}
 	priv->cur_flow = NULL;
 
@@ -5415,7 +5661,7 @@ dpaa2_flow_create_meter_flow(struct rte_eth_dev *dev,
 	flow->fs_flow = fs_flow;
 	flow->priv = priv;
 
-	ret = dpaa2_flow_fs_action_update(priv, fs_flow, meter_action, NULL);
+	ret = dpaa2_flow_fs_action_update(priv, fs_flow, meter_action);
 	if (ret) {
 		rte_free(fs_flow);
 		rte_free(flow);
@@ -5436,15 +5682,37 @@ dpaa2_flow_create(struct rte_eth_dev *dev,
 {
 	struct dpaa2_dev_flow *flow = NULL, *curr;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	int ret;
+	int ret, is_rss = false;
 	struct dpaa2_generic_flow *qos_flow = NULL;
 	struct dpaa2_generic_flow *fs_flow = NULL;
 	enum rte_pmd_dpaa2_flow_attr flow_attr = attr->reserved;
+	const struct rte_flow_action_rss *rss_conf;
+	struct rte_flow_item items[DPKG_MAX_NUM_OF_EXTRACTS + 1];
+	int rss_item = false;
+	uint8_t spec_buf[1024];
 
 	if (getenv("DPAA2_FLOW_CONTROL_LOG"))
 		dpaa2_flow_control_log = 1;
 
-	if (!pattern) {
+	if (actions)
+		is_rss = dpaa2_flow_action_is_rss(actions);
+	if (is_rss && flow_attr != RTE_DPAA2_FS_FLOW_CREATE_ATTR) {
+		DPAA2_PMD_WARN("Force using FS table for RSS action!\n");
+		flow_attr = RTE_DPAA2_FS_FLOW_CREATE_ATTR;
+	}
+	if (is_rss && !pattern) {
+		rss_conf = actions[0].conf;
+		ret = dpaa2_flow_rss_conf_to_item(rss_conf->types, items,
+			spec_buf, 1024);
+		if (ret < 0) {
+			DPAA2_PMD_ERR("TC[%d] converts to RSS items failed(%d)",
+				attr->group, ret);
+			return NULL;
+		}
+		rss_item = true;
+	}
+
+	if (!pattern && !rss_item) {
 		/** Assume it's meter flow per TC.*/
 		return dpaa2_flow_create_meter_flow(dev, attr, actions);
 	}
@@ -5485,7 +5753,8 @@ dpaa2_flow_create(struct rte_eth_dev *dev,
 			return NULL;
 		}
 	} else if (flow_attr == RTE_DPAA2_FS_FLOW_CREATE_ATTR) {
-		fs_flow = dpaa2_flow_generic_flow_create(dev, attr, pattern,
+		fs_flow = dpaa2_flow_generic_flow_create(dev, attr,
+			rss_item ? items : pattern,
 			actions, error, DPAA2_FLOW_FS_TYPE, false);
 		if (!fs_flow) {
 			DPAA2_PMD_ERR("FS flow create failed!");
@@ -5508,6 +5777,8 @@ dpaa2_flow_create(struct rte_eth_dev *dev,
 	flow->qos_flow = qos_flow;
 	flow->fs_flow = fs_flow;
 	flow->priv = priv;
+	if (fs_flow && fs_flow->is_rss)
+		priv->extract.tc_key_extract[attr->group].rss_flow = flow;
 
 	/* New rules are inserted. */
 	curr = LIST_FIRST(&priv->flows);
@@ -5577,6 +5848,9 @@ dpaa2_flow_destroy(struct rte_eth_dev *dev,
 {
 	int qos_ret = 0, fs_ret = 0;
 	struct dpaa2_dev_flow *flow;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct dpaa2_key_extract *tc_ext;
+	uint8_t tc_id;
 
 	RTE_SET_USED(error);
 
@@ -5611,6 +5885,11 @@ dpaa2_flow_destroy(struct rte_eth_dev *dev,
 			rte_free(flow->fs_flow->key_addr);
 		if (flow->fs_flow->mask_addr)
 			rte_free(flow->fs_flow->mask_addr);
+		if (flow->fs_flow->is_rss) {
+			tc_id = flow->fs_flow->tc_id;
+			tc_ext = &priv->extract.tc_key_extract[tc_id];
+			tc_ext->rss_flow = NULL;
+		}
 		rte_free(flow->fs_flow);
 		flow->fs_flow = NULL;
 	}
@@ -5692,13 +5971,16 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 	struct rte_dpaa2_device *dpaa2_dev;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct dpaa2_dev_flow *flow;
-	struct dpaa2_key_extract *tc_ext;
-	uint16_t tc_id;
+	struct dpaa2_key_extract *tc_ext = NULL;
 	int ret, is_rss = false, hw_update = false;
 	struct dpaa2_dev_flow_fs_action *fs_action;
-	uint8_t qos_action_num = 0, fs_action_num = 0;
+	uint8_t qos_action_num = 0, fs_action_num = 0, tc_id;
 	struct rte_flow_action qos_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
 	struct rte_flow_action fs_actions[DPAA2_MAX_ACTION_PER_FLOW_NUM];
+	const struct rte_flow_action_rss *rss_conf;
+	struct rte_flow_item items[DPKG_MAX_NUM_OF_EXTRACTS + 1];
+	uint8_t spec_buf[1024];
+	struct rte_flow_attr attr;
 
 	dpaa2_dev = container_of(rte_dev, struct rte_dpaa2_device, device);
 
@@ -5708,8 +5990,7 @@ dpaa2_flow_actions_update(struct rte_eth_dev *dev,
 		RTE_ASSERT(flow->fs_flow);
 		tc_id = flow->fs_flow->tc_id;
 		RTE_ASSERT(priv->extract.mtr_flow[tc_id] == flow);
-		return dpaa2_flow_fs_action_update(priv, flow->fs_flow,
-			actions, NULL);
+		return dpaa2_flow_fs_action_update(priv, flow->fs_flow, actions);
 	}
 	LIST_FOREACH(flow, &priv->flows, next) {
 		if ((struct rte_flow *)flow == _flow)
@@ -5740,6 +6021,15 @@ action_update:
 	if (!flow->fs_flow)
 		goto qos_action_update;
 	fs_action = &flow->fs_flow->flow_action.fs_action;
+	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS) {
+		is_rss = true;
+		tc_id = flow->fs_flow->tc_id;
+		tc_ext = &priv->extract.tc_key_extract[tc_id];
+		if (tc_ext->rss_flow != flow) {
+			DPAA2_PMD_ERR("%s: RSS flow(%p) != TC[%d]'s rss flow(%p)",
+				__func__, flow, flow->fs_flow->tc_id, tc_ext->rss_flow);
+		}
+	}
 	if (fs_action_num > 0 &&
 		fs_actions[0].type != RTE_FLOW_ACTION_TYPE_PORT_ID &&
 		fs_actions[0].type != RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT &&
@@ -5748,33 +6038,59 @@ action_update:
 		hw_update = true;
 		goto skip_remove_fs_entry;
 	}
-	ret = dpaa2_flow_remove_generic_entry(dev, flow->fs_flow,
-		DPAA2_FLOW_FS_TYPE);
-	if (ret) {
-		DPAA2_PMD_ERR("%s: remove flow fs entry failed(%d)",
-			__func__, ret);
 
-		goto quit;
+	if (!is_rss) {
+		ret = dpaa2_flow_remove_generic_entry(dev, flow->fs_flow,
+			DPAA2_FLOW_FS_TYPE);
+		if (ret) {
+			DPAA2_PMD_ERR("%s: remove flow fs entry failed(%d)",
+				__func__, ret);
+
+			goto quit;
+		}
 	}
+
 skip_remove_fs_entry:
-	tc_id = flow->fs_flow->tc_id;
-	tc_ext = &priv->extract.tc_key_extract[tc_id];
-	if (fs_action->action_type == RTE_FLOW_ACTION_TYPE_RSS)
-		is_rss = true;
-
-	ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, fs_actions,
-		&tc_ext->dpkg);
-	if (ret) {
-		DPAA2_PMD_ERR("%s: FS action update failed(%d)",
-			__func__, ret);
-
-		goto quit;
-	}
 	if (is_rss) {
-		ret = dpaa2_flow_fs_rss_table_config(priv, tc_id, true);
+		rss_conf = fs_actions[0].conf;
+		ret = dpaa2_flow_rss_conf_to_item(rss_conf->types, items,
+			spec_buf, 1024);
+		if (ret < 0) {
+			DPAA2_PMD_ERR("TC[%d] converts to RSS items failed(%d)",
+				flow->fs_flow->tc_id, ret);
+			goto quit;
+		}
+		memset(&attr, 0, sizeof(attr));
+		attr.group = flow->fs_flow->tc_id;
+		attr.ingress = 1;
+		tc_ext->tc_cfg.dist_size = rss_conf->queue_num;
+		if (ret > 0) {
+			memset(&flow->fs_flow->rule_cfg, 0,
+				sizeof(struct dpni_rule_cfg));
+			memset(flow->fs_flow->key_addr, 0,
+				DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
+			memset(flow->fs_flow->mask_addr, 0,
+				DPAA2_EXTRACT_ALLOC_KEY_MAX_SIZE);
+			flow->fs_flow->rule_size = 0;
+			flow->fs_flow->ip_key = NET_PROT_NONE;
+			flow->fs_flow->ip_src = NET_PROT_NONE;
+			flow->fs_flow->ip_dst = NET_PROT_NONE;
+			ret = dpaa2_flow_generic_extract_rule_set(flow->fs_flow, &attr,
+				items, true, DPAA2_FLOW_FS_TYPE, true);
+		} else {
+			ret = dpaa2_flow_table_update(priv, DPAA2_FLOW_FS_TYPE,
+				attr.group, true);
+		}
 		if (ret)
 			goto quit;
 	} else {
+		ret = dpaa2_flow_fs_action_update(priv, flow->fs_flow, fs_actions);
+		if (ret) {
+			DPAA2_PMD_ERR("%s: FS action update failed(%d)",
+				__func__, ret);
+
+			goto quit;
+		}
 		if (hw_update)
 			ret = dpaa2_flow_update_fs_rule_action(priv, flow->fs_flow);
 		else
@@ -6108,13 +6424,29 @@ quit:
  *   Pointer to private structure.
  */
 void
-dpaa2_flow_clean(struct rte_eth_dev *dev)
+dpaa2_flow_clean(struct rte_eth_dev *dev, uint8_t tc_id)
 {
-	struct dpaa2_dev_flow *flow;
+	struct dpaa2_dev_flow *flow, *next_flow;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	int ret;
 
 	flow = LIST_FIRST(&priv->flows);
+	if (tc_id >= MAX_TCS)
+		goto clean_all;
+	while (flow) {
+		next_flow = LIST_NEXT(flow, next);
+		if (flow->fs_flow && flow->fs_flow->tc_id == tc_id) {
+			ret = dpaa2_flow_destroy(dev, (struct rte_flow *)flow, NULL);
+			if (ret) {
+				DPAA2_PMD_ERR("%s: Remove flow failed(%d)",
+					__func__, ret);
+			}
+		}
+		flow = next_flow;
+	}
+	return;
+
+clean_all:
 	while (flow) {
 		ret = dpaa2_flow_destroy(dev, (struct rte_flow *)flow, NULL);
 		if (ret) {

@@ -194,6 +194,187 @@ static int dpaa2_dev_set_link_down(struct rte_eth_dev *dev);
 static int dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 
 static int
+dpaa2_setup_flow_dist(struct rte_eth_dev *eth_dev,
+	uint64_t req_dist_set, int tc_index)
+{
+	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
+	int tc_dist_queues;
+	struct rte_flow_attr attr;
+	struct rte_flow_action_rss action_rss;
+	struct rte_flow_action actions[2];
+	struct rte_flow *rss_flow;
+
+	/*TC distribution size is set with dist_queues or
+	 * nb_rx_queues % dist_queues in order of TC priority index.
+	 * Calculating dist size for this tc_index:-
+	 */
+	tc_dist_queues = eth_dev->data->nb_rx_queues -
+		tc_index * priv->dist_queues;
+	if (tc_dist_queues <= 0) {
+		DPAA2_PMD_DEBUG("No distribution on TC%d", tc_index);
+		return 0;
+	}
+
+	if (tc_dist_queues > priv->dist_queues)
+		tc_dist_queues = priv->dist_queues;
+
+	memset(&attr, 0, sizeof(attr));
+	action_rss.func = RTE_ETH_HASH_FUNCTION_DEFAULT;
+	action_rss.level = 0;
+	action_rss.types = req_dist_set;
+	action_rss.key_len = 0;
+	action_rss.key = NULL;
+	action_rss.queue = NULL;
+	action_rss.queue_num = tc_dist_queues;
+
+	actions[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+	actions[0].conf = &action_rss;
+	actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+	attr.group = tc_index;
+	attr.ingress = 1;
+	rss_flow = rte_flow_create(eth_dev->data->port_id, &attr, NULL, actions, NULL);
+	if (!rss_flow) {
+		DPAA2_PMD_WARN("%s: Set RSS flow dist on tc%d failed",
+			__func__, tc_index);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int
+dpaa2_remove_flow_dist(struct rte_eth_dev *eth_dev,
+	uint8_t tc_index)
+{
+	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
+	struct dpaa2_key_extract *tc_ext;
+	int ret;
+
+	tc_ext = &priv->extract.tc_key_extract[tc_index];
+	if (!tc_ext->rss_flow || !tc_ext->is_rss) {
+		DPAA2_PMD_WARN("%s'TC[%d] is not RSS distributed",
+			eth_dev->data->name, tc_index);
+		return 0;
+	}
+	ret = rte_flow_destroy(eth_dev->data->port_id, tc_ext->rss_flow, NULL);
+	if (ret)
+		return ret;
+	tc_ext->rss_flow = NULL;
+
+	return 0;
+}
+
+static int
+dpaa2_update_flow_dist(struct rte_eth_dev *eth_dev,
+	uint64_t req_dist_set, int tc_index)
+{
+	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
+	struct dpaa2_key_extract *tc_ext;
+	struct rte_flow_action_rss action_rss;
+	struct rte_flow_action actions[2];
+	int ret;
+
+	tc_ext = &priv->extract.tc_key_extract[tc_index];
+	if (!tc_ext->rss_flow || !tc_ext->is_rss) {
+		DPAA2_PMD_WARN("%s'TC[%d] is not RSS distributed",
+			eth_dev->data->name, tc_index);
+		return 0;
+	}
+	action_rss.func = RTE_ETH_HASH_FUNCTION_DEFAULT;
+	action_rss.level = 0;
+	action_rss.types = req_dist_set;
+	action_rss.key_len = 0;
+	action_rss.queue_num = tc_ext->tc_cfg.dist_size;
+	action_rss.key = NULL;
+	action_rss.queue = NULL;
+	actions[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+	actions[0].conf = &action_rss;
+	actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+	ret = rte_flow_actions_update(eth_dev->data->port_id, tc_ext->rss_flow,
+		actions, NULL);
+
+	return ret;
+}
+
+static int
+dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
+	struct fsl_mc_io *dpni, void *blist)
+{
+	/* Function to attach a DPNI with a buffer pool list. Buffer pool list
+	 * handle is passed in blist.
+	 */
+	int32_t retcode;
+	struct dpni_pools_cfg bpool_cfg;
+	struct dpaa2_bp_list *bp_list = blist;
+	struct dpni_buffer_layout layout;
+	int tot_size, out_min_hdr_room, in_min_hdr_room;
+
+	/* ... rx buffer layout .
+	 * Check alignment for buffer layouts first
+	 */
+
+	/* ... rx buffer layout ... */
+	if (priv->tx_conf_type == DPAA2_TX_DYNAMIC_CONF) {
+		/** Additional headroom layout for IPSec with TX configure
+		 * dynamic enabled.
+		 */
+		in_min_hdr_room = DPAA2_RX_MIN_FD_OFFSET +
+			DPAA2_SEC_SIMPLE_FD_IB_MIN;
+		out_min_hdr_room = DPAA2_DYN_TX_MIN_FD_OFFSET +
+			DPAA2_SEC_SIMPLE_FD_OB_MIN;
+		tot_size = RTE_MAX(in_min_hdr_room, out_min_hdr_room);
+		if (tot_size < RTE_PKTMBUF_HEADROOM)
+			tot_size = RTE_PKTMBUF_HEADROOM;
+	} else {
+		tot_size = RTE_PKTMBUF_HEADROOM;
+	}
+	tot_size = RTE_ALIGN_CEIL(tot_size, DPAA2_PACKET_LAYOUT_ALIGN);
+
+	memset(&layout, 0, sizeof(struct dpni_buffer_layout));
+	layout.options = DPNI_BUF_LAYOUT_OPT_DATA_HEAD_ROOM |
+		DPNI_BUF_LAYOUT_OPT_FRAME_STATUS |
+		DPNI_BUF_LAYOUT_OPT_PARSER_RESULT |
+		DPNI_BUF_LAYOUT_OPT_DATA_ALIGN |
+		DPNI_BUF_LAYOUT_OPT_TIMESTAMP |
+		DPNI_BUF_LAYOUT_OPT_PRIVATE_DATA_SIZE;
+
+	layout.pass_timestamp = true;
+	layout.pass_frame_status = 1;
+	layout.private_data_size = DPAA2_FD_PTA_SIZE;
+	layout.pass_parser_result = 1;
+	layout.data_align = DPAA2_PACKET_LAYOUT_ALIGN;
+	layout.data_head_room = tot_size - DPAA2_FD_PTA_SIZE -
+		DPAA2_MBUF_HW_ANNOTATION;
+	retcode = dpni_set_buffer_layout(dpni, CMD_PRI_LOW, priv->token,
+			DPNI_QUEUE_RX, &layout);
+	if (retcode) {
+		DPAA2_PMD_ERR("Error configuring buffer pool Rx layout (%d)",
+			retcode);
+		return retcode;
+	}
+
+	/*Attach buffer pool to the network interface as described by the user*/
+	memset(&bpool_cfg, 0, sizeof(struct dpni_pools_cfg));
+	bpool_cfg.num_dpbp = 1;
+	bpool_cfg.pools[0].dpbp_id = bp_list->buf_pool.dpbp_node->dpbp_id;
+	bpool_cfg.pools[0].backup_pool = 0;
+	bpool_cfg.pools[0].buffer_size = RTE_ALIGN_CEIL(bp_list->buf_pool.size,
+				DPAA2_PACKET_LAYOUT_ALIGN);
+	bpool_cfg.pools[0].priority_mask = 0;
+
+	retcode = dpni_set_pools(dpni, CMD_PRI_LOW, priv->token, &bpool_cfg);
+	if (retcode) {
+		DPAA2_PMD_ERR("Error(%d) configuring bp(id=%d) on %s.",
+			retcode, bpool_cfg.pools[0].dpbp_id,
+			priv->eth_dev->data->name);
+		return retcode;
+	}
+
+	priv->bp_list = bp_list;
+	return 0;
+}
+
+static int
 dpaa2_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
 	int ret;
@@ -1563,7 +1744,7 @@ dpaa2_dev_close(struct rte_eth_dev *dev)
 	}
 
 	dpaa2_tm_deinit(dev);
-	dpaa2_flow_clean(dev);
+	dpaa2_flow_clean(dev, MAX_TCS);
 	/* Clean the device first */
 	ret = dpni_reset(dpni, CMD_PRI_LOW, priv->token);
 	if (ret) {
@@ -2541,7 +2722,7 @@ dpaa2_dev_rss_hash_update(struct rte_eth_dev *dev,
 
 	if (rss_conf->rss_hf) {
 		for (tc_index = 0; tc_index < priv->num_rx_tc; tc_index++) {
-			ret = dpaa2_setup_flow_dist(dev, rss_conf->rss_hf,
+			ret = dpaa2_update_flow_dist(dev, rss_conf->rss_hf,
 				tc_index);
 			if (ret)
 				break;
