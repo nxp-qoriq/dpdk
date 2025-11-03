@@ -89,13 +89,23 @@ struct l2fwd_policer_meter_param {
 	struct rte_flow_action red_action;
 };
 
+enum l2fwd_rss_item_type {
+	RSS_NULL_ITEM = 0,
+	RSS_ETH_ITEM,
+	RSS_IP_ITEM,
+	RSS_UDP_ITEM
+};
 struct l2fwd_policer_tc_desc {
 	int valid;
+	int is_rss_flow;
 
 	/** Meter per TC.*/
 	struct l2fwd_policer_meter_param meter_param;
 	void **one_level_flows;
 	void **fs_flows;
+	void *rss_flow;
+	enum l2fwd_rss_item_type rss_item;
+	uint16_t rss_dist_len;
 	struct rte_flow_item *fs_update_pattern;
 	uint16_t item_update_idx;
 	uint16_t action_update_idx;
@@ -147,8 +157,10 @@ enum {
 	ACTION_FS_QUEUE_UPDATE = (1 << 3),
 	ACTION_MISS_QOS_UPDATE = (1 << 4),
 	ACTION_MISS_FS_UPDATE = (1 << 5),
-	ITEM_QOS_FLOW_UPDATE = (1 << 6),
-	ITEM_FS_FLOW_UPDATE = (1 << 7)
+	ACTION_RSS_DIST_ITEM_UPDATE = (1 << 6),
+	ACTION_RSS_DIST_LEN_UPDATE = (1 << 7),
+	ITEM_QOS_FLOW_UPDATE = (1 << 8),
+	ITEM_FS_FLOW_UPDATE = (1 << 9)
 };
 
 /* port and vlan id pair configuration */
@@ -180,6 +192,8 @@ static uint32_t s_pir = POLICER_PIR_DEFAULT;
 static uint32_t s_pbs = POLICER_PBS_DEFAULT;
 
 static uint16_t s_meter_action = RTE_FLOW_ACTION_TYPE_METER_MARK;
+
+static int s_rss;
 
 struct policer_item_update {
 	const char *item_protocol;
@@ -825,6 +839,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_QUEUE_CONFIG "queue_config"
 #define CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG "flow_table_level"
 #define CMD_LINE_OPT_PRINT_STAT_CONFIG "print_stat"
+#define CMD_LINE_OPT_RSS_PER_TC_CONFIG "rss_per_tc"
 
 enum {
 	/* long options mapped to a short option */
@@ -848,7 +863,8 @@ enum {
 	CMD_LINE_OPT_QOS_VLAN_ID,
 	CMD_LINE_OPT_QUEUE_CONFIG_NUM,
 	CMD_LINE_OPT_FLOW_TABLE_LEVEL,
-	CMD_LINE_OPT_PRINT_STAT
+	CMD_LINE_OPT_PRINT_STAT,
+	CMD_LINE_OPT_RSS_PER_TC
 };
 
 static const struct option lgopts[] = {
@@ -858,6 +874,8 @@ static const struct option lgopts[] = {
 		CMD_LINE_OPT_PRINT_STAT},
 	{CMD_LINE_OPT_MISS_DROP_ACTION_CONFIG, no_argument, 0,
 		CMD_LINE_OPT_MISS_DROP_ACTION},
+	{CMD_LINE_OPT_RSS_PER_TC_CONFIG, no_argument, 0,
+		CMD_LINE_OPT_RSS_PER_TC},
 	{CMD_LINE_OPT_ENABLE_FLOW, 1, 0, CMD_LINE_OPT_ENABLE_FLOW_CTL},
 	{CMD_LINE_OPT_RATE_UNIT_CONFIG, 1, 0, CMD_LINE_OPT_RATE_UNIT},
 	{CMD_LINE_OPT_RATE_COLOR_CONFIG, 1, 0, CMD_LINE_OPT_RATE_COLOR},
@@ -1003,6 +1021,10 @@ l2fwd_policer_parse_args(int argc, char **argv)
 
 		case CMD_LINE_OPT_PRINT_STAT:
 			s_print_stat = true;
+			break;
+
+		case CMD_LINE_OPT_RSS_PER_TC:
+			s_rss = true;
 			break;
 
 		default:
@@ -1187,6 +1209,40 @@ l2fwd_policer_meter_action_config(uint16_t port_id,
 }
 
 static int
+l2fwd_policer_rss_flow_action_update(uint16_t port_id,
+	struct l2fwd_policer_tc_desc *tc_desc, uint32_t update)
+{
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_rss action_rss;
+
+	if (!(update & (ACTION_RSS_DIST_ITEM_UPDATE | ACTION_RSS_DIST_LEN_UPDATE)))
+		return 0;
+
+	memset(&action_rss, 0, sizeof(action_rss));
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+	action_rss.func = RTE_ETH_HASH_FUNCTION_DEFAULT;
+	action_rss.level = 0;
+	if (update & ACTION_RSS_DIST_ITEM_UPDATE) {
+		if (tc_desc->rss_item == RSS_ETH_ITEM)
+			action_rss.types |= RTE_ETH_RSS_ETH;
+		if (tc_desc->rss_item == RSS_IP_ITEM)
+			action_rss.types |= RTE_ETH_RSS_IP;
+		if (tc_desc->rss_item == RSS_UDP_ITEM)
+			action_rss.types |= RTE_ETH_RSS_UDP;
+	}
+	action_rss.key_len = 0;
+	action_rss.queue_num = tc_desc->rss_dist_len;
+	action_rss.key = NULL;
+	action_rss.queue = NULL;
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+	flow_action[0].conf = &action_rss;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	return rte_flow_actions_update(port_id, tc_desc->rss_flow,
+		flow_action, NULL);
+}
+
+static int
 l2fwd_policer_fs_flow_action_update(uint16_t port_id,
 	void *flow, uint16_t queue_id)
 {
@@ -1359,6 +1415,63 @@ l2fwd_policer_meter_flow_create(uint16_t port_id,
 		"Create meter flow of port%d-TC%d\n", port_id, tc);
 
 	return meter_flow;
+}
+
+static struct rte_flow *
+l2fwd_policer_rss_flow_config(uint16_t port_id,
+	uint16_t tc, struct l2fwd_policer_tc_desc *tc_desc)
+{
+	struct rte_flow_attr flow_attr;
+	struct rte_flow_item_ipv4 ipv4_item;
+	struct rte_flow_item_ipv4 ipv4_mask;
+	struct rte_flow_item flow_item[MAX_ITEM_NUM];
+	struct rte_flow_action flow_action[MAX_ACTION_NUM];
+	struct rte_flow_action_rss action_rss;
+	int ret;
+	struct rte_flow *fs_flow;
+
+	action_rss.func = RTE_ETH_HASH_FUNCTION_DEFAULT;
+	action_rss.level = 0,
+	action_rss.types = RTE_ETH_RSS_IPV4,
+	action_rss.key_len = 0,
+	action_rss.queue_num = tc_desc->queue_max_num;
+	action_rss.key = NULL;
+	action_rss.queue = NULL;
+	memset(&flow_attr, 0, sizeof(flow_attr));
+	flow_attr.ingress = 1;
+
+	flow_attr.group = tc;
+	memset(&ipv4_item, 0, sizeof(struct rte_flow_item_ipv4));
+	memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
+	ipv4_item.hdr.src_addr = rte_cpu_to_be_32(0xffffffff);
+	ipv4_mask.hdr.src_addr = rte_cpu_to_be_32(0xffffffff);
+
+	flow_item[0].spec = &ipv4_item;
+	flow_item[0].mask = &ipv4_mask;
+	flow_item[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
+	flow_item[1].type = RTE_FLOW_ITEM_TYPE_END;
+	flow_action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+	flow_action[0].conf = &action_rss;
+	flow_action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	/* validate and create the flow rule */
+	ret = rte_flow_validate(port_id, &flow_attr, flow_item,
+		flow_action, NULL);
+	if (ret) {
+		RTE_LOG(ERR, L2FWD_POLICER,
+			"flow validate failed(%d) on port%d-TC%d\n",
+			ret, port_id, tc);
+		return NULL;
+	}
+
+	fs_flow = rte_flow_create(port_id,
+		&flow_attr, flow_item, flow_action, NULL);
+	if (fs_flow) {
+		tc_desc->rss_item = RSS_IP_ITEM;
+		tc_desc->rss_dist_len = tc_desc->queue_max_num;
+	}
+
+	return fs_flow;
 }
 
 static struct rte_flow *
@@ -1699,7 +1812,7 @@ static void
 l2fwd_policer_flow_init_config(uint16_t port_id,
 	struct l2fwd_policer_port_params *param)
 {
-	uint16_t tc, i;
+	uint16_t tc, i, qidx;
 	struct rte_flow_action flow_action[MAX_ACTION_NUM];
 	int ret;
 	struct l2fwd_policer_tc_desc *tc_desc;
@@ -1714,11 +1827,14 @@ l2fwd_policer_flow_init_config(uint16_t port_id,
 			l2fwd_policer_meter_init(port_id, &tc_desc->meter_param);
 
 		if (param->flow_tb_level == 1) {
-			for (i = 0; i < tc_desc->queue_max_num; i++) {
+			for (i = 0; i < tc_desc->fs_max_num; i++) {
+				qidx = i;
+				if (qidx >= tc_desc->queue_max_num)
+					qidx = tc_desc->queue_max_num - 1;
 				tc_desc->one_level_flows[i] =
 					l2fwd_policer_one_level_flow_config(port_id, tc,
-						s_vlan_id, i, tc_desc->tc_queue_ids[i]);
-				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[i];
+						s_vlan_id, i, tc_desc->tc_queue_ids[qidx]);
+				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[qidx];
 			}
 		} else {
 			param->qos_flows[tc] = l2fwd_policer_qos_flow_vlan_config(port_id,
@@ -1727,17 +1843,32 @@ l2fwd_policer_flow_init_config(uint16_t port_id,
 			tc_desc = &param->tc_descs[tc];
 			tc_desc->meter_flow = l2fwd_policer_meter_flow_create(port_id,
 				tc, &tc_desc->meter_param, param->flow_tb_level);
-			for (i = 0; i < tc_desc->queue_max_num; i++) {
+			if (s_rss) {
+				tc_desc->rss_flow = l2fwd_policer_rss_flow_config(port_id,
+					tc, tc_desc);
+				if (!tc_desc->rss_flow) {
+					rte_exit(EXIT_FAILURE,
+						"Cannot create RSS flow of TC%d on port=%d\n",
+						tc, port_id);
+				}
+				tc_desc->is_rss_flow = s_rss;
+				goto complete_flow_config;
+			}
+			for (i = 0; i < tc_desc->fs_max_num; i++) {
+				qidx = i;
+				if (qidx >= tc_desc->queue_max_num)
+					qidx = tc_desc->queue_max_num - 1;
 				tc_desc->fs_flows[i] = l2fwd_policer_fs_flow_config(port_id,
-					tc, i, tc_desc->tc_queue_ids[i]);
+					tc, i, tc_desc->tc_queue_ids[qidx]);
 				if (!tc_desc->fs_flows[i]) {
 					rte_exit(EXIT_FAILURE,
 						"Cannot create FS flow[%d] of TC%d on port=%d\n",
 						i, tc, port_id);
 				}
-				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[i];
+				tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[qidx];
 			}
 		}
+complete_flow_config:
 		tc_desc->miss_drop = s_miss_drop;
 		tc_desc->default_queue =
 			tc_desc->tc_queue_ids[tc_desc->queue_max_num - 1];
@@ -1954,6 +2085,13 @@ l2fwd_policer_tc_flow_update(uint16_t portid,
 				"Update port%d-tc%d-flow%d action failed(%d)\n",
 				portid, tc, idx, ret);
 		}
+	}
+
+	ret = l2fwd_policer_rss_flow_action_update(portid, tc_desc, update);
+	if (ret) {
+		RTE_LOG(ERR, L2FWD_POLICER,
+			"Update port%d-tc%d-rss flow action failed(%d)\n",
+			portid, tc, ret);
 	}
 }
 
@@ -2320,6 +2458,79 @@ l2fwd_policer_runtime_tc_meter_update(uint16_t portid,
 }
 
 static void
+l2fwd_policer_runtime_fs_rss_flow_switch(uint16_t portid,
+	uint8_t tc)
+{
+	int i, ret, qidx;
+	char command[256];
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+
+	if (port_param->flow_tb_level == 1)
+		return;
+	if (tc_desc->is_rss_flow) {
+		fprintf(stdout,
+			"\r\nSwitch port%d TC[%d] RSS flow to FS flows?[N/y]?",
+			portid, tc);
+	} else {
+		fprintf(stdout,
+			"\r\nSwitch port%d TC[%d] FS flows to RSS flow?[N/y]?",
+			portid, tc);
+	}
+
+	command[0] = 0;
+	fgets(command, 256, stdin);
+	if (command[0] != 'y')
+		return;
+
+	if (tc_desc->is_rss_flow) {
+		tc_desc->is_rss_flow = false;
+		ret = rte_flow_destroy(portid, tc_desc->rss_flow, NULL);
+		if (ret) {
+			rte_exit(EXIT_FAILURE,
+				"Failed(%d) to destroy port%d's TC[%d]'s RSS flow\n",
+				ret, portid, tc);
+		}
+		tc_desc->rss_flow = NULL;
+		for (i = 0; i < tc_desc->fs_max_num; i++) {
+			qidx = i;
+			if (qidx >= tc_desc->queue_max_num)
+				qidx = tc_desc->queue_max_num - 1;
+			tc_desc->fs_flows[i] = l2fwd_policer_fs_flow_config(portid,
+				tc, i, tc_desc->tc_queue_ids[qidx]);
+			if (!tc_desc->fs_flows[i]) {
+				rte_exit(EXIT_FAILURE,
+					"Cannot create FS flow[%d] of TC%d on port=%d\n",
+					i, tc, portid);
+			}
+			tc_desc->flow_queue_ids[i] = tc_desc->tc_queue_ids[qidx];
+		}
+	} else {
+		tc_desc->is_rss_flow = true;
+		for (i = 0; i < tc_desc->fs_max_num; i++) {
+			if (tc_desc->fs_flows[i]) {
+				ret = rte_flow_destroy(portid, tc_desc->fs_flows[i], NULL);
+				if (ret) {
+					rte_exit(EXIT_FAILURE,
+						"Failed(%d) to destroy port%d's TC[%d]'s FS flow%d\n",
+						ret, portid, tc, i);
+				}
+			}
+		}
+		tc_desc->rss_dist_len = tc_desc->queue_max_num;
+		tc_desc->rss_flow = l2fwd_policer_rss_flow_config(portid, tc, tc_desc);
+		if (!tc_desc->rss_flow) {
+			rte_exit(EXIT_FAILURE,
+				"Cannot create RSS flow of TC%d on port=%d\n",
+				tc, portid);
+		}
+	}
+}
+
+static void
 l2fwd_policer_runtime_fs_flow_item_update(uint16_t portid,
 	uint8_t tc, uint32_t *update)
 {
@@ -2336,8 +2547,10 @@ l2fwd_policer_runtime_fs_flow_item_update(uint16_t portid,
 
 	if (port_param->flow_tb_level == 1)
 		flows = tc_desc->one_level_flows;
-	else
+	else if (!tc_desc->is_rss_flow)
 		flows = tc_desc->fs_flows;
+	else
+		return;
 	off = 0;
 	memset(range, 0, sizeof(range));
 	for (i = 0; i < tc_desc->fs_max_num; i++) {
@@ -2396,6 +2609,58 @@ l2fwd_policer_runtime_fs_flow_item_update(uint16_t portid,
 }
 
 static void
+l2fwd_policer_runtime_rss_flow_action_update(uint16_t portid,
+	uint8_t tc, uint32_t *update)
+{
+	char command[256];
+	char *endp;
+	struct l2fwd_policer_port_params *port_param;
+	struct l2fwd_policer_tc_desc *tc_desc;
+	int item_id, dist_len;
+
+	port_param = &s_port_param[portid];
+	tc_desc = &port_param->tc_descs[tc];
+	if (!tc_desc->is_rss_flow)
+		return;
+
+	fprintf(stdout,
+		"Enter items ID to update RSS dist:(default=%d) [eth(%d), ip(%d), udp(%d)]: ",
+		tc_desc->rss_item, RSS_ETH_ITEM,
+		RSS_IP_ITEM, RSS_UDP_ITEM);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		item_id = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (item_id > RSS_NULL_ITEM && item_id <= RSS_UDP_ITEM &&
+			tc_desc->rss_item != (enum l2fwd_rss_item_type)item_id) {
+			*update |= ACTION_RSS_DIST_ITEM_UPDATE;
+			tc_desc->rss_item = item_id;
+		}
+	}
+
+	fprintf(stdout,
+		"Enter dist length to update RSS dist:(default=%d): ",
+		tc_desc->rss_dist_len);
+	if (fgets(command, 256, stdin)) {
+		errno = 0;
+		dist_len = strtoul(command, &endp, 10);
+		if (errno || command == endp)
+			return;
+		if (dist_len > 0 && dist_len <= tc_desc->queue_max_num &&
+			RTE_IS_POWER_OF_2(dist_len)) {
+			if (tc_desc->rss_dist_len != dist_len)
+				*update |= ACTION_RSS_DIST_LEN_UPDATE;
+			tc_desc->rss_dist_len = dist_len;
+		} else {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"Invalid RSS distribut length(%d)\n\n",
+				dist_len);
+		}
+	}
+}
+
+static void
 l2fwd_policer_runtime_fs_flow_action_update(uint16_t portid,
 	uint8_t tc, uint32_t *update)
 {
@@ -2412,8 +2677,10 @@ l2fwd_policer_runtime_fs_flow_action_update(uint16_t portid,
 	tc_desc = &port_param->tc_descs[tc];
 	if (port_param->flow_tb_level == 1)
 		flows = tc_desc->one_level_flows;
-	else
+	else if (!tc_desc->is_rss_flow)
 		flows = tc_desc->fs_flows;
+	else
+		return;
 
 	memset(range, 0, sizeof(range));
 	for (i = 0; i < tc_desc->fs_max_num; i++) {
@@ -2532,8 +2799,11 @@ start_again:
 		if (ret)
 			goto start_update;
 		l2fwd_policer_runtime_fs_miss_update(portid, tc, &update);
-		if (s_port_param[portid].flow_tb_level > 1)
+		if (s_port_param[portid].flow_tb_level > 1) {
+			l2fwd_policer_runtime_fs_rss_flow_switch(portid, tc);
 			l2fwd_policer_runtime_fs_flow_item_update(portid, tc, &update);
+		}
+		l2fwd_policer_runtime_rss_flow_action_update(portid, tc, &update);
 		l2fwd_policer_runtime_fs_flow_action_update(portid, tc, &update);
 
 		if (!meter_enable)
