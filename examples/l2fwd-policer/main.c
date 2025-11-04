@@ -133,6 +133,7 @@ static uint16_t s_max_qn_per_tc;
 static uint16_t s_vlan_id = POLICER_VLAN_ID;
 
 static int s_miss_drop;
+static enum rte_dpaa2_sch_mode s_sch_mode = RTE_DPAA2_SCH_PUSH;
 
 /* MAC updating enabled by default */
 static int mac_updating = 1;
@@ -674,8 +675,9 @@ l2fwd_policer_usage(const char *prgname)
 		"  --vlan_id vlan ID selected to configure QoS flow\n"
 		"  --queue_config: Configure (port,queue,core)\n"
 		"  --tx_multi_ports: 0 disable, 1 enable, Default: enable.\n"
-		"  --flow_table_level: 1 or 2.\n"
-		"  --print_stat: Print port and TC traffic statistics.\n",
+		"  --flow_table_level: 1 or 2, Default: 2.\n"
+		"  --print_stat: Print port and TC traffic statistics.\n"
+		"  --rx_sch_mode: Select RX schedule mode (pull or push), Default: push.\n",
 		prgname);
 }
 
@@ -867,6 +869,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG "flow_table_level"
 #define CMD_LINE_OPT_PRINT_STAT_CONFIG "print_stat"
 #define CMD_LINE_OPT_RSS_PER_TC_CONFIG "rss_per_tc"
+#define CMD_LINE_OPT_RX_SCH_MODE_CONFIG "rx_sch_mode"
 
 enum {
 	/* long options mapped to a short option */
@@ -891,7 +894,8 @@ enum {
 	CMD_LINE_OPT_QUEUE_CONFIG_NUM,
 	CMD_LINE_OPT_FLOW_TABLE_LEVEL,
 	CMD_LINE_OPT_PRINT_STAT,
-	CMD_LINE_OPT_RSS_PER_TC
+	CMD_LINE_OPT_RSS_PER_TC,
+	CMD_LINE_OPT_RX_SCH_MODE
 };
 
 static const struct option lgopts[] = {
@@ -918,6 +922,7 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_QUEUE_CONFIG, 1, 0, CMD_LINE_OPT_QUEUE_CONFIG_NUM},
 	{CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG, 1, 0,
 		CMD_LINE_OPT_FLOW_TABLE_LEVEL},
+	{CMD_LINE_OPT_RX_SCH_MODE_CONFIG, 1, 0, CMD_LINE_OPT_RX_SCH_MODE},
 	{NULL, 0, 0, 0}
 };
 
@@ -1052,6 +1057,19 @@ l2fwd_policer_parse_args(int argc, char **argv)
 
 		case CMD_LINE_OPT_RSS_PER_TC:
 			s_rss = true;
+			break;
+
+		case CMD_LINE_OPT_RX_SCH_MODE:
+			if (!strcmp(optarg, "pull")) {
+				s_sch_mode = RTE_DPAA2_SCH_PULL;
+			} else if (!strcmp(optarg, "push")) {
+				s_sch_mode = RTE_DPAA2_SCH_PUSH;
+			} else {
+				fprintf(stderr, "Invalid schedule mode: %s\n",
+					optarg);
+				l2fwd_policer_usage(prgname);
+				return -EINVAL;
+			}
 			break;
 
 		default:
@@ -2882,7 +2900,7 @@ l2fwd_policer_lcore_port_queue_add(uint16_t lcore,
 	queue_conf->rx_port_list[queue_conf->n_rx_port].queue_id = queue_id;
 	queue_conf->n_rx_port++;
 	if (!queue_conf->sch_handle) {
-		queue_conf->sch_handle = rte_dpaa2_scheduler_init();
+		queue_conf->sch_handle = rte_dpaa2_scheduler_init(s_sch_mode);
 		if (!queue_conf->sch_handle) {
 			rte_exit(EXIT_FAILURE,
 				"Init core%d's schedule failed.\n", lcore);
@@ -2929,7 +2947,7 @@ l2fwd_policer_lcore_port_queue_config(uint16_t lcore,
 		rte_pmd_dpaa2_rxq_parse_tc_info(&qinfo,
 			&tc_id, &flow_id);
 		if (!queue_conf->sch_handle) {
-			queue_conf->sch_handle = rte_dpaa2_scheduler_init();
+			queue_conf->sch_handle = rte_dpaa2_scheduler_init(s_sch_mode);
 			if (!queue_conf->sch_handle) {
 				rte_exit(EXIT_FAILURE,
 					"Init core%d's schedule failed.\n", lcore);
@@ -2987,7 +3005,7 @@ l2fwd_policer_port_qos_init(uint16_t portid,
 	port_param->qos_flows = rte_zmalloc(NULL,
 		sizeof(void *) * qos_entries, 0);
 	port_param->tc_ids = rte_zmalloc(NULL,
-		sizeof(uint8_t) * qos_entries, 0);
+		sizeof(uint8_t) * rx_tc_num, 0);
 	port_param->max_qos_entries = qos_entries;
 	port_param->tc_descs = rte_zmalloc(NULL,
 		sizeof(struct l2fwd_policer_tc_desc) *
