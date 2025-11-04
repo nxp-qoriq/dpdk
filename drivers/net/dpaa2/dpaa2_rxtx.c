@@ -1208,12 +1208,14 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 }
 
 void __rte_hot
-dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
+dpaa2_dev_process_parallel_event(struct dpaa2_dpio_dev *dpio_dev,
 	const struct qbman_fd *fd,
 	const struct qbman_result *dq,
 	struct dpaa2_queue *rxq,
 	struct rte_event *ev)
 {
+	struct qbman_swp *swp = dpio_dev->sw_portal;
+
 	if (dpaa2_svr_family != SVR_LX2160A)
 		dpaa2_dev_rx_annot_prefetch(fd);
 
@@ -1227,7 +1229,7 @@ dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
 }
 
 void __rte_hot
-dpaa2_dev_process_atomic_event(struct qbman_swp *swp __rte_unused,
+dpaa2_dev_process_atomic_event(struct dpaa2_dpio_dev *dpio_dev,
 	const struct qbman_fd *fd,
 	const struct qbman_result *dq,
 	struct dpaa2_queue *rxq,
@@ -1246,18 +1248,20 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __rte_unused,
 
 	dqrr_index = qbman_get_dqrr_idx(dq);
 	*dpaa2_seqn(ev->mbuf) = dqrr_index + 1;
-	DPAA2_PER_LCORE_DQRR_SIZE++;
-	DPAA2_PER_LCORE_DQRR_HELD |= 1 << dqrr_index;
-	DPAA2_PER_LCORE_DQRR_MBUF(dqrr_index) = ev->mbuf;
+	dpio_dev->dpaa2_held_bufs.dqrr_size++;
+	dpio_dev->dpaa2_held_bufs.dqrr_held |= 1 << dqrr_index;
+	dpio_dev->dpaa2_held_bufs.mbuf[dqrr_index] = ev->mbuf;
 }
 
 void __rte_hot
-dpaa2_dev_process_ordered_event(struct qbman_swp *swp,
+dpaa2_dev_process_ordered_event(struct dpaa2_dpio_dev *dpio_dev,
 	const struct qbman_fd *fd,
 	const struct qbman_result *dq,
 	struct dpaa2_queue *rxq,
 	struct rte_event *ev)
 {
+	struct qbman_swp *swp = dpio_dev->sw_portal;
+
 	if (dpaa2_svr_family != SVR_LX2160A)
 		dpaa2_dev_rx_annot_prefetch(fd);
 

@@ -764,21 +764,15 @@ uint16_t dpaa2_dev_loopback_rx(void *queue, struct rte_mbuf **bufs,
 
 uint16_t dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs,
 			       uint16_t nb_pkts);
-void dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
-				      const struct qbman_fd *fd,
-				      const struct qbman_result *dq,
-				      struct dpaa2_queue *rxq,
-				      struct rte_event *ev);
-void dpaa2_dev_process_atomic_event(struct qbman_swp *swp,
-				    const struct qbman_fd *fd,
-				    const struct qbman_result *dq,
-				    struct dpaa2_queue *rxq,
-				    struct rte_event *ev);
-void dpaa2_dev_process_ordered_event(struct qbman_swp *swp,
-				     const struct qbman_fd *fd,
-				     const struct qbman_result *dq,
-				     struct dpaa2_queue *rxq,
-				     struct rte_event *ev);
+void dpaa2_dev_process_parallel_event(struct dpaa2_dpio_dev *dpio_dev,
+		const struct qbman_fd *fd, const struct qbman_result *dq,
+		struct dpaa2_queue *rxq, struct rte_event *ev);
+void dpaa2_dev_process_atomic_event(struct dpaa2_dpio_dev *dpio_dev,
+		const struct qbman_fd *fd, const struct qbman_result *dq,
+		struct dpaa2_queue *rxq, struct rte_event *ev);
+void dpaa2_dev_process_ordered_event(struct dpaa2_dpio_dev *dpio_dev,
+		const struct qbman_fd *fd, const struct qbman_result *dq,
+		struct dpaa2_queue *rxq, struct rte_event *ev);
 uint16_t
 dpaa2_dev_tx(void *queue,
 	struct rte_mbuf **bufs, uint16_t nb_pkts);

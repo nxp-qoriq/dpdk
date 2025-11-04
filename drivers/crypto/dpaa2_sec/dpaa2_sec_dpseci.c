@@ -4317,13 +4317,12 @@ void dpaa2_sec_stats_reset(struct rte_cryptodev *dev)
 }
 
 static void __rte_hot
-dpaa2_sec_process_parallel_event(struct qbman_swp *swp,
-				 const struct qbman_fd *fd,
-				 const struct qbman_result *dq,
-				 struct dpaa2_queue *rxq,
-				 struct rte_event *ev)
+dpaa2_sec_process_parallel_event(struct dpaa2_dpio_dev *dpio_dev,
+	const struct qbman_fd *fd, const struct qbman_result *dq,
+	struct dpaa2_queue *rxq, struct rte_event *ev)
 {
 	struct dpaa2_sec_qp *qp;
+	struct qbman_swp *swp = dpio_dev->sw_portal;
 
 	qp = container_of(rxq, struct dpaa2_sec_qp, rx_vq);
 	ev->flow_id = rxq->ev.flow_id;
@@ -4339,11 +4338,9 @@ dpaa2_sec_process_parallel_event(struct qbman_swp *swp,
 }
 
 static void
-dpaa2_sec_process_atomic_event(struct qbman_swp *swp __rte_unused,
-				 const struct qbman_fd *fd,
-				 const struct qbman_result *dq,
-				 struct dpaa2_queue *rxq,
-				 struct rte_event *ev)
+dpaa2_sec_process_atomic_event(struct dpaa2_dpio_dev *dpio_dev,
+	const struct qbman_fd *fd, const struct qbman_result *dq,
+	struct dpaa2_queue *rxq, struct rte_event *ev)
 {
 	uint8_t dqrr_index;
 	struct dpaa2_sec_qp *qp;
@@ -4361,21 +4358,20 @@ dpaa2_sec_process_atomic_event(struct qbman_swp *swp __rte_unused,
 	crypto_op = dpaa2_sec_fd_to_mbuf(fd, qp);
 	dqrr_index = qbman_get_dqrr_idx(dq);
 	*dpaa2_seqn(crypto_op->sym->m_src) = QBMAN_ENQUEUE_FLAG_DCA | dqrr_index;
-	DPAA2_PER_LCORE_DQRR_SIZE++;
-	DPAA2_PER_LCORE_DQRR_HELD |= 1 << dqrr_index;
-	DPAA2_PER_LCORE_DQRR_MBUF(dqrr_index) = crypto_op->sym->m_src;
+	dpio_dev->dpaa2_held_bufs.dqrr_size++;
+	dpio_dev->dpaa2_held_bufs.dqrr_held |= 1 << dqrr_index;
+	dpio_dev->dpaa2_held_bufs.mbuf[dqrr_index] = crypto_op->sym->m_src;
 	ev->event_ptr = crypto_op;
 }
 
 static void __rte_hot
-dpaa2_sec_process_ordered_event(struct qbman_swp *swp,
-				const struct qbman_fd *fd,
-				const struct qbman_result *dq,
-				struct dpaa2_queue *rxq,
-				struct rte_event *ev)
+dpaa2_sec_process_ordered_event(struct dpaa2_dpio_dev *dpio_dev,
+	const struct qbman_fd *fd, const struct qbman_result *dq,
+	struct dpaa2_queue *rxq, struct rte_event *ev)
 {
 	struct rte_crypto_op *crypto_op;
 	struct dpaa2_sec_qp *qp;
+	struct qbman_swp *swp = dpio_dev->sw_portal;
 
 	qp = container_of(rxq, struct dpaa2_sec_qp, rx_vq);
 	ev->flow_id = rxq->ev.flow_id;

@@ -156,7 +156,7 @@ struct queue_storage_info_t {
 
 struct dpaa2_queue;
 
-typedef void (dpaa2_queue_cb_dqrr_t)(struct qbman_swp *swp,
+typedef void (dpaa2_queue_cb_dqrr_t)(struct dpaa2_dpio_dev *dpio_dev,
 		const struct qbman_fd *fd,
 		const struct qbman_result *dq,
 		struct dpaa2_queue *rxq,
@@ -186,6 +186,7 @@ struct dpaa2_queue {
 	void *cfg;
 	uint8_t options;
 	struct rte_event ev;
+	struct rte_mempool *env_pool;
 	dpaa2_queue_cb_dqrr_t *cb;
 	dpaa2_queue_cb_eqresp_free_t *cb_eqresp_free;
 	struct dpaa2_bp_info *bp_array;

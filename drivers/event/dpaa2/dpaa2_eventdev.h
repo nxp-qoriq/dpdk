@@ -69,10 +69,13 @@ struct dpaa2_eventq {
 
 struct dpaa2_port {
 	struct rte_eventdev *eventdev;
-	struct dpaa2_eventq evq_info[DPAA2_EVENT_MAX_QUEUES];
+	struct dpaa2_dpio_dev *dpio_dev;
+	int port_atomic;
+	rte_spinlock_t port_lock;
+	int cpu_affine;
+	struct dpaa2_eventq *evq_info[DPAA2_EVENT_MAX_QUEUES];
 	uint8_t port_id;
 	uint8_t num_linked_evq;
-	uint8_t is_port_linked;
 	uint64_t timeout_us;
 };
 

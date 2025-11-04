@@ -216,6 +216,8 @@ uint16_t
 rte_dpaa2_scheduler_rx(void *scheduler_handle, struct rte_mbuf **mbuf,
 	uint16_t nb_pkts);
 
+#define RTE_DPAA2_EVENT_PORT_CFG_ATOMIC RTE_BIT32(31)
+
 int
 rte_pmd_dpaa2_flow_table_query(uint16_t portid);
 

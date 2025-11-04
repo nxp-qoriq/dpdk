@@ -55,6 +55,8 @@ dpaa2_create_dpci_device(int vdev_fd __rte_unused,
 	struct dpci_rx_queue_attr rx_attr;
 	struct dpci_tx_queue_attr tx_attr;
 	int ret, i, dpci_id = obj->object_id;
+	char pool_name[64];
+	uint64_t pool_size;
 
 	memset(&attr, 0, sizeof(struct dpci_attr));
 	memset(&peer_attr, 0, sizeof(struct dpci_peer_attr));
@@ -114,6 +116,18 @@ dpaa2_create_dpci_device(int vdev_fd __rte_unused,
 			goto queue_err;
 		}
 		dpci_node->rx_queue[i].fqid = rx_attr.fqid;
+		snprintf(pool_name, sizeof(pool_name),
+			"dpci%d_qid%d_env", dpci_id, i);
+		pool_size = RTE_ALIGN(sizeof(struct rte_event), 1024);
+		dpci_node->rx_queue[i].env_pool = rte_mempool_create(pool_name,
+			1024, pool_size, 512, 0, NULL, NULL, NULL, NULL,
+			SOCKET_ID_ANY, 0);
+		if (ret) {
+			DPAA2_BUS_ERR("Rx queue event pool create(%s) failed",
+				pool_name);
+			ret = -ENOMEM;
+			goto queue_err;
+		}
 	}
 
 	/* Enable the device */
@@ -171,8 +185,13 @@ enable_err:
 		rte_free(dpci_node->tx_queue);
 	dpci_disable(&dpci_node->dpci, CMD_PRI_LOW, dpci_node->token);
 queue_err:
-	if (dpci_node->rx_queue)
+	if (dpci_node->rx_queue) {
+		for (i = 0; i < dpci_node->rx_queue_num; i++) {
+			if (dpci_node->rx_queue[i].env_pool)
+				rte_mempool_free(dpci_node->rx_queue[i].env_pool);
+		}
 		rte_free(dpci_node->rx_queue);
+	}
 open_err:
 	dpci_close(&dpci_node->dpci, CMD_PRI_LOW, dpci_node->token);
 
@@ -211,11 +230,16 @@ static void
 dpaa2_close_dpci_device(int object_id)
 {
 	struct dpaa2_dpci_dev *dpci_dev = NULL;
+	int i;
 
 	dpci_dev = get_dpci_from_id((uint32_t)object_id);
 
 	if (dpci_dev) {
 		dpci_disable(&dpci_dev->dpci, CMD_PRI_LOW, dpci_dev->token);
+		for (i = 0; i < dpci_dev->rx_queue_num; i++) {
+			if (dpci_dev->rx_queue[i].env_pool)
+				rte_mempool_free(dpci_dev->rx_queue[i].env_pool);
+		}
 		rte_free(dpci_dev->rx_queue);
 		rte_free(dpci_dev->tx_queue);
 		dpci_close(&dpci_dev->dpci, CMD_PRI_LOW, dpci_dev->token);
@@ -272,6 +296,7 @@ rte_dpaa2_dpci_link_attach(struct dpaa2_dpci_dev *dpci_dev,
 			dpci_dev->dpci_id, i, ret);
 		return ret;
 	}
+	dpci_dev->tx_queue[i].env_pool = peer_dpci->rx_queue[i].env_pool;
 
 	if (txq)
 		*txq = &dpci_dev->tx_queue[i];
