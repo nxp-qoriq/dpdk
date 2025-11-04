@@ -397,7 +397,7 @@ static struct rte_eth_conf port_conf = {
 	},
 };
 
-struct rte_mempool *l2fwd_policer_pktmbuf_pool;
+struct rte_mempool *l2fwd_policer_pktmbuf_pool[RTE_MAX_ETHPORTS][POLICER_TC_MAX_NUM];
 
 /* Per-port statistics struct */
 struct l2fwd_policer_port_statistics {
@@ -3136,9 +3136,9 @@ main(int argc, char **argv)
 {
 	uint16_t nb_ports_available = 0, nb_ports_in_mask = 0;
 	uint16_t lcore_id, portid, last_port, nb_ports, i;
-	uint32_t nb_mbufs;
 	int ret;
 	pthread_t pid;
+	char nm[RTE_MEMZONE_NAMESIZE];
 
 	/* Init EAL. 8< */
 	ret = rte_eal_init(argc, argv);
@@ -3201,17 +3201,6 @@ main(int argc, char **argv)
 		l2fwd_policer_dst_ports[last_port] = last_port;
 	}
 	/* >8 End of initialization of the driver. */
-
-	nb_mbufs = RTE_MAX(nb_ports * (nb_rxd +
-		nb_txd + MAX_PKT_BURST), (uint16_t)8192);
-
-	/* Create the mbuf pool. 8< */
-	l2fwd_policer_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", nb_mbufs,
-		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
-		rte_socket_id());
-	if (l2fwd_policer_pktmbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
-	/* >8 End of create the mbuf pool. */
 
 	/* Initialise each port */
 	RTE_ETH_FOREACH_DEV(portid) {
@@ -3281,6 +3270,17 @@ main(int argc, char **argv)
 				 ret, portid);
 		}
 
+		for (i = 0; i < tc_num; i++) {
+			sprintf(nm, "mbuf_pool_port%d_tc%d", portid, i);
+			l2fwd_policer_pktmbuf_pool[portid][i] = rte_pktmbuf_pool_create(nm,
+				8192, MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+				rte_socket_id());
+			if (!l2fwd_policer_pktmbuf_pool[portid][i]) {
+				rte_exit(EXIT_FAILURE, "Cannot init mbuf pool(%s)\n",
+					nm);
+			}
+		}
+
 		/* init one RX queue */
 		fflush(stdout);
 
@@ -3292,7 +3292,7 @@ main(int argc, char **argv)
 			ret = rte_eth_rx_queue_setup(portid, i, nb_rxd,
 				rte_eth_dev_socket_id(portid),
 				&rxq_conf,
-				l2fwd_policer_pktmbuf_pool);
+				l2fwd_policer_pktmbuf_pool[portid][i / queues_per_tc]);
 			if (ret) {
 				rte_exit(EXIT_FAILURE,
 					"Setup port%d-rxq%d failed(%d).\n",
@@ -3307,6 +3307,11 @@ main(int argc, char **argv)
 			}
 			rte_pmd_dpaa2_rxq_parse_tc_info(&qinfo,
 				&tc_id, &flow_id);
+			if (tc_id != (i / queues_per_tc)) {
+				RTE_LOG(ERR, L2FWD_POLICER,
+					"port%d.rxq%d' tc(%d) is not expected(%d)\n",
+					portid, i, tc_id, (i / queues_per_tc));
+			}
 			tc_desc = &s_port_param[portid].tc_descs[tc_id];
 			tc_desc->tc_queue_ids[queue_num[tc_id]] = i;
 			queue_num[tc_id]++;
@@ -3467,6 +3472,12 @@ main(int argc, char **argv)
 				portid, ret);
 		}
 		rte_eth_dev_close(portid);
+		for (i = 0; i < POLICER_TC_MAX_NUM; i++) {
+			if (!l2fwd_policer_pktmbuf_pool[portid][i])
+				continue;
+			rte_mempool_free(l2fwd_policer_pktmbuf_pool[portid][i]);
+			l2fwd_policer_pktmbuf_pool[portid][i] = NULL;
+		}
 		printf(" Done\n");
 	}
 	rte_free(tc_statistics);
