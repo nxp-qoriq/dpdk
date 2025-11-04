@@ -129,6 +129,7 @@ struct l2fwd_policer_tc_desc {
 
 static volatile bool force_quit;
 
+static uint16_t s_max_qn_per_tc;
 static uint16_t s_vlan_id = POLICER_VLAN_ID;
 
 static int s_miss_drop;
@@ -451,9 +452,13 @@ static void *l2fwd_policer_print_stats(void *arg)
 {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
 	unsigned portid;
-	int i;
-	struct l2fwd_policer_byte_statistics *curr, *prev;
-	double tc_diff;
+	int i, j, num;
+	struct l2fwd_policer_byte_statistics *tc_curr;
+	struct l2fwd_policer_byte_statistics *tc_prev;
+	struct l2fwd_policer_byte_statistics *curr[s_max_qn_per_tc];
+	struct l2fwd_policer_byte_statistics *prev[s_max_qn_per_tc];
+	double tc_diff, flow_diff;
+	uint64_t tc_total;
 
 	RTE_SET_USED(arg);
 
@@ -491,18 +496,38 @@ again:
 		for (i = 0; i < s_port_param[portid].max_tcs; i++) {
 			if (!s_port_param[portid].tc_descs[i].valid)
 				continue;
-			curr = tc_statistics + portid * POLICER_TC_MAX_NUM + i;
-			prev = prev_tc_statistics + portid * POLICER_TC_MAX_NUM + i;
-			if (!curr->bytes_overhead)
-				continue;
-			tc_diff = curr->bytes_overhead - prev->bytes_overhead;
-			printf("\nPort%d.TC%d: %fGbps, %ld\r\n",
-				portid, i, tc_diff * 8 / timer_period /
-				(1000 * 1000 * 1000),
-				curr->bytes_overhead * 8);
-			prev->bytes = curr->bytes;
-			prev->bytes_fcs = curr->bytes_fcs;
-			prev->bytes_overhead = curr->bytes_overhead;
+			tc_curr = tc_statistics + portid * POLICER_TC_MAX_NUM +
+				s_max_qn_per_tc * i;
+			tc_prev = prev_tc_statistics + portid * POLICER_TC_MAX_NUM +
+				s_max_qn_per_tc * i;
+			tc_diff = 0;
+			tc_total = 0;
+			num = 0;
+			for (j = 0; j < s_max_qn_per_tc; j++) {
+				curr[j] = &tc_curr[j];
+				prev[j] = &tc_prev[j];
+				if (!curr[j]->bytes_overhead)
+					continue;
+				num++;
+				if (num == 1)
+					printf("\n");
+				flow_diff = curr[j]->bytes_overhead - prev[j]->bytes_overhead;
+				printf("	Port%d.TC%d.flow%d: %fGbps, %ld\r\n",
+					portid, i, j, flow_diff * 8 / timer_period /
+					(1000 * 1000 * 1000),
+					curr[j]->bytes_overhead * 8);
+				prev[j]->bytes = curr[j]->bytes;
+				prev[j]->bytes_fcs = curr[j]->bytes_fcs;
+				prev[j]->bytes_overhead = curr[j]->bytes_overhead;
+				tc_diff += flow_diff;
+				tc_total += curr[j]->bytes_overhead;
+			}
+			if (num) {
+				printf("Port%d.TC%d: %fGbps, %ld\r\n",
+					portid, i, tc_diff * 8 / timer_period /
+					(1000 * 1000 * 1000),
+					tc_total * 8);
+			}
 		}
 	}
 	printf("\nAggregate statistics ==============================="
@@ -586,7 +611,9 @@ l2fwd_policer_main_loop(void)
 			if (m->ol_flags & RTE_MBUF_F_RX_FDIR) {
 				sched = &m->hash.sched;
 				statics = tc_statistics +
-					rx_port * POLICER_TC_MAX_NUM + sched->traffic_class;
+					rx_port * POLICER_TC_MAX_NUM +
+					sched->traffic_class * s_max_qn_per_tc +
+					sched->queue_id;
 				statics->bytes += m->pkt_len;
 				statics->bytes_fcs += L2FWD_POLICER_MBUF_FCS(m);
 				statics->bytes_overhead += L2FWD_POLICER_MBUF_OVERHEAD(m);
@@ -1444,7 +1471,9 @@ l2fwd_policer_rss_flow_config(uint16_t port_id,
 	memset(&ipv4_item, 0, sizeof(struct rte_flow_item_ipv4));
 	memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
 	ipv4_item.hdr.src_addr = rte_cpu_to_be_32(0xffffffff);
+	ipv4_item.hdr.dst_addr = rte_cpu_to_be_32(0xffffffff);
 	ipv4_mask.hdr.src_addr = rte_cpu_to_be_32(0xffffffff);
+	ipv4_mask.hdr.dst_addr = rte_cpu_to_be_32(0xffffffff);
 
 	flow_item[0].spec = &ipv4_item;
 	flow_item[0].mask = &ipv4_mask;
@@ -2482,9 +2511,10 @@ l2fwd_policer_runtime_fs_rss_flow_switch(uint16_t portid,
 	}
 
 	command[0] = 0;
-	fgets(command, 256, stdin);
-	if (command[0] != 'y')
-		return;
+	if (fgets(command, 256, stdin)) {
+		if (command[0] != 'y')
+			return;
+	}
 
 	if (tc_desc->is_rss_flow) {
 		tc_desc->is_rss_flow = false;
@@ -3257,6 +3287,8 @@ main(int argc, char **argv)
 			tc_desc = &s_port_param[portid].tc_descs[tc_id];
 			tc_desc->tc_queue_ids[queue_num[tc_id]] = i;
 			queue_num[tc_id]++;
+			if (queue_num[tc_id] > s_max_qn_per_tc)
+				s_max_qn_per_tc = queue_num[tc_id];
 			/* >8 End of RX queue setup. */
 		}
 
@@ -3349,14 +3381,14 @@ main(int argc, char **argv)
 
 	tc_statistics = rte_zmalloc(NULL,
 		sizeof(struct l2fwd_policer_byte_statistics) *
-		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM, 0);
+		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM * s_max_qn_per_tc, 0);
 	if (!tc_statistics) {
 		rte_exit(EXIT_FAILURE,
 			"tc statistics malloc failed\n");
 	}
 	prev_tc_statistics = rte_zmalloc(NULL,
 		sizeof(struct l2fwd_policer_byte_statistics) *
-		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM, 0);
+		RTE_MAX_ETHPORTS * POLICER_TC_MAX_NUM * s_max_qn_per_tc, 0);
 	if (!prev_tc_statistics) {
 		rte_exit(EXIT_FAILURE,
 			"prev tc statistics malloc failed\n");
