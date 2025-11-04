@@ -42,6 +42,7 @@ struct dpaa2_sch_port_queue {
 struct dpaa2_sch_dev {
 	struct dpaa2_dpcon_dev *dpcon_dev[RTE_MAX_LCORE];
 	struct dpaa2_dpci_dev *dpci_dev[RTE_MAX_LCORE];
+	struct dpaa2_dpio_dev *dpio_dev[RTE_MAX_LCORE];
 	uint8_t linked[RTE_MAX_LCORE];
 	struct dpaa2_sch_port_queue port_queue[DPAA2_SCH_PORT_QUEUE_MAX_NUM];
 	uint8_t port_queue_num;
@@ -86,23 +87,76 @@ dpaa2_qbman_pull_desc_channel_set(struct qbman_pull_desc *pulldesc,
 		iova_storage, 1);
 }
 
+static inline struct rte_mbuf *
+dpaa2_scheduler_swp_mbuf_dq(struct dpaa2_sch_dev *sch_dev,
+	struct qbman_swp *swp)
+{
+	const struct qbman_result *dq;
+	const struct qbman_fd *fd;
+	struct dpaa2_queue *rxq;
+	struct dpaa2_dev_priv *priv;
+	struct rte_mbuf *mbuf;
+
+	dq = qbman_swp_dqrr_next(swp);
+	if (!dq)
+		return NULL;
+
+	qbman_swp_prefetch_dqrr_next(swp);
+	fd = qbman_result_DQ_fd(dq);
+	rxq = (void *)qbman_result_DQ_fqd_ctx(dq);
+	priv = rxq->eth_data->dev_private;
+	if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+		mbuf = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
+	else
+		mbuf = dpaa2_eth_fd_to_mbuf(priv, fd);
+	if (unlikely(!(mbuf->ol_flags & RTE_MBUF_F_RX_FDIR) &&
+		sch_dev->rx_buf_sch_set)) {
+		mbuf->hash.rss = 0;
+		rte_mbuf_sched_set(mbuf, rxq->flow_id, rxq->tc_index,
+			DPAA2_GET_FD_DROPP(fd));
+		mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR;
+	}
+	dpaa2_dev_rx_print_parser_result(priv, fd, mbuf);
+	qbman_swp_dqrr_consume(swp, dq);
+
+	return mbuf;
+}
+
+static uint32_t
+dpaa2_scheduler_dpio_drain(struct dpaa2_sch_dev *sch_dev,
+	struct dpaa2_dpio_dev *dpio_dev)
+{
+	struct qbman_swp *swp;
+	uint32_t num_pkts = 0;
+	struct rte_mbuf *mbuf;
+
+	swp = dpio_dev->sw_portal;
+
+dq_again:
+	rte_delay_us(1000);
+	mbuf = dpaa2_scheduler_swp_mbuf_dq(sch_dev, swp);
+	if (mbuf) {
+		rte_pktmbuf_free(mbuf);
+		num_pkts++;
+		goto dq_again;
+	}
+
+	return num_pkts;
+}
+
 static uint16_t
 dpaa2_scheduler_dpci_recv(struct dpaa2_sch_dev *sch_dev,
 	struct rte_mbuf **mbuf, uint16_t nb_pkts)
 {
-	const struct qbman_result *dq;
 	struct dpaa2_dpcon_dev *dpcon_dev;
 	struct dpaa2_dpci_dev *dpci_dev;
 	struct dpaa2_dpio_dev *dpio_dev;
 	struct qbman_swp *swp;
-	const struct qbman_fd *fd;
-	struct dpaa2_queue *rxq;
 	struct dpaa2_sch_port_queue *port_queue;
 	struct rte_event_eth_rx_adapter_queue_conf *queue_conf;
 	uint16_t num_pkts = 0, i = 0;
 	uint8_t priority_step;
 	int ret;
-	struct dpaa2_dev_priv *priv;
 	uint32_t cpu = rte_lcore_id();
 
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
@@ -160,36 +214,17 @@ dpaa2_scheduler_dpci_recv(struct dpaa2_sch_dev *sch_dev,
 
 	qbman_swp_push_set(swp, dpcon_dev->channel_index, 1);
 	sch_dev->linked[cpu] = sch_dev->port_queue_num;
+	sch_dev->dpio_dev[cpu] = dpio_dev;
 
 start_dq:
-	do {
-		dq = qbman_swp_dqrr_next(swp);
-		if (!dq)
-			goto quit;
-
-		qbman_swp_prefetch_dqrr_next(swp);
-
-		fd = qbman_result_DQ_fd(dq);
-		rxq = (void *)qbman_result_DQ_fqd_ctx(dq);
-		priv = rxq->eth_data->dev_private;
-		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-			mbuf[num_pkts] = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
+	while (num_pkts < nb_pkts) {
+		mbuf[num_pkts] = dpaa2_scheduler_swp_mbuf_dq(sch_dev, swp);
+		if (likely(mbuf[num_pkts]))
+			num_pkts++;
 		else
-			mbuf[num_pkts] = dpaa2_eth_fd_to_mbuf(priv, fd);
-		if (unlikely(!(mbuf[num_pkts]->ol_flags & RTE_MBUF_F_RX_FDIR) &&
-			sch_dev->rx_buf_sch_set)) {
-			mbuf[num_pkts]->hash.rss = 0;
-			rte_mbuf_sched_set(mbuf[num_pkts], rxq->flow_id, rxq->tc_index,
-				DPAA2_GET_FD_DROPP(fd));
-			mbuf[num_pkts]->ol_flags |= RTE_MBUF_F_RX_FDIR;
-		}
-		dpaa2_dev_rx_print_parser_result(priv, fd, mbuf[num_pkts]);
-		qbman_swp_dqrr_consume(swp, dq);
+			break;
+	}
 
-		num_pkts++;
-	} while (num_pkts < nb_pkts);
-
-quit:
 	return num_pkts;
 }
 
@@ -520,7 +555,47 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 	struct dpaa2_sch_dev *sch_dev = scheduler_handle;
 	struct dpaa2_dpcon_dev *dpcon_dev;
 	struct dpaa2_dpci_dev *dpci_dev;
+	struct dpaa2_dpio_dev *dpio_dev;
 	int32_t ret, i;
+	uint16_t drain_num, rx;
+	struct rte_mbuf *mbufs[16];
+
+	if (sch_dev->sch_mode == RTE_DPAA2_SCH_PUSH) {
+		/** Make sure all data threads quit.*/
+		for (i = 0; i < RTE_MAX_LCORE; i++) {
+			if (!sch_dev->dpio_dev[i])
+				continue;
+
+			dpio_dev = sch_dev->dpio_dev[i];
+			dpcon_dev = sch_dev->dpcon_dev[i];
+			RTE_ASSERT(dpcon_dev);
+			drain_num = dpaa2_scheduler_dpio_drain(sch_dev, dpio_dev);
+			if (drain_num > 0) {
+				DPAA2_EVENTDEV_WARN("%s: Drain %d buffer(s) from core%d",
+					__func__, drain_num, i);
+			}
+			qbman_swp_push_set(dpio_dev->sw_portal, dpcon_dev->channel_index, 0);
+			ret = dpio_remove_static_dequeue_channel(dpio_dev->dpio,
+				0, dpio_dev->token, dpcon_dev->dpcon_id);
+			if (ret) {
+				DPAA2_EVENTDEV_ERR("%s: Remove channel from core%d failed(%d)",
+					__func__, i, ret);
+			}
+		}
+	} else {
+		drain_num = 0;
+		do {
+			rte_delay_ms(1);
+			rx = sch_dev->rx_schedule(sch_dev, mbufs, 16);
+			for (i = 0; i < rx; i++)
+				rte_pktmbuf_free(mbufs[i]);
+			drain_num += rx;
+		} while (rx > 0);
+		if (drain_num > 0) {
+			DPAA2_EVENTDEV_WARN("%s: Drain %d buffer(s) from scheduler.",
+				__func__, drain_num);
+		}
+	}
 
 	for (i = 0; i < RTE_MAX_LCORE; i++) {
 		dpcon_dev = sch_dev->dpcon_dev[i];
