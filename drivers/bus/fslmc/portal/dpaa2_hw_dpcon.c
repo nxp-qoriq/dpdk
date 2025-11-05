@@ -29,27 +29,6 @@ TAILQ_HEAD(dpcon_dev_list, dpaa2_dpcon_dev);
 static struct dpcon_dev_list dpcon_dev_list
 	= TAILQ_HEAD_INITIALIZER(dpcon_dev_list); /*!< DPCON device list */
 
-static int
-dpaa2_dpcon_dq_storage_init(struct dpaa2_dpcon_dev *dpcon_dev)
-{
-	int i, ret = 0;
-
-	memset(&dpcon_dev->q_storage, 0,
-		sizeof(struct queue_storage_info_t) * RTE_MAX_LCORE);
-
-	for (i = 0; i < RTE_MAX_LCORE; i++) {
-		ret = dpaa2_alloc_dq_storage(&dpcon_dev->q_storage[i]);
-		if (ret)
-			goto err;
-	}
-	return 0;
-err:
-	for (i = 0; i < RTE_MAX_LCORE; i++)
-		dpaa2_free_dq_storage(&dpcon_dev->q_storage[i]);
-
-	return ret;
-}
-
 __rte_internal
 int32_t
 rte_dpaa2_dpcon_start(struct dpaa2_dpcon_dev *dpcon_dev)
@@ -134,12 +113,6 @@ dpaa2_create_dpcon_device(int dev_fd __rte_unused,
 	DPAA2_BUS_DEBUG("Channel ID = %d\t Priority Num = %d Object ID = %d",
 			dpcon_dev->qbman_ch_id, dpcon_dev->num_priorities,
 			dpcon_dev->dpcon_id);
-
-	ret = dpaa2_dpcon_dq_storage_init(dpcon_dev);
-	if (ret) {
-		DPAA2_BUS_ERR("dpcon init storage info failed: err(%d)", ret);
-		goto get_attr_failure;
-	}
 
 	rte_atomic16_init(&dpcon_dev->in_use);
 	TAILQ_INSERT_TAIL(&dpcon_dev_list, dpcon_dev, next);

@@ -191,9 +191,14 @@ rte_pmd_dpaa2_rxq_parse_tc_info(const struct rte_eth_rxq_info *rxq_info,
 		*flow_id = desc.flow_id;
 }
 
+enum rte_dpaa2_sch_mode {
+	RTE_DPAA2_SCH_PULL,
+	RTE_DPAA2_SCH_PUSH
+};
+
 __rte_experimental
 void *
-rte_dpaa2_scheduler_init(void);
+rte_dpaa2_scheduler_init(enum rte_dpaa2_sch_mode sch_mode);
 __rte_experimental
 int
 rte_dpaa2_scheduler_start(void *scheduler_handle);

@@ -2854,6 +2854,10 @@ dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	dpaa2_ethq->options |= DPNI_QUEUE_OPT_USER_CTX;
 	cfg->user_context = (size_t)dpaa2_ethq;
 
+	DPAA2_PMD_DEBUG("%s: set queue to dpcon: tc%d-flow%d with priority(%d)\n",
+		__func__, dpaa2_ethq->tc_index, flow_id,
+		cfg->destination.priority);
+
 	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
 		dpaa2_ethq->tc_index, flow_id, dpaa2_ethq->options, cfg);
 	if (ret) {

@@ -278,9 +278,6 @@ struct dpaa2_dpcon_dev {
 	uint16_t qbman_ch_id;
 	uint8_t num_priorities;
 	uint8_t channel_index;
-	struct queue_storage_info_t q_storage[RTE_MAX_LCORE];
-	uint16_t (*rx_schedule)(struct dpaa2_dpcon_dev *dev,
-		struct rte_mbuf **rx_pkts, uint16_t nb_pkts);
 };
 
 /* Refer to Table 7-3 in SEC BG */
