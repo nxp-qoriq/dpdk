@@ -327,16 +327,31 @@ dpaa2_update_flow_dist(struct rte_eth_dev *eth_dev,
 
 static int
 dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
-	struct fsl_mc_io *dpni, void *blist)
+	struct fsl_mc_io *dpni, void *blist, uint8_t tc_id)
 {
 	/* Function to attach a DPNI with a buffer pool list. Buffer pool list
 	 * handle is passed in blist.
 	 */
 	int32_t retcode;
-	struct dpni_pools_cfg bpool_cfg;
+	struct dpni_pools_cfg *bpool_cfg = &priv->pools_cfg;
 	struct dpaa2_bp_list *bp_list = blist;
 	struct dpni_buffer_layout layout;
 	int tot_size, out_min_hdr_room, in_min_hdr_room;
+	uint8_t bp_idx;
+	struct rte_mempool *mp = bp_list->mp;
+
+	if (priv->extract.mempool[tc_id] != mp) {
+		if (!priv->extract.mempool[tc_id]) {
+			bp_idx = bpool_cfg->num_dpbp;
+			bpool_cfg->num_dpbp++;
+			priv->extract.bp_idx[tc_id] = bp_idx;
+		} else {
+			bp_idx = priv->extract.bp_idx[tc_id];
+		}
+		priv->extract.mempool[tc_id] = mp;
+	} else {
+		bp_idx = priv->extract.bp_idx[tc_id];
+	}
 
 	/* ... rx buffer layout .
 	 * Check alignment for buffer layouts first
@@ -383,18 +398,16 @@ dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
 	}
 
 	/*Attach buffer pool to the network interface as described by the user*/
-	memset(&bpool_cfg, 0, sizeof(struct dpni_pools_cfg));
-	bpool_cfg.num_dpbp = 1;
-	bpool_cfg.pools[0].dpbp_id = bp_list->buf_pool.dpbp_node->dpbp_id;
-	bpool_cfg.pools[0].backup_pool = 0;
-	bpool_cfg.pools[0].buffer_size = RTE_ALIGN_CEIL(bp_list->buf_pool.size,
-				DPAA2_PACKET_LAYOUT_ALIGN);
-	bpool_cfg.pools[0].priority_mask = 0;
+	bpool_cfg->pools[bp_idx].dpbp_id = bp_list->buf_pool.dpbp_node->dpbp_id;
+	bpool_cfg->pools[bp_idx].backup_pool = 0;
+	bpool_cfg->pools[bp_idx].buffer_size = RTE_ALIGN_CEIL(bp_list->buf_pool.size,
+		DPAA2_PACKET_LAYOUT_ALIGN);
+	bpool_cfg->pools[bp_idx].priority_mask = tc_id;
 
-	retcode = dpni_set_pools(dpni, CMD_PRI_LOW, priv->token, &bpool_cfg);
+	retcode = dpni_set_pools(dpni, CMD_PRI_LOW, priv->token, bpool_cfg);
 	if (retcode) {
-		DPAA2_PMD_ERR("Error(%d) configuring bp(id=%d) on %s.",
-			retcode, bpool_cfg.pools[0].dpbp_id,
+		DPAA2_PMD_ERR("Error(%d) configuring pools[%d](id=%d) on %s.",
+			retcode, bp_idx, bpool_cfg->pools[bp_idx].dpbp_id,
 			priv->eth_dev->data->name);
 		return retcode;
 	}
@@ -1077,6 +1090,8 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 			nb_rx_desc);
 	}
 
+	dpaa2_q = priv->rx_vq[rx_queue_id];
+
 	/* Rx deferred start is not supported */
 	if (rx_conf->rx_deferred_start) {
 		DPAA2_PMD_ERR("%s:Rx deferred start not supported",
@@ -1099,11 +1114,11 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		}
 		bpid = mempool_to_bpid(mb_pool);
 		ret = dpaa2_attach_bp_list(priv, dpni,
-				rte_dpaa2_bpid_info[bpid].bp_list);
+				rte_dpaa2_bpid_info[bpid].bp_list,
+				dpaa2_q->tc_index);
 		if (ret)
 			return ret;
 	}
-	dpaa2_q = priv->rx_vq[rx_queue_id];
 	cfg = rte_zmalloc(NULL, sizeof(struct dpni_queue), 0);
 	if (!cfg)
 		return -ENOMEM;

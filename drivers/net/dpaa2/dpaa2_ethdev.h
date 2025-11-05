@@ -304,6 +304,8 @@ struct extract_s {
 	/** Meter per TC.*/
 	struct dpaa2_dev_meter_profile *tc_mtr_profile[MAX_TCS];
 	void *mtr_flow[MAX_TCS];
+	void *mempool[MAX_TCS];
+	uint8_t bp_idx[MAX_TCS];
 };
 
 struct dpaa2_dev_meter_profile {
@@ -366,6 +368,8 @@ struct dpaa2_dev_priv {
 	/** RXQs in same TC share same cgid.*/
 	uint8_t cgid_in_use[MAX_TCS];
 	rte_spinlock_t meter_lock;
+
+	struct dpni_pools_cfg pools_cfg;
 
 	uint16_t dpni_ver_major;
 	uint16_t dpni_ver_minor;
