@@ -2767,7 +2767,7 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
 	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[eth_rx_queue_id];
 	uint8_t flow_id = dpaa2_ethq->flow_id;
-	struct dpni_queue cfg;
+	struct dpni_queue *cfg = dpaa2_ethq->cfg;
 	uint8_t options, priority;
 	int ret;
 
@@ -2783,15 +2783,19 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	priority = (RTE_EVENT_DEV_PRIORITY_LOWEST / queue_conf->ev.priority) *
 		   (dpcon->num_priorities - 1);
 
-	memset(&cfg, 0, sizeof(struct dpni_queue));
+	if (!cfg) {
+		DPAA2_PMD_ERR("%s: %s-rxq%d was not setup yet!",
+			__func__, dev->data->name, eth_rx_queue_id);
+		return -EINVAL;
+	}
 	options = DPNI_QUEUE_OPT_DEST;
-	cfg.destination.type = DPNI_DEST_DPCON;
-	cfg.destination.id = dpcon->dpcon_id;
-	cfg.destination.priority = priority;
+	cfg->destination.type = DPNI_DEST_DPCON;
+	cfg->destination.id = dpcon->dpcon_id;
+	cfg->destination.priority = priority;
 
 	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ATOMIC) {
 		options |= DPNI_QUEUE_OPT_HOLD_ACTIVE;
-		cfg.destination.hold_active = 1;
+		cfg->destination.hold_active = 1;
 	}
 
 	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ORDERED &&
@@ -2830,10 +2834,10 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	}
 
 	options |= DPNI_QUEUE_OPT_USER_CTX;
-	cfg.user_context = (size_t)(dpaa2_ethq);
+	cfg->user_context = (size_t)(dpaa2_ethq);
 
 	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
-			     dpaa2_ethq->tc_index, flow_id, options, &cfg);
+			     dpaa2_ethq->tc_index, flow_id, options, cfg);
 	if (ret) {
 		DPAA2_PMD_ERR("Error in dpni_set_queue: ret: %d", ret);
 		return ret;
