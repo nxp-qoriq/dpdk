@@ -557,7 +557,7 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 	struct dpaa2_dpci_dev *dpci_dev;
 	struct dpaa2_dpio_dev *dpio_dev;
 	int32_t ret, i;
-	uint16_t drain_num, rx;
+	uint16_t drain_num, rx, un_attach_num = 0;
 	struct rte_mbuf *mbufs[16];
 
 	if (sch_dev->sch_mode == RTE_DPAA2_SCH_PUSH) {
@@ -581,6 +581,7 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 				DPAA2_EVENTDEV_ERR("%s: Remove channel from core%d failed(%d)",
 					__func__, i, ret);
 			}
+			un_attach_num += sch_dev->linked[i];
 		}
 	} else {
 		drain_num = 0;
@@ -594,6 +595,17 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 		if (drain_num > 0) {
 			DPAA2_EVENTDEV_WARN("%s: Drain %d buffer(s) from scheduler.",
 				__func__, drain_num);
+		}
+		un_attach_num = sch_dev->port_queue_num;
+	}
+
+	for (i = 0; i < un_attach_num; i++) {
+		ret = dpaa2_eth_eventq_detach(sch_dev->port_queue[i].eth_dev,
+			sch_dev->port_queue[i].rxq_id);
+		if (ret) {
+			DPAA2_EVENTDEV_ERR("Unattach %s's rxq%d failed(%d)",
+				sch_dev->port_queue[i].eth_dev->data->name,
+				sch_dev->port_queue[i].rxq_id, ret);
 		}
 	}
 

@@ -36,6 +36,8 @@ INTERNAL {
 
 	dpaa2_dev_tx_multi_txq_ordered;
 	dpaa2_eth_eventq_attach;
+	dpaa2_eth_eventq_detach;
+	dpaa2_eth_eventq_detach_by_rxq;
 	dpaa2_eth_fd_to_mbuf;
 	dpaa2_eth_sg_fd_to_mbuf;
 

@@ -187,6 +187,7 @@ struct dpaa2_queue {
 	uint8_t options;
 	struct rte_event ev;
 	struct rte_mempool *env_pool;
+	uint8_t event_attached;
 	dpaa2_queue_cb_dqrr_t *cb;
 	dpaa2_queue_cb_eqresp_free_t *cb_eqresp_free;
 	struct dpaa2_bp_info *bp_array;

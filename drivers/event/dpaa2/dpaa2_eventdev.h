@@ -54,6 +54,7 @@ enum {
  */
 
 #define DPAA2_EVENTQ_LINK_CONF_MAX 4 /** Max schedule type + 1.*/
+#define DPAA2_EVENTQ_DPNI_RXQ_ATTACH_MAX 128
 struct dpaa2_eventq {
 	int valid;
 	void *event_port;
@@ -65,6 +66,8 @@ struct dpaa2_eventq {
 	uint32_t event_queue_cfg;
 	uint32_t event_queue_id;
 	struct dpaa2_queue *dpci_txqs[DPAA2_EVENTQ_LINK_CONF_MAX];
+	uint8_t dpni_rxq_num;
+	struct dpaa2_queue *dpni_rxqs[DPAA2_EVENTQ_DPNI_RXQ_ATTACH_MAX];
 };
 
 struct dpaa2_port {
@@ -79,13 +82,19 @@ struct dpaa2_port {
 	uint64_t timeout_us;
 };
 
+enum dpaa2_eventdev_status {
+	DPAA2_EVENTDEV_CREATED,
+	DPAA2_EVENTDEV_STARTED,
+	DPAA2_EVENTDEV_STOPED
+};
+
 struct dpaa2_eventdev {
 	struct dpaa2_eventq evq_info[DPAA2_EVENT_MAX_QUEUES];
 	uint32_t dequeue_timeout_ns;
 	uint8_t max_event_queues;
 	uint8_t nb_event_queues;
 	uint8_t nb_event_ports;
-	uint8_t resvd_1;
+	uint8_t status;
 	uint32_t nb_event_queue_flows;
 	uint32_t nb_event_port_dequeue_depth;
 	uint32_t nb_event_port_enqueue_depth;

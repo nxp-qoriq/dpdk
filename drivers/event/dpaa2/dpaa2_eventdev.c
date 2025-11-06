@@ -41,6 +41,33 @@
 #include <portal/dpaa2_hw_pvt.h>
 #include <mc/fsl_dpci.h>
 
+static int
+dpaa2_eventdev_attach_eth_rxq(const struct rte_eth_dev *dev,
+	struct dpaa2_eventdev *priv, uint16_t rxq_id,
+	const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+{
+	int ret;
+	uint8_t ev_qid = queue_conf->ev.queue_id;
+	uint8_t idx = priv->evq_info[ev_qid].dpni_rxq_num;
+	struct dpaa2_dpcon_dev *dpcon = priv->evq_info[ev_qid].dpcon;
+
+	if (idx >= DPAA2_EVENTQ_DPNI_RXQ_ATTACH_MAX) {
+		DPAA2_EVENTDEV_ERR("Too many queues to attach.");
+		return -ENOMEM;
+	}
+	ret = dpaa2_eth_eventq_attach(dev, rxq_id, dpcon, queue_conf, false);
+	if (ret) {
+		DPAA2_EVENTDEV_ERR("Event queue attach failed: err(%d)",
+			ret);
+
+		return ret;
+	}
+	priv->evq_info[ev_qid].dpni_rxqs[idx] = dev->data->rx_queues[rxq_id];
+	priv->evq_info[ev_qid].dpni_rxq_num++;
+
+	return 0;
+}
+
 /* Clarifications
  * Evendev = SoC Instance
  * Eventport = DPIO Instance
@@ -384,9 +411,11 @@ dpaa2_eventdev_configure(const struct rte_eventdev *dev)
 static int
 dpaa2_eventdev_start(struct rte_eventdev *dev)
 {
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+
 	EVENTDEV_INIT_FUNC_TRACE();
 
-	RTE_SET_USED(dev);
+	priv->status = DPAA2_EVENTDEV_STARTED;
 
 	return 0;
 }
@@ -394,6 +423,7 @@ dpaa2_eventdev_start(struct rte_eventdev *dev)
 static void
 dpaa2_eventdev_stop(struct rte_eventdev *dev)
 {
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
 	uint16_t num, i;
 	struct rte_event ev;
 	struct dpaa2_port *dpaa2_portal;
@@ -419,16 +449,110 @@ dq_agin:
 		}
 		goto dq_agin;
 	}
+
+	priv->status = DPAA2_EVENTDEV_STOPED;
+}
+
+static void
+dpaa2_eventdev_port_release(void *port)
+{
+	struct dpaa2_port *portal = port;
+	uint8_t port_id = portal->port_id;
+	struct rte_eventdev *eventdev = portal->eventdev;
+	int ret;
+
+	EVENTDEV_INIT_FUNC_TRACE();
+
+	if (!portal)
+		return;
+
+	/* TODO: Cleanup is required when ports are in linked state. */
+	if (portal->num_linked_evq) {
+		ret = rte_event_port_unlink(eventdev->data->dev_id, port_id, NULL, 0);
+		if (ret < 0) {
+			DPAA2_EVENTDEV_ERR("Event port.%d unlink all failed(%d)\n",
+				portal->port_id, ret);
+		}
+	}
+
+	rte_dpaa2_free_dpio_device(portal->dpio_dev);
+
+	rte_free(portal);
+	eventdev->data->ports[port_id] = NULL;
+}
+
+static int
+dpaa2_eventdev_eth_queue_del(const struct rte_eventdev *dev,
+	const struct rte_eth_dev *eth_dev, int32_t rx_queue_id)
+{
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+	struct dpaa2_eventq *evq;
+	uint8_t i, j, k, found = false;
+	int ret;
+
+	EVENTDEV_INIT_FUNC_TRACE();
+
+	if (!eth_dev || rx_queue_id < 0) {
+		for (i = 0; i < priv->max_event_queues; i++) {
+			if (!priv->evq_info[i].valid)
+				continue;
+			evq = &priv->evq_info[i];
+			for (j = 0; j < evq->dpni_rxq_num; j++) {
+				ret = dpaa2_eth_eventq_detach_by_rxq(evq->dpni_rxqs[j]);
+				if (ret)
+					return ret;
+			}
+			evq->dpni_rxq_num = 0;
+		}
+
+		return 0;
+	}
+
+	for (i = 0; i < priv->max_event_queues; i++) {
+		if (!priv->evq_info[i].valid)
+			continue;
+		evq = &priv->evq_info[i];
+		for (j = 0; j < evq->dpni_rxq_num; j++) {
+			if (evq->dpni_rxqs[j] == eth_dev->data->rx_queues[rx_queue_id]) {
+				found = true;
+				for (k = j + 1; k < evq->dpni_rxq_num; k++)
+					evq->dpni_rxqs[k - 1] = evq->dpni_rxqs[k];
+				evq->dpni_rxq_num--;
+				goto start_detach;
+			}
+		}
+	}
+
+start_detach:
+	if (found)
+		return dpaa2_eth_eventq_detach(eth_dev, rx_queue_id);
+
+	return -ENODEV;
 }
 
 static int
 dpaa2_eventdev_close(struct rte_eventdev *dev)
 {
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+	int i, ret;
+
 	EVENTDEV_INIT_FUNC_TRACE();
 
-	RTE_SET_USED(dev);
+	if (priv->status == DPAA2_EVENTDEV_CREATED)
+		return 0;
+	if (priv->status == DPAA2_EVENTDEV_STARTED)
+		dpaa2_eventdev_stop(dev);
 
-	return 0;
+	for (i = 0; i < dev->data->nb_ports; i++) {
+		if (dev->data->ports[i])
+			dpaa2_eventdev_port_release(dev->data->ports[i]);
+	}
+
+	ret = dpaa2_eventdev_eth_queue_del(dev, NULL, -1);
+	if (!ret)
+		priv->status = DPAA2_EVENTDEV_CREATED;
+
+	return ret;
 }
 
 static void
@@ -635,34 +759,6 @@ err:
 	return (int)nb_links;
 }
 
-static void
-dpaa2_eventdev_port_release(void *port)
-{
-	struct dpaa2_port *portal = port;
-	uint8_t port_id = portal->port_id;
-	struct rte_eventdev *eventdev = portal->eventdev;
-	int ret;
-
-	EVENTDEV_INIT_FUNC_TRACE();
-
-	if (!portal)
-		return;
-
-	/* TODO: Cleanup is required when ports are in linked state. */
-	if (portal->num_linked_evq) {
-		ret = rte_event_port_unlink(eventdev->data->dev_id, port_id, NULL, 0);
-		if (ret < 0) {
-			DPAA2_EVENTDEV_ERR("Event port.%d unlink all failed(%d)\n",
-				portal->port_id, ret);
-		}
-	}
-
-	rte_dpaa2_free_dpio_device(portal->dpio_dev);
-
-	rte_free(portal);
-	eventdev->data->ports[port_id] = NULL;
-}
-
 static int
 dpaa2_eventdev_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 	const struct rte_event_port_conf *port_conf)
@@ -745,19 +841,14 @@ dpaa2_eventdev_eth_queue_add_all(const struct rte_eventdev *dev,
 		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
 {
 	struct dpaa2_eventdev *priv = dev->data->dev_private;
-	uint8_t ev_qid = queue_conf->ev.queue_id;
-	struct dpaa2_dpcon_dev *dpcon = priv->evq_info[ev_qid].dpcon;
 	int i, ret;
 
 	EVENTDEV_INIT_FUNC_TRACE();
 
 	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
-		ret = dpaa2_eth_eventq_attach(eth_dev, i,
-			dpcon, queue_conf, false);
-		if (ret) {
-			DPAA2_EVENTDEV_ERR("Event queue attach failed: err(%d)",
-				ret);
-		}
+		ret = dpaa2_eventdev_attach_eth_rxq(eth_dev, priv, i, queue_conf);
+		if (ret)
+			return ret;
 	}
 	return 0;
 }
@@ -769,38 +860,15 @@ dpaa2_eventdev_eth_queue_add(const struct rte_eventdev *dev,
 		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
 {
 	struct dpaa2_eventdev *priv = dev->data->dev_private;
-	uint8_t ev_qid = queue_conf->ev.queue_id;
-	struct dpaa2_dpcon_dev *dpcon = priv->evq_info[ev_qid].dpcon;
-	int ret;
 
 	EVENTDEV_INIT_FUNC_TRACE();
 
-	if (rx_queue_id == -1)
+	if (rx_queue_id < 0) {
 		return dpaa2_eventdev_eth_queue_add_all(dev,
 				eth_dev, queue_conf);
-
-	ret = dpaa2_eth_eventq_attach(eth_dev, rx_queue_id,
-			dpcon, queue_conf, false);
-	if (ret) {
-		DPAA2_EVENTDEV_ERR("Event queue attach failed: err(%d)",
-			ret);
-		return ret;
 	}
-	return 0;
-}
 
-static int
-dpaa2_eventdev_eth_queue_del(const struct rte_eventdev *dev,
-			     const struct rte_eth_dev *eth_dev,
-			     int32_t rx_queue_id)
-{
-	EVENTDEV_INIT_FUNC_TRACE();
-
-	RTE_SET_USED(dev);
-	RTE_SET_USED(eth_dev);
-	RTE_SET_USED(rx_queue_id);
-
-	return 0;
+	return dpaa2_eventdev_attach_eth_rxq(eth_dev, priv, rx_queue_id, queue_conf);
 }
 
 static int
@@ -817,12 +885,39 @@ dpaa2_eventdev_eth_start(const struct rte_eventdev *dev,
 
 static int
 dpaa2_eventdev_eth_stop(const struct rte_eventdev *dev,
-			const struct rte_eth_dev *eth_dev)
+	const struct rte_eth_dev *eth_dev)
 {
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+	int i, j, k, ret;
+	struct dpaa2_eventq *evq;
+	struct rte_eventdev _dev;
+
 	EVENTDEV_INIT_FUNC_TRACE();
 
-	RTE_SET_USED(dev);
-	RTE_SET_USED(eth_dev);
+	/** Drain ingress traffic.*/
+	rte_memcpy(&_dev, dev, sizeof(struct rte_eventdev));
+	dpaa2_eventdev_stop(&_dev);
+	dpaa2_eventdev_start(&_dev);
+
+	for (i = 0; i < priv->max_event_queues; i++) {
+		evq = &priv->evq_info[i];
+		if (!evq->valid)
+			continue;
+search_again:
+		for (j = 0; j < evq->dpni_rxq_num; j++) {
+			if (evq->dpni_rxqs[j]->eth_data == eth_dev->data) {
+				ret = dpaa2_eth_eventq_detach_by_rxq(evq->dpni_rxqs[j]);
+				if (ret) {
+					DPAA2_EVENTDEV_ERR("detach rxq failed(%d)\n", ret);
+					return ret;
+				}
+				for (k = j + 1; k < evq->dpni_rxq_num; k++)
+					evq->dpni_rxqs[k - 1] = evq->dpni_rxqs[k];
+				evq->dpni_rxq_num--;
+				goto search_again;
+			}
+		}
+	}
 
 	return 0;
 }
@@ -861,8 +956,8 @@ dpaa2_eventdev_crypto_queue_add_all(const struct rte_eventdev *dev,
 	for (i = 0; i < cryptodev->data->nb_queue_pairs; i++) {
 		ret = dpaa2_sec_eventq_attach(cryptodev, i, dpcon, ev);
 		if (ret) {
-			DPAA2_EVENTDEV_ERR("dpaa2_sec_eventq_attach failed: ret %d\n",
-				    ret);
+			DPAA2_EVENTDEV_ERR("dpaa2_sec_eventq_attach failed: ret %d\n", ret);
+			return ret;
 		}
 	}
 	return 0;
@@ -1141,7 +1236,6 @@ dpaa2_eventdev_destroy(const char *name)
 
 		if (priv->evq_info[i].dpci)
 			rte_dpaa2_free_dpci_dev(priv->evq_info[i].dpci);
-
 	}
 	priv->max_event_queues = 0;
 

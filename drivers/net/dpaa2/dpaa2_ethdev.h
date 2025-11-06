@@ -369,6 +369,7 @@ struct dpaa2_dev_priv {
 	uint8_t cgid_in_use[MAX_TCS];
 	rte_spinlock_t meter_lock;
 
+	uint16_t evq_attach_num;
 	struct dpni_pools_cfg pools_cfg;
 
 	uint16_t dpni_ver_major;
@@ -760,6 +761,13 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	uint16_t queue_id, struct dpaa2_dpcon_dev *dpcon,
 	const struct rte_event_eth_rx_adapter_queue_conf *queue_conf,
 	int ignore_sched_type);
+__rte_internal
+int
+dpaa2_eth_eventq_detach_by_rxq(struct dpaa2_queue *dpaa2_ethq);
+__rte_internal
+int
+dpaa2_eth_eventq_detach(const struct rte_eth_dev *dev,
+	uint16_t queue_id);
 
 uint16_t dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
 

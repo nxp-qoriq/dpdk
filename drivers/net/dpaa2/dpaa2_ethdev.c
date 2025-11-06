@@ -871,6 +871,9 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 			dpaa2_q = priv->rx_vq[i];
 			dpaa2_queue_storage_free(dpaa2_q,
 				RTE_MAX_LCORE);
+			if (dpaa2_q->cfg)
+				rte_free(dpaa2_q->cfg);
+			dpaa2_q->cfg = NULL;
 		}
 		/* cleanup tx queue cscn */
 		for (i = 0; i < priv->nb_tx_queues; i++) {
@@ -1137,6 +1140,7 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	qopt |= DPNI_QUEUE_OPT_USER_CTX;
 	cfg->user_context = (size_t)(dpaa2_q);
+	cfg->destination.type = DPNI_DEST_NONE;
 
 	/** RXQs in same TC share same cgid.*/
 	if (dpaa2_q->tc_index < priv->max_cgs) {
@@ -1399,6 +1403,9 @@ dpaa2_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	struct dpni_queue *cfg = dpaa2_q->cfg;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (dpaa2_q->event_attached)
+		return;
 
 	dpaa2_total_nb_rx_desc -= dpaa2_q->nb_desc;
 
@@ -2015,6 +2022,11 @@ dpaa2_dev_close(struct rte_eth_dev *dev)
 	if (!dpni) {
 		DPAA2_PMD_WARN("Already closed or not started");
 		return -EINVAL;
+	}
+
+	if (priv->evq_attach_num) {
+		DPAA2_PMD_WARN("%s's %d rxq(s) are not detached from event device..",
+			dev->data->name, priv->evq_attach_num);
 	}
 
 	dpaa2_tm_deinit(dev);
@@ -2785,8 +2797,8 @@ dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	struct dpaa2_dev_priv *eth_priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = dev->process_private;
 	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[queue_id];
-	uint8_t flow_id = dpaa2_ethq->flow_id;
-	struct dpni_queue *cfg = dpaa2_ethq->cfg;
+	uint8_t flow_id;
+	struct dpni_queue *cfg;
 	uint8_t priority, priority_step, num_priorities;
 	int ret;
 
@@ -2796,6 +2808,10 @@ dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 
 		return -EINVAL;
 	}
+
+	dpaa2_ethq = eth_priv->rx_vq[queue_id];
+	flow_id = dpaa2_ethq->flow_id;
+	cfg = dpaa2_ethq->cfg;
 
 	if (ignore_sched_type)
 		dpaa2_ethq->cb = NULL;
@@ -2885,8 +2901,58 @@ dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	dpaa2_ethq->ev.flow_id = flow_id;
 	dpaa2_ethq->ev.event_type = RTE_EVENT_TYPE_ETHDEV;
 	dpaa2_ethq->ev.op = RTE_EVENT_OP_NEW;
+	dpaa2_ethq->event_attached = true;
+	eth_priv->evq_attach_num++;
 
 	return 0;
+}
+
+int
+dpaa2_eth_eventq_detach_by_rxq(struct dpaa2_queue *dpaa2_ethq)
+{
+	struct dpaa2_dev_priv *eth_priv = dpaa2_ethq->eth_data->dev_private;
+	struct fsl_mc_io *dpni = eth_priv->hw;
+	struct dpni_queue *cfg;
+	int ret;
+
+	if (!dpaa2_ethq->event_attached) {
+		DPAA2_PMD_ERR("%s-tc%d-flow%d is not attached to event device.",
+			dpaa2_ethq->eth_data->name, dpaa2_ethq->tc_index,
+			dpaa2_ethq->flow_id);
+
+		return -EINVAL;
+	}
+	cfg = dpaa2_ethq->cfg;
+	cfg->destination.type = DPNI_DEST_NONE;
+	dpaa2_ethq->options &= ~DPNI_QUEUE_OPT_DEST;
+
+	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
+		dpaa2_ethq->tc_index, dpaa2_ethq->flow_id, dpaa2_ethq->options, cfg);
+	if (ret) {
+		DPAA2_PMD_ERR("Error in dpni_set_queue: ret: %d", ret);
+		return ret;
+	}
+
+	dpaa2_ethq->event_attached = false;
+	eth_priv->evq_attach_num--;
+
+	return 0;
+}
+
+int
+dpaa2_eth_eventq_detach(const struct rte_eth_dev *dev,
+	uint16_t queue_id)
+{
+	struct dpaa2_dev_priv *eth_priv = dev->data->dev_private;
+
+	if (queue_id >= eth_priv->nb_rx_queues) {
+		DPAA2_PMD_ERR("Error setting queue ID(%d) >= max number(%d)",
+			queue_id, eth_priv->nb_rx_queues);
+
+		return -EINVAL;
+	}
+
+	return dpaa2_eth_eventq_detach_by_rxq(eth_priv->rx_vq[queue_id]);
 }
 
 static int
