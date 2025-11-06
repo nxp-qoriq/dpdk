@@ -35,8 +35,6 @@ RTE_DECLARE_PER_LCORE(struct dpaa2_io_portal_t, _dpaa2_io);
 #define DPAA2_PER_LCORE_DQRR_MBUF(i) \
 	RTE_PER_LCORE(_dpaa2_io).dpio_dev->dpaa2_held_bufs.mbuf[i]
 
-extern struct dpaa2_io_portal_t dpaa2_io_portal[RTE_MAX_LCORE];
-
 /* Affine a DPIO portal to current processing thread */
 __rte_internal
 int dpaa2_affine_qbman_swp(void);

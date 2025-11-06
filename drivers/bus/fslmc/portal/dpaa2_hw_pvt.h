@@ -563,6 +563,18 @@ struct dpaa2_dpci_dev *rte_dpaa2_alloc_dpci_dev(void);
 __rte_internal
 void rte_dpaa2_free_dpci_dev(struct dpaa2_dpci_dev *dpci);
 
+__rte_internal
+struct dpaa2_dpcon_dev *rte_dpaa2_alloc_dpcon_dev(void);
+
+__rte_internal
+void rte_dpaa2_free_dpcon_dev(struct dpaa2_dpcon_dev *dpcon);
+
+__rte_internal
+int32_t rte_dpaa2_dpcon_start(struct dpaa2_dpcon_dev *dpcon_dev);
+
+__rte_internal
+int32_t rte_dpaa2_dpcon_stop(struct dpaa2_dpcon_dev *dpcon_dev);
+
 /* Global MCP pointer */
 __rte_internal
 void *dpaa2_get_mcp_ptr(int portal_idx);

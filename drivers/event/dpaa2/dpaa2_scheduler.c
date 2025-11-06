@@ -15,72 +15,18 @@
 #include <rte_string_fns.h>
 #include <rte_cycles.h>
 #include <rte_kvargs.h>
-#include <rte_mbuf.h>
-#include <dev_driver.h>
-#include <rte_hexdump.h>
 #include <dev_driver.h>
 #include <ethdev_driver.h>
-#include <compat.h>
 
 #include <bus_fslmc_driver.h>
 #include <mc/fsl_dpcon.h>
 #include <portal/dpaa2_hw_pvt.h>
 #include <dpaa2_hw_dpio.h>
+#include <compat.h>
 #include "dpaa2_ethdev.h"
-#include "dpaa2_pmd_logs.h"
-
-TAILQ_HEAD(dpcon_dev_list, dpaa2_dpcon_dev);
-static struct dpcon_dev_list dpcon_dev_list =
-		TAILQ_HEAD_INITIALIZER(dpcon_dev_list); /*!< DPCON device list */
-
-static int
-dpaa2_dpcon_dq_storage_init(struct dpaa2_dpcon_dev *dpcon_dev)
-{
-	int i, ret = 0;
-
-	memset(&dpcon_dev->q_storage, 0,
-		sizeof(struct queue_storage_info_t) * RTE_MAX_LCORE);
-
-	for (i = 0; i < RTE_MAX_LCORE; i++) {
-		ret = dpaa2_alloc_dq_storage(&dpcon_dev->q_storage[i]);
-		if (ret)
-			goto err;
-	}
-	return 0;
-err:
-	for (i = 0; i < RTE_MAX_LCORE; i++)
-		dpaa2_free_dq_storage(&dpcon_dev->q_storage[i]);
-
-	return ret;
-}
-
-int32_t
-dpaa2_dpcon_start(struct dpaa2_dpcon_dev *dpcon_dev)
-{
-	int32_t ret;
-
-	ret = dpcon_enable(&dpcon_dev->dpcon, CMD_PRI_LOW, dpcon_dev->token);
-	if (ret) {
-		DPAA2_PMD_ERR("DPCONC is not enabled at MC: Error code = %0x\n",
-			ret);
-	}
-
-	return ret;
-}
-
-int32_t
-dpaa2_dpcon_stop(struct dpaa2_dpcon_dev *dpcon_dev)
-{
-	int32_t ret;
-
-	ret = dpcon_disable(&dpcon_dev->dpcon, CMD_PRI_LOW, dpcon_dev->token);
-	if (ret) {
-		DPAA2_PMD_ERR("Device cannot be disabled:Error Code = %0x\n",
-			ret);
-	}
-
-	return ret;
-}
+#include "dpaa2_eventdev.h"
+#include "dpaa2_eventdev_logs.h"
+#include "rte_pmd_dpaa2.h"
 
 static inline void
 dpaa2_qbman_pull_desc_channel_set(struct qbman_pull_desc *pulldesc,
@@ -96,7 +42,7 @@ dpaa2_qbman_pull_desc_channel_set(struct qbman_pull_desc *pulldesc,
 }
 
 static uint16_t
-dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
+dpaa2_scheduler_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	struct rte_mbuf **mbuf, uint16_t nb_pkts)
 {
 	uint16_t ch_id = dpcon_dev->qbman_ch_id;
@@ -116,7 +62,7 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
 		ret = dpaa2_affine_qbman_ethrx_swp();
 		if (ret) {
-			DPAA2_PMD_ERR("Failure(%d) in affining portal", ret);
+			DPAA2_EVENTDEV_ERR("Failure(%d) in affining portal", ret);
 			return 0;
 		}
 	}
@@ -133,7 +79,7 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 
 		while (1) {
 			if (qbman_swp_pull(swp, &pulldesc)) {
-				DPAA2_PMD_DP_DEBUG("QBMAN is busy (1)");
+				DPAA2_EVENTDEV_DP_DEBUG("QBMAN is busy (1)");
 				/* Portal was busy, try again */
 				continue;
 			}
@@ -146,8 +92,7 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 			/* Loop until the dq_storage is updated with
 			 * new result by QBMAN
 			 */
-			while (!qbman_result_has_new_result(swp,
-				dq_sch_storage))
+			while (!qbman_result_has_new_result(swp, dq_sch_storage))
 				;
 
 			/* Check whether Last Pull command is Expired and
@@ -157,10 +102,9 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 				is_last = true;
 				/* Check for valid frame. */
 				status = qbman_result_DQ_flags(dq_sch_storage);
-				if (unlikely(!(status &
-					QBMAN_DQ_STAT_VALIDFRAME))) {
+				if (unlikely(!(status & QBMAN_DQ_STAT_VALIDFRAME))) {
 					next_pull = true;
-					DPAA2_PMD_DP_DEBUG("No frame is delivered\n");
+					DPAA2_EVENTDEV_DP_DEBUG("No frame is delivered\n");
 					break;
 				}
 				nb_pkts = total_nb_pkts - (rcvd_pkts + 1);
@@ -172,9 +116,9 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 			rvq = (void *)qbman_result_DQ_fqd_ctx(dq_sch_storage);
 			priv = rvq->eth_data->dev_private;
 			if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-				mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
+				mbuf[rcvd_pkts] = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
 			else
-				mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
+				mbuf[rcvd_pkts] = dpaa2_eth_fd_to_mbuf(priv, fd);
 			dpaa2_dev_rx_print_parser_result(priv, fd, mbuf[rcvd_pkts]);
 			rcvd_pkts++;
 			dq_sch_storage++;
@@ -182,13 +126,13 @@ dpaa2_dpcon_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 		}
 	} while (!next_pull);
 	/* End of Packet Rx loop */
-	DPAA2_PMD_DP_DEBUG("DPCONC Received %d Packets\n", rcvd_pkts);
+	DPAA2_EVENTDEV_DP_DEBUG("DPCONC Received %d Packets\n", rcvd_pkts);
 
 	return rcvd_pkts;
 }
 
 static uint16_t
-dpaa2_dpcon_prefetch_recv(struct dpaa2_dpcon_dev *dpcon_dev,
+dpaa2_scheduler_prefetch_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	struct rte_mbuf **mbuf, uint16_t nb_pkts)
 {
 	uint16_t ch_id = dpcon_dev->qbman_ch_id, pull_size;
@@ -207,7 +151,7 @@ dpaa2_dpcon_prefetch_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
 		ret = dpaa2_affine_qbman_ethrx_swp();
 		if (ret) {
-			DPAA2_PMD_ERR("Failure(%d) in affining portal", ret);
+			DPAA2_EVENTDEV_ERR("Failure(%d) in affining portal", ret);
 			return 0;
 		}
 	}
@@ -236,7 +180,7 @@ dpaa2_dpcon_prefetch_recv(struct dpaa2_dpcon_dev *dpcon_dev,
 	}
 	while (1) {
 		if (qbman_swp_pull(swp, &pulldesc)) {
-			DPAA2_PMD_DP_DEBUG("QBMAN is busy (1)");
+			DPAA2_EVENTDEV_DP_DEBUG("QBMAN is busy (1)");
 			/* Portal was busy, try again */
 			continue;
 		}
@@ -259,7 +203,7 @@ pull_active_dqs:
 	dq_storage1 = q_storage->dq_storage[q_storage->toggle];
 	iova_storage = q_storage->iova_dq_storage[q_storage->toggle];
 	dpaa2_qbman_pull_desc_channel_set(&pulldesc, nb_pkts,
-			ch_id, dq_storage1, iova_storage);
+		ch_id, dq_storage1, iova_storage);
 
 	while (!qbman_check_command_complete(dq_storage))
 		;
@@ -291,9 +235,9 @@ pull_active_dqs:
 		rvq = (void *)qbman_result_DQ_fqd_ctx(dq_storage);
 		priv = rvq->eth_data->dev_private;
 		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-			mbuf[rcvd_pkts] = eth_sg_fd_to_mbuf(priv, fd);
+			mbuf[rcvd_pkts] = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
 		else
-			mbuf[rcvd_pkts] = eth_fd_to_mbuf(priv, fd);
+			mbuf[rcvd_pkts] = dpaa2_eth_fd_to_mbuf(priv, fd);
 		dpaa2_dev_rx_print_parser_result(priv, fd, mbuf[rcvd_pkts]);
 		rcvd_pkts++;
 
@@ -311,7 +255,7 @@ pull_active_dqs:
 	/* issue a volatile dequeue command for next pull */
 	while (1) {
 		if (qbman_swp_pull(swp, &pulldesc)) {
-			DPAA2_PMD_DP_DEBUG("QBMAN is busy (2)");
+			DPAA2_EVENTDEV_DP_DEBUG("QBMAN is busy (2)");
 			continue;
 		}
 		break;
@@ -323,141 +267,94 @@ pull_active_dqs:
 	return rcvd_pkts;
 }
 
-static int
-dpaa2_create_dpcon_device(int dev_fd __rte_unused,
-	struct vfio_device_info *obj_info __rte_unused,
-	struct rte_dpaa2_device *obj)
+__rte_experimental
+void *
+rte_dpaa2_scheduler_init(void)
 {
 	struct dpaa2_dpcon_dev *dpcon_dev;
-	struct dpcon_attr attr;
-	int ret = 0, dpcon_id = obj->object_id;
-
-	/* Allocate DPAA2 dpcon handle */
-	dpcon_dev = rte_malloc(NULL, sizeof(struct dpaa2_dpcon_dev), 0);
-	if (!dpcon_dev) {
-		DPAA2_PMD_ERR("Memory allocation failed for dpcon device");
-		return -ENOMEM;
-	}
-
-	/* Open the dpcon object via MC and save handle for further use */
-	dpcon_dev->dpcon.regs = dpaa2_get_mcp_ptr(MC_PORTAL_INDEX);
-	ret = dpcon_open(&dpcon_dev->dpcon,
-			CMD_PRI_LOW, dpcon_id, &dpcon_dev->token);
-	if (ret) {
-		DPAA2_PMD_ERR("Unable to open dpcon device: err(%d)", ret);
-		rte_free(dpcon_dev);
-		return ret;
-	}
-
-	/* Get the resource information i.e. Channel ID, dpconc ID, priority*/
-	ret = dpcon_get_attributes(&dpcon_dev->dpcon,
-		CMD_PRI_LOW, dpcon_dev->token, &attr);
-	if (ret) {
-		DPAA2_PMD_ERR("dpcon attribute fetch failed: err(%d)", ret);
-		goto get_attr_failure;
-	}
-
-	/* Updating device specific private information*/
-	dpcon_dev->dpcon_id = dpcon_id;
-	dpcon_dev->qbman_ch_id = attr.qbman_ch_id;
-	dpcon_dev->num_priorities = attr.num_priorities;
-	DPAA2_PMD_DEBUG("Channel ID = %d\t Priority Num = %d Object ID = %d",
-			dpcon_dev->qbman_ch_id, dpcon_dev->num_priorities,
-			dpcon_dev->dpcon_id);
-
-	ret = dpaa2_dpcon_dq_storage_init(dpcon_dev);
-	if (ret) {
-		DPAA2_PMD_ERR("dpcon init storage info failed: err(%d)", ret);
-		goto get_attr_failure;
-	}
-
-	rte_atomic16_init(&dpcon_dev->in_use);
-	TAILQ_INSERT_TAIL(&dpcon_dev_list, dpcon_dev, next);
-	return ret;
-
-get_attr_failure:
-	dpcon_close(&dpcon_dev->dpcon, CMD_PRI_LOW, dpcon_dev->token);
-	rte_free(dpcon_dev);
-	return ret;
-}
-
-struct dpaa2_dpcon_dev *dpaa2_alloc_dpcon_dev(void)
-{
-	struct dpaa2_dpcon_dev *dpcon_dev = NULL;
 	char *env = getenv("DPAA2_SCHEDULE_RX_PREFETCH");
 	int prefetch_enable = env ? atoi(env) : 1;
 
-	/* Get DPCON dev handle from list using index */
-	TAILQ_FOREACH(dpcon_dev, &dpcon_dev_list, next) {
-		if (dpcon_dev && rte_atomic16_test_and_set(&dpcon_dev->in_use))
-			break;
-	}
-	if (dpcon_dev) {
-		if (prefetch_enable)
-			dpcon_dev->rx_schedule = dpaa2_dpcon_prefetch_recv;
-		else
-			dpcon_dev->rx_schedule = dpaa2_dpcon_recv;
-	}
+	dpcon_dev = rte_dpaa2_alloc_dpcon_dev();
+	if (!dpcon_dev)
+		DPAA2_EVENTDEV_ERR("Failed to allocate dpcon device!!");
+
+	if (prefetch_enable)
+		dpcon_dev->rx_schedule = dpaa2_scheduler_prefetch_recv;
+	else
+		dpcon_dev->rx_schedule = dpaa2_scheduler_recv;
 
 	return dpcon_dev;
 }
 
-void
-dpaa2_free_dpcon_dev(struct dpaa2_dpcon_dev *dpcon)
+__rte_experimental
+int
+rte_dpaa2_scheduler_start(void *scheduler_handle)
 {
-	struct dpaa2_dpcon_dev *dpcon_dev = NULL;
+	struct dpaa2_dpcon_dev *dpcon_dev = scheduler_handle;
+	int32_t ret;
 
-	/* Match DPCON handle and mark it free */
-	TAILQ_FOREACH(dpcon_dev, &dpcon_dev_list, next) {
-		if (dpcon_dev == dpcon) {
-			rte_atomic16_dec(&dpcon_dev->in_use);
-			return;
-		}
+	ret = rte_dpaa2_dpcon_start(dpcon_dev);
+	if (ret) {
+		DPAA2_EVENTDEV_ERR("Failed(%d) Conc - dpaa2_dev_start\n", ret);
+		return ret;
 	}
+	return 0;
 }
 
-static struct dpaa2_dpcon_dev
-*get_dpcon_from_id(uint32_t dpcon_id)
+__rte_experimental
+int
+rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 {
-	struct dpaa2_dpcon_dev *dpcon_dev = NULL;
+	struct dpaa2_dpcon_dev *dpcon_dev = scheduler_handle;
+	int32_t ret;
 
-	/* Get DPCONC dev handle from list using index */
-	TAILQ_FOREACH(dpcon_dev, &dpcon_dev_list, next) {
-		if (dpcon_dev->dpcon_id == dpcon_id)
-			break;
+	ret = rte_dpaa2_dpcon_stop(dpcon_dev);
+	if (ret) {
+		DPAA2_EVENTDEV_ERR("Failed(%d) Conc - rte_dpaa2_schedule_destroy\n",
+			ret);
+		return ret;
 	}
+	dpcon_dev = NULL;
 
-	return dpcon_dev;
+	return 0;
 }
 
-static void
-dpaa2_close_dpcon_device(int object_id)
+__rte_experimental
+int
+rte_dpaa2_scheduler_add(void *scheduler_handle,
+	uint16_t port_id, uint16_t rxq_id, uint8_t priority)
 {
-	struct dpaa2_dpcon_dev *dpcon_dev = NULL;
-	int32_t ret, i;
+	struct dpaa2_dpcon_dev *dpcon_dev = scheduler_handle;
+	struct rte_eth_dev *dev;
+	struct dpaa2_dev_priv *priv;
+	struct rte_event_eth_rx_adapter_queue_conf queue_conf;
+	uint8_t priority_step;
 
-	dpcon_dev = get_dpcon_from_id((uint32_t)object_id);
-	if (dpcon_dev) {
-		/*Reset the device to it's default state*/
-		ret = dpcon_reset(&dpcon_dev->dpcon, CMD_PRI_LOW, dpcon_dev->token);
-		if (ret)
-			DPAA2_PMD_ERR("Error in resetting  the device: err(%d)", ret);
+	if (!rte_pmd_dpaa2_dev_is_dpaa2(port_id))
+		return -ENODEV;
 
-		dpaa2_free_dpcon_dev(dpcon_dev);
-		dpcon_close(&dpcon_dev->dpcon, CMD_PRI_LOW, dpcon_dev->token);
-		if (ret)
-			DPAA2_PMD_ERR("Error in closing the device: err(%d)", ret);
-		TAILQ_REMOVE(&dpcon_dev_list, dpcon_dev, next);
-		for (i = 0; i < RTE_MAX_LCORE; i++)
-			dpaa2_free_dq_storage(&dpcon_dev->q_storage[i]);
-		rte_free(dpcon_dev);
+	dev = &rte_eth_devices[port_id];
+	priv = dev->data->dev_private;
+	if (rxq_id >= priv->nb_rx_queues) {
+		DPAA2_EVENTDEV_ERR("rxq_id(%d) >= queue number(%d)\n",
+			rxq_id, priv->nb_rx_queues);
+		return -EINVAL;
 	}
+	priority_step = (RTE_EVENT_DEV_PRIORITY_LOWEST + 1 -
+		RTE_EVENT_DEV_PRIORITY_HIGHEST) / dpcon_dev->num_priorities;
+	memset(&queue_conf, 0, sizeof(struct rte_event_eth_rx_adapter_queue_conf));
+	queue_conf.ev.priority = priority * priority_step;
+
+	return dpaa2_eth_eventq_attach(dev, rxq_id, dpcon_dev, &queue_conf, true);
 }
 
-static struct rte_dpaa2_object rte_dpaa2_dpcon_obj = {
-	.dev_type = DPAA2_CON,
-	.create = dpaa2_create_dpcon_device,
-	.close = dpaa2_close_dpcon_device,
-};
+__rte_experimental
+uint16_t
+rte_dpaa2_scheduler_rx(void *scheduler_handle, struct rte_mbuf **mbuf,
+	uint16_t nb_pkts)
+{
+	struct dpaa2_dpcon_dev *dpcon_dev = scheduler_handle;
 
-RTE_PMD_REGISTER_DPAA2_OBJECT(dpaa2_dpcon, rte_dpaa2_dpcon_obj);
+	return dpcon_dev->rx_schedule(dpcon_dev, mbuf, nb_pkts);
+}

@@ -29,12 +29,6 @@ EXPERIMENTAL {
 	rte_pmd_dpaa2_mux_dump_counter;
 	rte_pmd_dpaa2_mux_default_id;
 	rte_pmd_dpaa2_mux_ep_name;
-
-	rte_dpaa2_scheduler_init;
-	rte_dpaa2_scheduler_start;
-	rte_dpaa2_scheduler_rx;
-	rte_dpaa2_scheduler_destroy;
-	rte_dpaa2_scheduler_add;
 };
 
 INTERNAL {
@@ -42,6 +36,8 @@ INTERNAL {
 
 	dpaa2_dev_tx_multi_txq_ordered;
 	dpaa2_eth_eventq_attach;
+	dpaa2_eth_fd_to_mbuf;
+	dpaa2_eth_sg_fd_to_mbuf;
 
 	local: *;
 };

@@ -28,7 +28,6 @@ INTERNAL {
 	dpaa2_free_dq_storage;
 	dpaa2_free_eq_descriptors;
 	dpaa2_get_mcp_ptr;
-	dpaa2_io_portal;
 	dpaa2_seqn_dynfield_offset;
 	dpaa2_seqn;
 	dpaa2_svr_family;
@@ -129,6 +128,10 @@ INTERNAL {
 	rte_fslmc_get_device_count;
 	rte_fslmc_object_register;
 	rte_global_active_dqs_list;
+	rte_dpaa2_alloc_dpcon_dev;
+	rte_dpaa2_free_dpcon_dev;
+	rte_dpaa2_dpcon_start;
+	rte_dpaa2_dpcon_stop;
 
 	local: *;
 };

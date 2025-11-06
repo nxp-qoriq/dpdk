@@ -423,8 +423,9 @@ rte_pmd_dpaa2_rx_get_offset(uint16_t port_id, struct rte_mbuf *m,
 	return 0;
 }
 
+__rte_internal
 struct rte_mbuf *__rte_hot
-eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd)
+dpaa2_eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd)
 {
 	struct qbman_sge *sgt, *sge;
 	size_t fd_addr;
@@ -497,8 +498,9 @@ eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd)
 	return (void *)first_seg;
 }
 
+__rte_internal
 struct rte_mbuf *__rte_hot
-eth_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd)
+dpaa2_eth_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd)
 {
 	uint8_t *v_addr = DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
 	void *hw_annot_addr = v_addr + DPAA2_FD_PTA_SIZE;
@@ -994,9 +996,9 @@ dump_err_pkts(struct dpaa2_queue *dpaa2_q)
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_annot_prefetch(fd);
 		if (DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg)
-			mbuf = eth_sg_fd_to_mbuf(priv, fd);
+			mbuf = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
 		else
-			mbuf = eth_fd_to_mbuf(priv, fd);
+			mbuf = dpaa2_eth_fd_to_mbuf(priv, fd);
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_parse_offset(priv, mbuf, fd);
 
@@ -1158,9 +1160,9 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_annot_prefetch(fd);
 		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-			bufs[num_rx] = eth_sg_fd_to_mbuf(priv, fd);
+			bufs[num_rx] = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
 		else
-			bufs[num_rx] = eth_fd_to_mbuf(priv, fd);
+			bufs[num_rx] = dpaa2_eth_fd_to_mbuf(priv, fd);
 		if (priv->psr_dynfield_offset >= 0)
 			dpaa2_dev_rx_parse_offset(priv, bufs[num_rx], fd);
 
@@ -1216,7 +1218,10 @@ dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
 		dpaa2_dev_rx_annot_prefetch(fd);
 
 	ev->event = rxq->ev.event;
-	ev->mbuf = eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+		ev->mbuf = dpaa2_eth_sg_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	else
+		ev->mbuf = dpaa2_eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
 
 	qbman_swp_dqrr_consume(swp, dq);
 }
@@ -1234,7 +1239,10 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __rte_unused,
 		dpaa2_dev_rx_annot_prefetch(fd);
 
 	ev->event = rxq->ev.event;
-	ev->mbuf = eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+		ev->mbuf = dpaa2_eth_sg_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	else
+		ev->mbuf = dpaa2_eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
 
 	dqrr_index = qbman_get_dqrr_idx(dq);
 	*dpaa2_seqn(ev->mbuf) = dqrr_index + 1;
@@ -1254,7 +1262,10 @@ dpaa2_dev_process_ordered_event(struct qbman_swp *swp,
 		dpaa2_dev_rx_annot_prefetch(fd);
 
 	ev->event = rxq->ev.event;
-	ev->mbuf = eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+		ev->mbuf = dpaa2_eth_sg_fd_to_mbuf(rxq->eth_data->dev_private, fd);
+	else
+		ev->mbuf = dpaa2_eth_fd_to_mbuf(rxq->eth_data->dev_private, fd);
 
 	*dpaa2_seqn(ev->mbuf) = DPAA2_ENQUEUE_FLAG_ORP;
 	*dpaa2_seqn(ev->mbuf) |= qbman_result_DQ_odpid(dq) << DPAA2_EQCR_OPRID_SHIFT;
@@ -1352,9 +1363,9 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			if (priv->psr_dynfield_offset >= 0)
 				dpaa2_dev_rx_annot_prefetch(fd);
 			if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-				bufs[num_rx] = eth_sg_fd_to_mbuf(priv, fd);
+				bufs[num_rx] = dpaa2_eth_sg_fd_to_mbuf(priv, fd);
 			else
-				bufs[num_rx] = eth_fd_to_mbuf(priv, fd);
+				bufs[num_rx] = dpaa2_eth_fd_to_mbuf(priv, fd);
 			if (priv->psr_dynfield_offset >= 0)
 				dpaa2_dev_rx_parse_offset(priv, bufs[num_rx], fd);
 
@@ -1796,14 +1807,17 @@ dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci, struct dpaa2_queue *dpaa2_q)
 	fd = qbman_result_eqresp_fd(&dpio_dev->eqresp[eqresp_ci]);
 
 	/* Setting port id does not matter as we are to free the mbuf */
-	m = eth_fd_to_mbuf(dpaa2_q->eth_data->dev_private, fd);
-	rte_pktmbuf_free(m);
+	if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
+		m = dpaa2_eth_sg_fd_to_mbuf(dpaa2_q->eth_data->dev_private, fd);
+	else
+		m = dpaa2_eth_fd_to_mbuf(dpaa2_q->eth_data->dev_private, fd);
+	if (m)
+		rte_pktmbuf_free(m);
 }
 
 static void
 dpaa2_set_enqueue_descriptor(struct dpaa2_queue *dpaa2_q,
-			     struct rte_mbuf *m,
-			     struct qbman_eq_desc *eqdesc)
+	struct rte_mbuf *m, struct qbman_eq_desc *eqdesc)
 {
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;

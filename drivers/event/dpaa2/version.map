@@ -1,0 +1,11 @@
+EXPERIMENTAL {
+	global:
+
+	rte_dpaa2_scheduler_init;
+	rte_dpaa2_scheduler_start;
+	rte_dpaa2_scheduler_rx;
+	rte_dpaa2_scheduler_destroy;
+	rte_dpaa2_scheduler_add;
+
+	local: *;
+};

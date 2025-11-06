@@ -753,9 +753,9 @@ dpaa2_dpkg_insert_extract(struct dpkg_profile_cfg *kg_cfg,
 
 __rte_internal
 int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
-		int eth_rx_queue_id,
-		struct dpaa2_dpcon_dev *dpcon,
-		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf);
+	uint16_t queue_id, struct dpaa2_dpcon_dev *dpcon,
+	const struct rte_event_eth_rx_adapter_queue_conf *queue_conf,
+	int ignore_sched_type);
 
 uint16_t dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
 
@@ -819,22 +819,13 @@ rte_pmd_dpaa2_dev_recycle_qp_setup(struct rte_dpaa2_device *dpaa2_dev,
 	struct dpaa2_queue **txq,
 	struct dpaa2_queue **rxq);
 
+__rte_internal
 struct rte_mbuf *__rte_hot
-eth_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
+dpaa2_eth_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
+__rte_internal
 struct rte_mbuf *__rte_hot
-eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
+dpaa2_eth_sg_fd_to_mbuf(struct dpaa2_dev_priv *priv, const struct qbman_fd *fd);
 
-/* DPCON prototypes */
-int32_t
-dpaa2_dpcon_start(struct dpaa2_dpcon_dev *dpcon_dev);
-int32_t
-dpaa2_dpcon_stop(struct dpaa2_dpcon_dev *dpcon_dev);
-void
-dpaa2_free_dpcon_dev(struct dpaa2_dpcon_dev *dpcon_dev);
-struct
-dpaa2_dpcon_dev *dpaa2_alloc_dpcon_dev(void);
-void
-dpaa2_dev_mac_setup_stats(struct rte_eth_dev *dev);
 int
 dpaa2_mtr_ops_get(struct rte_eth_dev *dev, void *ops);
 

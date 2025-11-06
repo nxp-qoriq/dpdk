@@ -2038,7 +2038,7 @@ err:
 	return retcode;
 };
 
-void
+static void
 dpaa2_dev_mac_setup_stats(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
@@ -2725,48 +2725,63 @@ dpaa2_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	return 0;
 }
 
-int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
-		int eth_rx_queue_id,
-		struct dpaa2_dpcon_dev *dpcon,
-		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+int
+dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
+	uint16_t queue_id, struct dpaa2_dpcon_dev *dpcon,
+	const struct rte_event_eth_rx_adapter_queue_conf *queue_conf,
+	int ignore_sched_type)
 {
 	struct dpaa2_dev_priv *eth_priv = dev->data->dev_private;
-	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
-	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[eth_rx_queue_id];
+	struct fsl_mc_io *dpni = dev->process_private;
+	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[queue_id];
 	uint8_t flow_id = dpaa2_ethq->flow_id;
 	struct dpni_queue *cfg = dpaa2_ethq->cfg;
-	uint8_t options, priority;
+	uint8_t priority, priority_step, num_priorities;
 	int ret;
 
-	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_PARALLEL)
+	if (queue_id >= eth_priv->nb_rx_queues) {
+		DPAA2_PMD_ERR("Error setting queue ID(%d) >= max number(%d)",
+			queue_id, eth_priv->nb_rx_queues);
+
+		return -EINVAL;
+	}
+
+	if (ignore_sched_type)
+		dpaa2_ethq->cb = NULL;
+	else if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_PARALLEL)
 		dpaa2_ethq->cb = dpaa2_dev_process_parallel_event;
 	else if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ATOMIC)
 		dpaa2_ethq->cb = dpaa2_dev_process_atomic_event;
 	else if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ORDERED)
 		dpaa2_ethq->cb = dpaa2_dev_process_ordered_event;
 	else
-		return -EINVAL;
+		dpaa2_ethq->cb = NULL;
 
-	priority = (RTE_EVENT_DEV_PRIORITY_LOWEST / queue_conf->ev.priority) *
-		   (dpcon->num_priorities - 1);
+	num_priorities = dpcon->num_priorities ? dpcon->num_priorities : 1;
 
 	if (!cfg) {
 		DPAA2_PMD_ERR("%s: %s-rxq%d was not setup yet!",
-			__func__, dev->data->name, eth_rx_queue_id);
+			__func__, dev->data->name, queue_id);
 		return -EINVAL;
 	}
-	options = DPNI_QUEUE_OPT_DEST;
+
+	priority_step = (RTE_EVENT_DEV_PRIORITY_LOWEST + 1 -
+		RTE_EVENT_DEV_PRIORITY_HIGHEST) / num_priorities;
+	priority = priority_step ? queue_conf->ev.priority / priority_step : 0;
+
+	dpaa2_ethq->options |= DPNI_QUEUE_OPT_DEST;
 	cfg->destination.type = DPNI_DEST_DPCON;
 	cfg->destination.id = dpcon->dpcon_id;
 	cfg->destination.priority = priority;
 
-	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ATOMIC) {
-		options |= DPNI_QUEUE_OPT_HOLD_ACTIVE;
+	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ATOMIC &&
+		!ignore_sched_type) {
+		dpaa2_ethq->options |= DPNI_QUEUE_OPT_HOLD_ACTIVE;
 		cfg->destination.hold_active = 1;
 	}
 
 	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_ORDERED &&
-			!eth_priv->en_ordered) {
+		!eth_priv->en_ordered && !ignore_sched_type) {
 		struct opr_cfg ocfg;
 
 		/* Restoration window size = 256 frames */
@@ -2790,8 +2805,8 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		}
 
 		ret = dpni_set_opr(dpni, CMD_PRI_LOW, eth_priv->token,
-				   dpaa2_ethq->tc_index, flow_id,
-				   OPR_OPT_CREATE, &ocfg, 0);
+			dpaa2_ethq->tc_index, flow_id,
+			OPR_OPT_CREATE, &ocfg, 0);
 		if (ret) {
 			DPAA2_PMD_ERR("Error setting opr: ret: %d", ret);
 			return ret;
@@ -2800,11 +2815,11 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		eth_priv->en_ordered = 1;
 	}
 
-	options |= DPNI_QUEUE_OPT_USER_CTX;
-	cfg->user_context = (size_t)(dpaa2_ethq);
+	dpaa2_ethq->options |= DPNI_QUEUE_OPT_USER_CTX;
+	cfg->user_context = (size_t)dpaa2_ethq;
 
 	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
-			     dpaa2_ethq->tc_index, flow_id, options, cfg);
+		dpaa2_ethq->tc_index, flow_id, dpaa2_ethq->options, cfg);
 	if (ret) {
 		DPAA2_PMD_ERR("Error in dpni_set_queue: ret: %d", ret);
 		return ret;
@@ -2815,7 +2830,6 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	dpaa2_ethq->ev.flow_id = flow_id;
 	dpaa2_ethq->ev.event_type = RTE_EVENT_TYPE_ETHDEV;
 	dpaa2_ethq->ev.op = RTE_EVENT_OP_NEW;
-	dpaa2_ethq->ev.queue_id = eth_rx_queue_id;
 
 	return 0;
 }

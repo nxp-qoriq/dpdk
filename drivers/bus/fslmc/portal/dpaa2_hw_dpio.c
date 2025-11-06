@@ -41,7 +41,6 @@
 
 #define NUM_HOST_CPUS RTE_MAX_LCORE
 
-struct dpaa2_io_portal_t dpaa2_io_portal[RTE_MAX_LCORE];
 RTE_DEFINE_PER_LCORE(struct dpaa2_io_portal_t, _dpaa2_io);
 
 struct swp_active_dqs rte_global_active_dqs_list[NUM_MAX_SWP];

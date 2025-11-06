@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2017 NXP
+ * Copyright 2017, 2025 NXP
  */
 
 #ifndef __DPAA2_EVENTDEV_H__
@@ -84,9 +84,6 @@ struct dpaa2_eventdev {
 	uint32_t nb_event_port_enqueue_depth;
 	uint32_t event_dev_cfg;
 };
-
-struct dpaa2_dpcon_dev *rte_dpaa2_alloc_dpcon_dev(void);
-void rte_dpaa2_free_dpcon_dev(struct dpaa2_dpcon_dev *dpcon);
 
 int test_eventdev_dpaa2(void);
 

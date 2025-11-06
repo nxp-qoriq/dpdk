@@ -705,10 +705,10 @@ dpaa2_eventdev_eth_queue_add_all(const struct rte_eventdev *dev,
 
 	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
 		ret = dpaa2_eth_eventq_attach(eth_dev, i,
-					      dpcon, queue_conf);
+			dpcon, queue_conf, false);
 		if (ret) {
-			DPAA2_EVENTDEV_ERR(
-				"Event queue attach failed: err(%d)", ret);
+			DPAA2_EVENTDEV_ERR("Event queue attach failed: err(%d)",
+				ret);
 		}
 	}
 	return 0;
@@ -732,10 +732,10 @@ dpaa2_eventdev_eth_queue_add(const struct rte_eventdev *dev,
 				eth_dev, queue_conf);
 
 	ret = dpaa2_eth_eventq_attach(eth_dev, rx_queue_id,
-				      dpcon, queue_conf);
+			dpcon, queue_conf, false);
 	if (ret) {
-		DPAA2_EVENTDEV_ERR(
-			"Event queue attach failed: err(%d)", ret);
+		DPAA2_EVENTDEV_ERR("Event queue attach failed: err(%d)",
+			ret);
 		return ret;
 	}
 	return 0;

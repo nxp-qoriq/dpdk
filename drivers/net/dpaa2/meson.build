@@ -16,8 +16,6 @@ sources = files(
         'dpaa2_recycle.c',
         'dpaa2_rxtx.c',
         'dpaa2_ptp.c',
-        'dpaa2_dpcon.c',
-        'dpaa2_scheduler.c',
         'dpaa2_meter.c',
         'mc/dprtc.c',
         'mc/dpkg.c',
