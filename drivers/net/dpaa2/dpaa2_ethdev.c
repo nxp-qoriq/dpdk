@@ -187,11 +187,40 @@ static const struct rte_dpaa2_xstats_name_off dpaa2_xstats_strings[] = {
 };
 
 static struct rte_dpaa2_driver rte_dpaa2_pmd;
-static int dpaa2_dev_link_update(struct rte_eth_dev *dev,
-				 int wait_to_complete);
-static int dpaa2_dev_set_link_up(struct rte_eth_dev *dev);
-static int dpaa2_dev_set_link_down(struct rte_eth_dev *dev);
-static int dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
+
+static int
+dpaa2_setup_table_miss_action(struct rte_eth_dev *eth_dev,
+	uint8_t tc_index)
+{
+	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
+	struct rte_flow_group_attr attr;
+	struct rte_flow_action actions[2];
+	struct dpaa2_key_extract *key_extract;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.ingress = 1;
+	if (tc_index < priv->num_rx_tc) {
+		key_extract = &priv->extract.tc_key_extract[tc_index];
+		if (key_extract->default_drop)
+			actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+		else {
+			actions[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+			actions[0].conf = &key_extract->default_queue;
+		}
+	} else {
+		key_extract = &priv->extract.qos_key_extract;
+		if (key_extract->default_drop)
+			actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+		else {
+			actions[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
+			actions[0].conf = &key_extract->default_jump;
+		}
+	}
+	actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	return rte_flow_group_set_miss_actions(eth_dev->data->port_id,
+			tc_index, &attr, actions, NULL);
+}
 
 static int
 dpaa2_setup_flow_dist(struct rte_eth_dev *eth_dev,
@@ -903,6 +932,13 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 					tc_index, ret);
 				return ret;
 			}
+			if (!priv->extract.tc_key_extract[tc_index].enabled)
+				continue;
+			ret = dpaa2_setup_table_miss_action(dev, tc_index);
+			if (ret) {
+				DPAA2_PMD_ERR("Error(%d) to set miss action of %s-tc%d table",
+					ret, dev->data->name, tc_index);
+			}
 		}
 	}
 
@@ -1421,6 +1457,56 @@ dpaa2_supported_ptypes_get(struct rte_eth_dev *dev)
 	return NULL;
 }
 
+/* return 0 means link status changed, -1 means not changed */
+static int
+dpaa2_dev_link_update(struct rte_eth_dev *dev,
+	int wait_to_complete)
+{
+	int ret;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = dev->process_private;
+	struct rte_eth_link link;
+	struct dpni_link_state state = {0};
+	uint8_t count;
+
+	if (!dpni) {
+		DPAA2_PMD_ERR("dpni is NULL");
+		return 0;
+	}
+
+	for (count = 0; count <= MAX_REPEAT_TIME; count++) {
+		ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token,
+					  &state);
+		if (ret < 0) {
+			DPAA2_PMD_DEBUG("error: dpni_get_link_state %d", ret);
+			return ret;
+		}
+		if (state.up == RTE_ETH_LINK_DOWN &&
+		    wait_to_complete)
+			rte_delay_ms(CHECK_INTERVAL);
+		else
+			break;
+	}
+
+	memset(&link, 0, sizeof(struct rte_eth_link));
+	link.link_status = state.up;
+	link.link_speed = state.rate;
+
+	if (state.options & DPNI_LINK_OPT_HALF_DUPLEX)
+		link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
+	else
+		link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
+
+	ret = rte_eth_linkstatus_set(dev, &link);
+	if (ret < 0)
+		DPAA2_PMD_DEBUG("No change in status");
+	else
+		DPAA2_PMD_INFO("Port %d Link is %s", dev->data->port_id,
+			       link.link_status ? "Up" : "Down");
+
+	return ret;
+}
+
 /**
  * Dpaa2 link Interrupt handler
  *
@@ -1495,7 +1581,213 @@ dpaa2_eth_setup_irqs(struct rte_eth_dev *dev, int enable)
 
 	return err;
 }
-static int dpaa2_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf);
+
+/**
+ * Toggle the DPNI to enable, if not already enabled.
+ * This is not strictly PHY up/down - it is more of logical toggling.
+ */
+static int
+dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
+{
+	int ret = -EINVAL;
+	struct dpaa2_dev_priv *priv;
+	struct fsl_mc_io *dpni;
+	int en = 0;
+	struct dpni_link_state state = {0};
+
+	priv = dev->data->dev_private;
+	dpni = dev->process_private;
+
+	if (!dpni) {
+		DPAA2_PMD_ERR("dpni is NULL");
+		return ret;
+	}
+
+	/* Check if DPNI is currently enabled */
+	ret = dpni_is_enabled(dpni, CMD_PRI_LOW, priv->token, &en);
+	if (ret) {
+		/* Unable to obtain dpni status; Not continuing */
+		DPAA2_PMD_ERR("Interface Link UP failed (%d)", ret);
+		return ret;
+	}
+
+	/* Enable link if not already enabled */
+	if (!en) {
+		ret = dpni_enable(dpni, CMD_PRI_LOW, priv->token);
+		if (ret) {
+			DPAA2_PMD_ERR("Interface Link UP failed (%d)", ret);
+			return ret;
+		}
+	}
+	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
+	if (ret < 0) {
+		DPAA2_PMD_DEBUG("Unable to get link state (%d)", ret);
+		return ret;
+	}
+
+	/* changing tx burst function to start enqueues */
+	/** For recycle device, don't set TX callback
+	 * if it has been set by rte_pmd_dpaa2_dev_recycle_qp_setup.
+	 */
+	if (!dev->tx_pkt_burst ||
+		dev->tx_pkt_burst == rte_eth_pkt_burst_dummy)
+		dev->tx_pkt_burst = dpaa2_dev_tx;
+
+	dev->data->dev_link.link_status = state.up;
+	dev->data->dev_link.link_speed = state.rate;
+
+	if (state.options & DPNI_LINK_OPT_HALF_DUPLEX)
+		dev->data->dev_link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
+	else
+		dev->data->dev_link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
+
+	if (state.up)
+		DPAA2_PMD_DEBUG("Port %d Link is Up", dev->data->port_id);
+	else
+		DPAA2_PMD_DEBUG("Port %d Link is Down", dev->data->port_id);
+	return ret;
+}
+
+/**
+ * Toggle the DPNI to disable, if not already disabled.
+ * This is not strictly PHY up/down - it is more of logical toggling.
+ */
+static int
+dpaa2_dev_set_link_down(struct rte_eth_dev *dev)
+{
+	int ret = -EINVAL;
+	struct dpaa2_dev_priv *priv;
+	struct fsl_mc_io *dpni;
+	int dpni_enabled = 0;
+	int retries = 10;
+
+	PMD_INIT_FUNC_TRACE();
+
+	priv = dev->data->dev_private;
+	dpni = dev->process_private;
+
+	if (!dpni) {
+		DPAA2_PMD_ERR("Device has not yet been configured");
+		return ret;
+	}
+
+	/*changing  tx burst function to avoid any more enqueues */
+	dev->tx_pkt_burst = rte_eth_pkt_burst_dummy;
+
+	/* Loop while dpni_disable() attempts to drain the egress FQs
+	 * and confirm them back to us.
+	 */
+	do {
+		ret = dpni_disable(dpni, 0, priv->token);
+		if (ret) {
+			DPAA2_PMD_ERR("dpni disable failed (%d)", ret);
+			return ret;
+		}
+		ret = dpni_is_enabled(dpni, 0, priv->token, &dpni_enabled);
+		if (ret) {
+			DPAA2_PMD_ERR("dpni enable check failed (%d)", ret);
+			return ret;
+		}
+		if (dpni_enabled)
+			/* Allow the MC some slack */
+			rte_delay_us(100 * 1000);
+	} while (dpni_enabled && --retries);
+
+	if (!retries) {
+		DPAA2_PMD_WARN("Retry count exceeded disabling dpni");
+		/* todo- we may have to manually cleanup queues.
+		 */
+	} else {
+		DPAA2_PMD_INFO("Port %d Link DOWN successful",
+			       dev->data->port_id);
+	}
+
+	dev->data->dev_link.link_status = 0;
+
+	return ret;
+}
+
+static int
+dpaa2_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
+{
+	int ret = -EINVAL;
+	struct dpaa2_dev_priv *priv;
+	struct fsl_mc_io *dpni;
+	struct dpni_link_cfg cfg = {0};
+
+	PMD_INIT_FUNC_TRACE();
+
+	priv = dev->data->dev_private;
+	dpni = dev->process_private;
+
+	if (!dpni) {
+		DPAA2_PMD_ERR("dpni is NULL");
+		return ret;
+	}
+
+	/* It is necessary to obtain the current cfg before setting fc_conf
+	 * as MC would return error in case rate, autoneg or duplex values are
+	 * different.
+	 */
+	ret = dpni_get_link_cfg(dpni, CMD_PRI_LOW, priv->token, &cfg);
+	if (ret) {
+		DPAA2_PMD_ERR("Unable to get link cfg (err=%d)", ret);
+		return ret;
+	}
+
+	/* Disable link before setting configuration */
+	dpaa2_dev_set_link_down(dev);
+
+	/* update cfg with fc_conf */
+	switch (fc_conf->mode) {
+	case RTE_ETH_FC_FULL:
+		/* Full flow control;
+		 * OPT_PAUSE set, ASYM_PAUSE not set
+		 */
+		cfg.options |= DPNI_LINK_OPT_PAUSE;
+		cfg.options &= ~DPNI_LINK_OPT_ASYM_PAUSE;
+		break;
+	case RTE_ETH_FC_TX_PAUSE:
+		/* Enable RX flow control
+		 * OPT_PAUSE not set;
+		 * ASYM_PAUSE set;
+		 */
+		cfg.options |= DPNI_LINK_OPT_ASYM_PAUSE;
+		cfg.options &= ~DPNI_LINK_OPT_PAUSE;
+		break;
+	case RTE_ETH_FC_RX_PAUSE:
+		/* Enable TX Flow control
+		 * OPT_PAUSE set
+		 * ASYM_PAUSE set
+		 */
+		cfg.options |= DPNI_LINK_OPT_PAUSE;
+		cfg.options |= DPNI_LINK_OPT_ASYM_PAUSE;
+		break;
+	case RTE_ETH_FC_NONE:
+		/* Disable Flow control
+		 * OPT_PAUSE not set
+		 * ASYM_PAUSE not set
+		 */
+		cfg.options &= ~DPNI_LINK_OPT_PAUSE;
+		cfg.options &= ~DPNI_LINK_OPT_ASYM_PAUSE;
+		break;
+	default:
+		DPAA2_PMD_ERR("Incorrect Flow control flag (%d)",
+			      fc_conf->mode);
+		return -EINVAL;
+	}
+
+	ret = dpni_set_link_cfg(dpni, CMD_PRI_LOW, priv->token, &cfg);
+	if (ret)
+		DPAA2_PMD_ERR("Unable to set Link configuration (err=%d)",
+			      ret);
+
+	/* Enable link */
+	dpaa2_dev_set_link_up(dev);
+
+	return ret;
+}
+
 static int
 dpaa2_dev_start(struct rte_eth_dev *dev)
 {
@@ -2365,181 +2657,6 @@ error:
 	return retcode;
 };
 
-/* return 0 means link status changed, -1 means not changed */
-static int
-dpaa2_dev_link_update(struct rte_eth_dev *dev,
-		      int wait_to_complete)
-{
-	int ret;
-	struct dpaa2_dev_priv *priv = dev->data->dev_private;
-	struct fsl_mc_io *dpni = dev->process_private;
-	struct rte_eth_link link;
-	struct dpni_link_state state = {0};
-	uint8_t count;
-
-	if (!dpni) {
-		DPAA2_PMD_ERR("dpni is NULL");
-		return 0;
-	}
-
-	for (count = 0; count <= MAX_REPEAT_TIME; count++) {
-		ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token,
-					  &state);
-		if (ret < 0) {
-			DPAA2_PMD_DEBUG("error: dpni_get_link_state %d", ret);
-			return ret;
-		}
-		if (state.up == RTE_ETH_LINK_DOWN &&
-		    wait_to_complete)
-			rte_delay_ms(CHECK_INTERVAL);
-		else
-			break;
-	}
-
-	memset(&link, 0, sizeof(struct rte_eth_link));
-	link.link_status = state.up;
-	link.link_speed = state.rate;
-
-	if (state.options & DPNI_LINK_OPT_HALF_DUPLEX)
-		link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
-	else
-		link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
-
-	ret = rte_eth_linkstatus_set(dev, &link);
-	if (ret < 0)
-		DPAA2_PMD_DEBUG("No change in status");
-	else
-		DPAA2_PMD_INFO("Port %d Link is %s", dev->data->port_id,
-			       link.link_status ? "Up" : "Down");
-
-	return ret;
-}
-
-/**
- * Toggle the DPNI to enable, if not already enabled.
- * This is not strictly PHY up/down - it is more of logical toggling.
- */
-static int
-dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
-{
-	int ret = -EINVAL;
-	struct dpaa2_dev_priv *priv;
-	struct fsl_mc_io *dpni;
-	int en = 0;
-	struct dpni_link_state state = {0};
-
-	priv = dev->data->dev_private;
-	dpni = dev->process_private;
-
-	if (!dpni) {
-		DPAA2_PMD_ERR("dpni is NULL");
-		return ret;
-	}
-
-	/* Check if DPNI is currently enabled */
-	ret = dpni_is_enabled(dpni, CMD_PRI_LOW, priv->token, &en);
-	if (ret) {
-		/* Unable to obtain dpni status; Not continuing */
-		DPAA2_PMD_ERR("Interface Link UP failed (%d)", ret);
-		return ret;
-	}
-
-	/* Enable link if not already enabled */
-	if (!en) {
-		ret = dpni_enable(dpni, CMD_PRI_LOW, priv->token);
-		if (ret) {
-			DPAA2_PMD_ERR("Interface Link UP failed (%d)", ret);
-			return ret;
-		}
-	}
-	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
-	if (ret < 0) {
-		DPAA2_PMD_DEBUG("Unable to get link state (%d)", ret);
-		return ret;
-	}
-
-	/* changing tx burst function to start enqueues */
-	/** For recycle device, don't set TX callback
-	 * if it has been set by rte_pmd_dpaa2_dev_recycle_qp_setup.
-	 */
-	if (!dev->tx_pkt_burst ||
-		dev->tx_pkt_burst == rte_eth_pkt_burst_dummy)
-		dev->tx_pkt_burst = dpaa2_dev_tx;
-
-	dev->data->dev_link.link_status = state.up;
-	dev->data->dev_link.link_speed = state.rate;
-
-	if (state.options & DPNI_LINK_OPT_HALF_DUPLEX)
-		dev->data->dev_link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
-	else
-		dev->data->dev_link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
-
-	if (state.up)
-		DPAA2_PMD_DEBUG("Port %d Link is Up", dev->data->port_id);
-	else
-		DPAA2_PMD_DEBUG("Port %d Link is Down", dev->data->port_id);
-	return ret;
-}
-
-/**
- * Toggle the DPNI to disable, if not already disabled.
- * This is not strictly PHY up/down - it is more of logical toggling.
- */
-static int
-dpaa2_dev_set_link_down(struct rte_eth_dev *dev)
-{
-	int ret = -EINVAL;
-	struct dpaa2_dev_priv *priv;
-	struct fsl_mc_io *dpni;
-	int dpni_enabled = 0;
-	int retries = 10;
-
-	PMD_INIT_FUNC_TRACE();
-
-	priv = dev->data->dev_private;
-	dpni = dev->process_private;
-
-	if (!dpni) {
-		DPAA2_PMD_ERR("Device has not yet been configured");
-		return ret;
-	}
-
-	/*changing  tx burst function to avoid any more enqueues */
-	dev->tx_pkt_burst = rte_eth_pkt_burst_dummy;
-
-	/* Loop while dpni_disable() attempts to drain the egress FQs
-	 * and confirm them back to us.
-	 */
-	do {
-		ret = dpni_disable(dpni, 0, priv->token);
-		if (ret) {
-			DPAA2_PMD_ERR("dpni disable failed (%d)", ret);
-			return ret;
-		}
-		ret = dpni_is_enabled(dpni, 0, priv->token, &dpni_enabled);
-		if (ret) {
-			DPAA2_PMD_ERR("dpni enable check failed (%d)", ret);
-			return ret;
-		}
-		if (dpni_enabled)
-			/* Allow the MC some slack */
-			rte_delay_us(100 * 1000);
-	} while (dpni_enabled && --retries);
-
-	if (!retries) {
-		DPAA2_PMD_WARN("Retry count exceeded disabling dpni");
-		/* todo- we may have to manually cleanup queues.
-		 */
-	} else {
-		DPAA2_PMD_INFO("Port %d Link DOWN successful",
-			       dev->data->port_id);
-	}
-
-	dev->data->dev_link.link_status = 0;
-
-	return ret;
-}
-
 static int
 dpaa2_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
@@ -2591,87 +2708,6 @@ dpaa2_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		else
 			fc_conf->mode = RTE_ETH_FC_NONE;
 	}
-
-	return ret;
-}
-
-int
-dpaa2_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
-{
-	int ret = -EINVAL;
-	struct dpaa2_dev_priv *priv;
-	struct fsl_mc_io *dpni;
-	struct dpni_link_cfg cfg = {0};
-
-	PMD_INIT_FUNC_TRACE();
-
-	priv = dev->data->dev_private;
-	dpni = dev->process_private;
-
-	if (!dpni) {
-		DPAA2_PMD_ERR("dpni is NULL");
-		return ret;
-	}
-
-	/* It is necessary to obtain the current cfg before setting fc_conf
-	 * as MC would return error in case rate, autoneg or duplex values are
-	 * different.
-	 */
-	ret = dpni_get_link_cfg(dpni, CMD_PRI_LOW, priv->token, &cfg);
-	if (ret) {
-		DPAA2_PMD_ERR("Unable to get link cfg (err=%d)", ret);
-		return ret;
-	}
-
-	/* Disable link before setting configuration */
-	dpaa2_dev_set_link_down(dev);
-
-	/* update cfg with fc_conf */
-	switch (fc_conf->mode) {
-	case RTE_ETH_FC_FULL:
-		/* Full flow control;
-		 * OPT_PAUSE set, ASYM_PAUSE not set
-		 */
-		cfg.options |= DPNI_LINK_OPT_PAUSE;
-		cfg.options &= ~DPNI_LINK_OPT_ASYM_PAUSE;
-		break;
-	case RTE_ETH_FC_TX_PAUSE:
-		/* Enable RX flow control
-		 * OPT_PAUSE not set;
-		 * ASYM_PAUSE set;
-		 */
-		cfg.options |= DPNI_LINK_OPT_ASYM_PAUSE;
-		cfg.options &= ~DPNI_LINK_OPT_PAUSE;
-		break;
-	case RTE_ETH_FC_RX_PAUSE:
-		/* Enable TX Flow control
-		 * OPT_PAUSE set
-		 * ASYM_PAUSE set
-		 */
-		cfg.options |= DPNI_LINK_OPT_PAUSE;
-		cfg.options |= DPNI_LINK_OPT_ASYM_PAUSE;
-		break;
-	case RTE_ETH_FC_NONE:
-		/* Disable Flow control
-		 * OPT_PAUSE not set
-		 * ASYM_PAUSE not set
-		 */
-		cfg.options &= ~DPNI_LINK_OPT_PAUSE;
-		cfg.options &= ~DPNI_LINK_OPT_ASYM_PAUSE;
-		break;
-	default:
-		DPAA2_PMD_ERR("Incorrect Flow control flag (%d)",
-			      fc_conf->mode);
-		return -EINVAL;
-	}
-
-	ret = dpni_set_link_cfg(dpni, CMD_PRI_LOW, priv->token, &cfg);
-	if (ret)
-		DPAA2_PMD_ERR("Unable to set Link configuration (err=%d)",
-			      ret);
-
-	/* Enable link */
-	dpaa2_dev_set_link_up(dev);
 
 	return ret;
 }
@@ -3446,12 +3482,16 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 			extract->tc_cfg.dist_size = priv->dist_queues;
 			extract->tc_cfg.key_cfg_iova = iova;
 			extract->tc_cfg.tc = i;
-			extract->default_queue.index = priv->dist_queues - 1;
+			/** First flow of TC as default flow, otherwise, may be dropped.*/
+			extract->default_queue.index = priv->dist_queues * i;
 		} else {
 			extract->qos_cfg.key_cfg_iova = iova;
 			extract->qos_cfg.keep_entries = true;
-			extract->default_jump.group = priv->num_rx_tc - 1;
+			/** First TC as default TC, otherwise, may be dropped.*/
+			extract->default_jump.group = 0;
 		}
+		if (!entry_num)
+			continue;
 
 		extract->entry_map = rte_zmalloc(NULL, entry_num / 8 + 1, 0);
 		if (!extract->entry_map)
