@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright 2018-2024 NXP
+# Copyright 2018-2025 NXP
 
 cat > script_help << EOF
 
@@ -305,7 +305,7 @@ get_dpni_parameters() {
 	fi
 	if [[ -z "$MAX_CGS" ]]
 	then
-		MAX_CGS=`expr $MAX_QUEUES + 8`
+		MAX_CGS=`expr $MAX_TCS`
 	else
 		echo "Number of congestion groups is ${MAX_CGS}."
 	fi
