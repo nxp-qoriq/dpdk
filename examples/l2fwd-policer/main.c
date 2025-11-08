@@ -442,10 +442,124 @@ static uint32_t s_meter_ids[RTE_MAX_ETHPORTS][POLICER_MAX_ID_NUM];
 static uint32_t s_profile_ids[RTE_MAX_ETHPORTS][POLICER_MAX_ID_NUM];
 static uint32_t s_policy_ids[RTE_MAX_ETHPORTS][POLICER_MAX_ID_NUM];
 
+enum policer_xstats_type {
+	POLICER_XSTAT_NULL_TYPE = 0,
+	POLICER_XSTAT_DEV_TYPE = (1 << 0),
+	POLICER_XSTAT_MAC_TYPE = (1 << 1)
+};
+
+static struct rte_eth_xstat_name *s_xstats_names[RTE_MAX_ETHPORTS];
+static uint64_t *s_xstats_values[RTE_MAX_ETHPORTS];
+static int s_xstats_reset[RTE_MAX_ETHPORTS];
+static int s_xstats_val_len[RTE_MAX_ETHPORTS];
+static int s_xstats_name_len[RTE_MAX_ETHPORTS];
+static enum policer_xstats_type *s_xstats_type[RTE_MAX_ETHPORTS];
+static enum policer_xstats_type s_xstats_print_type = POLICER_XSTAT_DEV_TYPE;
+
 static inline uint16_t
 l2fwd_policer_tc_map_vlan_prio(uint16_t tc)
 {
 	return tc << VLAN_PRIO_SHIFT;
+}
+
+static void
+l2fwd_policer_xstats_display(uint16_t port_id)
+{
+	int len = 0, ret, i, enter = 1;
+
+	if (!s_xstats_reset[port_id]) {
+		ret = rte_eth_xstats_reset(port_id);
+		if (ret) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: Failed(%d) to reset xstats\n",
+				__func__, ret);
+			return;
+		}
+		s_xstats_reset[port_id] = 1;
+	}
+
+	if (!s_xstats_values[port_id]) {
+		len = rte_eth_xstats_get_names_by_id(port_id, NULL, 0, NULL);
+		if (len < 0) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: Failed(%d) to get xstats' length\n",
+				__func__, len);
+			return;
+		}
+		s_xstats_values[port_id] = rte_zmalloc(NULL,
+			sizeof(uint64_t) * len, 0);
+		if (!s_xstats_values[port_id]) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: s_xstats_values alloc failed\n",
+				__func__);
+			return;
+		}
+		s_xstats_val_len[port_id] = len;
+	} else {
+		len = s_xstats_val_len[port_id];
+	}
+
+	if (!s_xstats_names[port_id] && len > 0) {
+		s_xstats_names[port_id] = rte_zmalloc(NULL,
+			sizeof(struct rte_eth_xstat_name) * len, 0);
+		if (!s_xstats_names[port_id]) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: s_xstats_names alloc failed\n", __func__);
+			return;
+		}
+	}
+
+	if (!s_xstats_name_len[port_id] && s_xstats_val_len[port_id]) {
+		s_xstats_name_len[port_id] = rte_eth_xstats_get_names_by_id(port_id,
+			s_xstats_names[port_id], s_xstats_val_len[port_id], NULL);
+		if (s_xstats_name_len[port_id] != s_xstats_val_len[port_id]) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: Get xstats' name length(%d) != val length(%d)\n",
+				__func__, s_xstats_name_len[port_id],
+				s_xstats_val_len[port_id]);
+			return;
+		}
+		s_xstats_type[port_id] = rte_zmalloc(NULL,
+			s_xstats_val_len[port_id] * sizeof(enum policer_xstats_type), 0);
+		if (!s_xstats_type[port_id]) {
+			RTE_LOG(ERR, L2FWD_POLICER,
+				"%s: Failed to malloc xstat type mem\n",
+				__func__);
+			return;
+		}
+		for (i = 0; i < s_xstats_val_len[port_id]; i++) {
+			if (!strncmp(s_xstats_names[port_id][i].name, "mac", 3))
+				s_xstats_type[port_id][i] = POLICER_XSTAT_MAC_TYPE;
+			else
+				s_xstats_type[port_id][i] = POLICER_XSTAT_DEV_TYPE;
+		}
+	}
+
+	ret = rte_eth_xstats_get_by_id(port_id, NULL,
+		s_xstats_values[port_id], s_xstats_val_len[port_id]);
+	if (ret < 0 || ret > s_xstats_val_len[port_id]) {
+		RTE_LOG(ERR, L2FWD_POLICER,
+			"%s: Err(%d) to get xstats by ID, len=%d\n",
+			__func__, ret, s_xstats_val_len[port_id]);
+		return;
+	}
+
+	for (i = 0; i < ret; i++) {
+		if (!s_xstats_values[port_id][i])
+			continue;
+		if (!(s_xstats_print_type & POLICER_XSTAT_DEV_TYPE) &&
+			s_xstats_type[port_id][i] == POLICER_XSTAT_DEV_TYPE)
+			continue;
+		if (!(s_xstats_print_type & POLICER_XSTAT_MAC_TYPE) &&
+			s_xstats_type[port_id][i] == POLICER_XSTAT_MAC_TYPE)
+			continue;
+
+		if (enter)
+			printf("\r\n");
+		enter = 0;
+		printf("Port%d-%s:%ld\r\n", port_id,
+			s_xstats_names[port_id][i].name, s_xstats_values[port_id][i]);
+	}
 }
 
 /* Print out statistics on packets dropped */
@@ -463,10 +577,6 @@ static void *l2fwd_policer_print_stats(void *arg)
 
 	RTE_SET_USED(arg);
 
-	total_packets_dropped = 0;
-	total_packets_tx = 0;
-	total_packets_rx = 0;
-
 	const char clr[] = { 27, '[', '2', 'J', '\0' };
 	const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
 
@@ -477,6 +587,10 @@ again:
 	printf("%s%s", clr, topLeft);
 
 	printf("\nPort statistics ====================================");
+
+	total_packets_dropped = 0;
+	total_packets_tx = 0;
+	total_packets_rx = 0;
 
 	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
 		/* skip disabled ports */
@@ -530,6 +644,7 @@ again:
 					tc_total * 8);
 			}
 		}
+		l2fwd_policer_xstats_display(portid);
 	}
 	printf("\nAggregate statistics ==============================="
 		   "\nTotal packets sent: %18"PRIu64
@@ -677,7 +792,8 @@ l2fwd_policer_usage(const char *prgname)
 		"  --tx_multi_ports: 0 disable, 1 enable, Default: enable.\n"
 		"  --flow_table_level: 1 or 2, Default: 2.\n"
 		"  --print_stat: Print port and TC traffic statistics.\n"
-		"  --rx_sch_mode: Select RX schedule mode (pull or push), Default: push.\n",
+		"  --rx_sch_mode: Select RX schedule mode (pull or push), Default: push.\n"
+		"  --xstat: Print xstat (dev, mac, both or off), Default: dev.\n",
 		prgname);
 }
 
@@ -870,6 +986,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_PRINT_STAT_CONFIG "print_stat"
 #define CMD_LINE_OPT_RSS_PER_TC_CONFIG "rss_per_tc"
 #define CMD_LINE_OPT_RX_SCH_MODE_CONFIG "rx_sch_mode"
+#define CMD_LINE_OPT_XSTAT_CONFIG "xstat"
 
 enum {
 	/* long options mapped to a short option */
@@ -895,7 +1012,8 @@ enum {
 	CMD_LINE_OPT_FLOW_TABLE_LEVEL,
 	CMD_LINE_OPT_PRINT_STAT,
 	CMD_LINE_OPT_RSS_PER_TC,
-	CMD_LINE_OPT_RX_SCH_MODE
+	CMD_LINE_OPT_RX_SCH_MODE,
+	CMD_LINE_OPT_XSTAT
 };
 
 static const struct option lgopts[] = {
@@ -923,6 +1041,7 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_FLOW_TABLE_LEVEL_CONFIG, 1, 0,
 		CMD_LINE_OPT_FLOW_TABLE_LEVEL},
 	{CMD_LINE_OPT_RX_SCH_MODE_CONFIG, 1, 0, CMD_LINE_OPT_RX_SCH_MODE},
+	{CMD_LINE_OPT_XSTAT_CONFIG, 1, 0, CMD_LINE_OPT_XSTAT},
 	{NULL, 0, 0, 0}
 };
 
@@ -1066,6 +1185,24 @@ l2fwd_policer_parse_args(int argc, char **argv)
 				s_sch_mode = RTE_DPAA2_SCH_PUSH;
 			} else {
 				fprintf(stderr, "Invalid schedule mode: %s\n",
+					optarg);
+				l2fwd_policer_usage(prgname);
+				return -EINVAL;
+			}
+			break;
+
+		case CMD_LINE_OPT_XSTAT:
+			if (!strcmp(optarg, "dev")) {
+				s_xstats_print_type = POLICER_XSTAT_DEV_TYPE;
+			} else if (!strcmp(optarg, "mac")) {
+				s_xstats_print_type = POLICER_XSTAT_MAC_TYPE;
+			} else if (!strcmp(optarg, "both")) {
+				s_xstats_print_type =
+					POLICER_XSTAT_DEV_TYPE | POLICER_XSTAT_MAC_TYPE;
+			} else if (!strcmp(optarg, "off")) {
+				s_xstats_print_type = POLICER_XSTAT_NULL_TYPE;
+			} else {
+				fprintf(stderr, "Invalid xstats mode: %s\n",
 					optarg);
 				l2fwd_policer_usage(prgname);
 				return -EINVAL;
@@ -3482,6 +3619,14 @@ main(int argc, char **argv)
 	}
 	rte_free(tc_statistics);
 	rte_free(prev_tc_statistics);
+	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
+		if (s_xstats_names[i])
+			rte_free(s_xstats_names[i]);
+		if (s_xstats_values[i])
+			rte_free(s_xstats_values[i]);
+		if (s_xstats_type[i])
+			rte_free(s_xstats_type[i]);
+	}
 
 	/* clean up the EAL */
 	rte_eal_cleanup();
