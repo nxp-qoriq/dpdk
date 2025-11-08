@@ -331,9 +331,6 @@ Following are some pre-requisites:
 	    below environment variable before executing the dynamic_dpl.sh script:
 
             $ export MAX_TCS=8
-            $ export MAX_QUEUES=1
-            $ export FS_ENTRIES=8
-            $ export DPCON_COUNT=3
             $ export DPCON_PRIORITIES=8
             $ export DPNI_OPTIONS="DPNI_OPT_SINGLE_SENDER,DPNI_OPT_CUSTOM_CG,DPNI_OPT_HAS_POLICING,DPNI_OPT_HAS_KEY_MASKING,DPNI_OPT_HAS_OPR,DPNI_OPT_OPR_PER_TC"
 
@@ -1315,7 +1312,7 @@ Currently, The below test cases are not supported on I.MX943:
   $ ./dpdk-l2fwd-policer -c 0x2 -- -p 0x1 -P
 
   Application processes all the RXQs belonging to all TCs(MAX_TCS x MAX_QUEUES), the flows are distributed
-  by vlan ID, vlan priority and least byte of IPv4 source address(0 ~ (max queue number per TC - 1)).
+  by vlan ID, vlan priority and IPv4 address.
 
   Static configuration by arguments:
   --color: configure policer color (color_aware, color_bliend), default: color_aware.
@@ -1331,12 +1328,16 @@ Currently, The below test cases are not supported on I.MX943:
   --vlan_id Vlan ID selected to configure QoS flow, default: 100.
   --queue_config: Configure (port,queue,core) to receive packets by scheduler per core, it's mandatary
 		for running on multiple cores.
+  --miss_drop: Drop packets missed on QoS or TC' flow table, default is to receive in default TC/queue.
   --tx_multi_ports: Send packets to different ports by single burst transmission,
 		disable by 0 and enable by 1, default: 1.
   --flow_table_level: Create 2-level flow table by 2 and 1-level table by 1, For 2-level flow table,
 		vlan items are used to distribute traffic to TCs and IPv4 items are used to distribute
 		traffic to flows(queues), default: 2.
   --print_stat: Print port and TC traffic statistics, default: disabled.
+  --s_rss: Distribute TC's traffic by RSS, default is FS distribution.
+  --rx_sch_mode: Select RX schedule mode (pull or push), default: push.
+  --xstat: Print xstat (dev, mac, both or off), default: dev.
 
   Dynamic configuration by runtime commands:
   Enter Port ID to update: range[0, enter to skip]:
