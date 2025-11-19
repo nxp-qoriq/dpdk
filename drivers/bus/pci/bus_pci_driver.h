@@ -26,6 +26,7 @@ enum rte_pci_kernel_driver {
 	RTE_PCI_KDRV_NIC_UIO,      /* nic_uio for FreeBSD */
 	RTE_PCI_KDRV_NONE,         /* no attached driver */
 	RTE_PCI_KDRV_NET_UIO,      /* NetUIO for Windows */
+	RTE_PCI_KDRV_ENETC4_UIO,   /* enetc4_uio for i.MX95/943 platforms*/
 };
 
 /**

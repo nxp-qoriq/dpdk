@@ -1133,5 +1133,5 @@ RTE_PMD_REGISTER_PCI(net_enetc4, rte_enetc4_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_enetc4, pci_id_enetc4_map);
 RTE_PMD_REGISTER_PARAM_STRING(net_enetc4,
 				ENETC4_TXQ_PRIORITIES "=<string>");
-RTE_PMD_REGISTER_KMOD_DEP(net_enetc4, "* vfio-pci");
+RTE_PMD_REGISTER_KMOD_DEP(net_enetc4, "* vfio-pci | enetc4_uio");
 RTE_LOG_REGISTER_DEFAULT(enetc4_logtype_pmd, NOTICE);

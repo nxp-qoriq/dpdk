@@ -69,6 +69,7 @@ rte_pci_map_device(struct rte_pci_device *dev)
 		break;
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		if (rte_eal_using_phys_addrs()) {
 			/* map resources for devices that use uio */
 			ret = pci_uio_map_resource(dev);
@@ -98,6 +99,7 @@ rte_pci_unmap_device(struct rte_pci_device *dev)
 		break;
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		/* unmap resources for devices that use uio */
 		pci_uio_unmap_resource(dev);
 		break;
@@ -317,6 +319,8 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 			dev->kdrv = RTE_PCI_KDRV_IGB_UIO;
 		else if (!strcmp(driver, "uio_pci_generic"))
 			dev->kdrv = RTE_PCI_KDRV_UIO_GENERIC;
+		else if (!strcmp(driver, "enetc4_uio"))
+			dev->kdrv = RTE_PCI_KDRV_ENETC4_UIO;
 		else
 			dev->kdrv = RTE_PCI_KDRV_UNKNOWN;
 	} else {
@@ -617,6 +621,7 @@ pci_device_iova_mode(const struct rte_pci_driver *pdrv,
 
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		iova_mode = RTE_IOVA_PA;
 		break;
 
@@ -638,6 +643,7 @@ int rte_pci_read_config(const struct rte_pci_device *device,
 	switch (device->kdrv) {
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		return pci_uio_read_config(intr_handle, buf, len, offset);
 #ifdef VFIO_PRESENT
 	case RTE_PCI_KDRV_VFIO:
@@ -662,6 +668,7 @@ int rte_pci_write_config(const struct rte_pci_device *device,
 	switch (device->kdrv) {
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		return pci_uio_write_config(intr_handle, buf, len, offset);
 #ifdef VFIO_PRESENT
 	case RTE_PCI_KDRV_VFIO:
@@ -691,6 +698,7 @@ rte_pci_ioport_map(struct rte_pci_device *dev, int bar,
 #endif
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		ret = pci_uio_ioport_map(dev, bar, p);
 		break;
 	default:
@@ -715,6 +723,7 @@ rte_pci_ioport_read(struct rte_pci_ioport *p,
 #endif
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		pci_uio_ioport_read(p, data, len, offset);
 		break;
 	default:
@@ -734,6 +743,7 @@ rte_pci_ioport_write(struct rte_pci_ioport *p,
 #endif
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		pci_uio_ioport_write(p, data, len, offset);
 		break;
 	default:
@@ -755,6 +765,7 @@ rte_pci_ioport_unmap(struct rte_pci_ioport *p)
 #endif
 	case RTE_PCI_KDRV_IGB_UIO:
 	case RTE_PCI_KDRV_UIO_GENERIC:
+	case RTE_PCI_KDRV_ENETC4_UIO:
 		ret = pci_uio_ioport_unmap(p);
 		break;
 	default:
