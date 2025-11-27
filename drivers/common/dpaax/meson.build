@@ -6,7 +6,7 @@ if not is_linux
     reason = 'only supported on Linux'
 endif
 
-sources = files('dpaax_iova_table.c', 'dpaa_of.c', 'caamflib.c')
+sources = files('dpaax_iova_table.c', 'dpaa_of.c', 'caamflib.c', 'dpaax_usermem.c')
 
 includes += include_directories('caamflib')
 

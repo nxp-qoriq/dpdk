@@ -1,11 +1,16 @@
 INTERNAL {
 	global:
 
+	dpaax_alloc_reserve_memctx;
+	dpaax_alloc_reserve_memory;
+	dpaax_get_reserve_meminfo;
 	dpaax_iova_table_depopulate;
 	dpaax_iova_table_dump;
 	dpaax_iova_table_p;
 	dpaax_iova_table_populate;
 	dpaax_iova_table_update;
+	dpaax_release_reserve_memctx;
+	dpaax_release_reserve_memory;
 	of_device_is_available;
 	of_device_is_compatible;
 	of_find_compatible_node;

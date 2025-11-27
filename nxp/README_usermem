@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2025 NXP
+
+NXP Userspace Reserved Memory Driver Usage Guide
+============================================
+
+Overview
+--------
+This document describes the usage of the NXP Userspace Reserved Memory driver, which allows applications to allocate contiguous reserved memory regions with configurable cache policies (WB, WT, WC). The driver interacts with a kernel module and uses IOCTLs for memory management.
+
+Dependencies
+------------
+This driver is dependent on kernel module user_resv_mem.ko and a node in dts.
+Refere module README: https://bitbucket.sw.nxp.com/projects/GITAM/repos/dpdk-extras/browse/linux/user_resv_mem.ko/README
+
+Sample entry in DTS:
+- Put it in "reserved-memory {" node:
+	/* Userspace drivers memory */
+               usmem_reserved: usmembuffer@a1100000 {
+                       reg = <0 0xa1100000 0 0x2000000>;
+                       no-map;
+               };
+
+- Put it in main "soc" node:
+       usmem: usmem@a1100000 {
+               compatible = "nxp,us-devmem";
+               memory-region = <&usmem_reserved>;
+               reg = <0 0xa1100000 0 0x2000000>;
+        };
+
+- Optionally, pass "device-name" in usmem to change default name "nxp_usmem"
+
+
+Device Files
+------------
+- Device file base: /dev/
+- Sysfs base: /sys/class/
+- Device name: nxp_usmem (user can modify it in dts)
+
+Cache Policies
+--------------
+- NXP_CP_DEFAULT: Default cache policy
+- NXP_CP_WC: Write Combine
+- NXP_CP_WB: Write Back
+- NXP_CP_WT: Write Through
+
+IOCTLs
+-------
+- IOCTL_ALLOC_CHUNKS (_IOWR('N', 1, struct nxp_usmem_reserve)): Allocate memory chunks
+- IOCTL_GET_MEM_INFO (_IOR('N', 2, struct nxp_usmem_info)): Get memory info
+- IOCTL_RELEASE_CHUNKS (_IOWR('N', 3, struct nxp_usmem_reserve)): Release memory chunks
+
+Data Structures
+---------------
+- struct nxp_usmem_reserve: { int chunks; unsigned long offset; enum nxp_mem_cp mem_cp; }
+- struct nxp_usmem_info: { unsigned long phys_base; unsigned long chunk_size; unsigned long total_size; unsigned long free_chunks; }
+- struct dpaax_usmem_alloc: { uint64_t request_mem; uint64_t virt_addr; uint64_t phy_addr; uint64_t size; struct nxp_usmem_reserve res; }
+
+API Usage
+---------
+- dpaax_alloc_reserve_memctx(): Initialize context for reserved memory
+- dpaax_get_reserve_meminfo(): Retrieve memory info
+- dpaax_alloc_reserve_memory(): Allocate memory chunks
+- dpaax_release_reserve_memory(): Release allocated memory
+- dpaax_release_reserve_memctx(): Free context
+
+Example Workflow
+----------------
+1. Call dpaax_alloc_reserve_memctx() with device name to create context
+2. Use dpaax_get_reserve_meminfo() to query available memory
+3. Allocate memory using dpaax_alloc_reserve_memory() specifying size and cache policy
+4. Perform operations on allocated memory
+5. Release memory using dpaax_release_reserve_memory()
+6. Finally, release context using dpaax_release_reserve_memctx()
