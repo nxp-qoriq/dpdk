@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020-2021,2023-2024 NXP
+ * Copyright 2020-2021,2023-2025 NXP
  */
 
 #include <inttypes.h>
@@ -7,6 +7,7 @@
 #include <ethdev_vdev.h>
 #include <ethdev_driver.h>
 #include <rte_io.h>
+#include <rte_kvargs.h>
 
 #include "enet_pmd_logs.h"
 #include "enet_ethdev.h"
@@ -17,6 +18,57 @@
 static uint64_t dev_rx_offloads_sup =
 		RTE_ETH_RX_OFFLOAD_CHECKSUM |
 		RTE_ETH_RX_OFFLOAD_VLAN;
+
+static int
+check_devargs_handler(__rte_unused const char *key, const char *value,
+		      __rte_unused void *opaque)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev*)opaque;
+	struct enetfec_private *hw = dev->data->dev_private;
+	long unsigned num;
+
+	num = strtoul(value, NULL, 10);
+	hw->reserve = 1;
+	if (num < DPAAX_SIZE_256KB) {
+		ENETFEC_PMD_WARN("Too less requested memory 0x%lx, changed to 2MB",
+				num);
+		num = DPAAX_SIZE_2MB;
+	}
+	hw->alloc.request_mem = num;
+	hw->alloc.res.mem_cp = NXP_CP_WC;
+	ENETFEC_PMD_DEBUG("Requested reserve memory = 0x%" PRIx64, hw->alloc.request_mem);
+
+	return 0;
+}
+
+static int
+enetfec_get_devargs(struct rte_eth_dev *dev, const char *key)
+{
+	struct rte_kvargs *kvlist;
+	struct rte_devargs *devargs;
+
+	devargs = dev->device->devargs;
+	if (!devargs)
+		return 0;
+
+	kvlist = rte_kvargs_parse(devargs->args, NULL);
+	if (!kvlist)
+		return 0;
+
+	if (!rte_kvargs_count(kvlist, key)) {
+		rte_kvargs_free(kvlist);
+		return 0;
+	}
+
+	if (rte_kvargs_process(kvlist, key,
+			       check_devargs_handler, (void *)dev) < 0) {
+		rte_kvargs_free(kvlist);
+		return 0;
+	}
+	rte_kvargs_free(kvlist);
+
+	return 1;
+}
 
 /*
  * This function is called to start or restart the ENETFEC during a link
@@ -576,6 +628,8 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 	unsigned int bdsize;
 	const char *name;
 	int rc, i;
+	uint32_t phy, size;
+	uint64_t virt;
 
 	name = rte_vdev_device_name(vdev);
 	ENETFEC_PMD_LOG(INFO, "Initializing pmd_fec for %s", name);
@@ -600,20 +654,40 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 	if (rc != 0)
 		return -ENOMEM;
 
-	/* Get the BD size for distributing among six queues */
-	bdsize = (fep->bd_size) / NUM_OF_BD_QUEUES;
+	enetfec_get_devargs(dev, NXP_RESERVE_MEMORY);
+	if (fep->reserve) {
+		rc = dpaax_alloc_reserve_memctx(NXP_USMEM_DEVICE, &fep->ctx);
+		if (rc != 0) {
+			ENETFEC_PMD_ERR("Fails to get CTX for device = %s", NXP_USMEM_DEVICE);
+			return -ENOMEM;
+		}
+		rc = dpaax_alloc_reserve_memory(&fep->ctx, &fep->alloc);
+		if (rc != 0) {
+			dpaax_release_reserve_memctx(&fep->ctx);
+			return -ENOMEM;
+		}
+		virt = fep->alloc.virt_addr;
+		phy = (uint32_t)fep->alloc.phy_addr;
+		size = (uint32_t)fep->alloc.size;
+		bdsize = size / NUM_OF_BD_QUEUES;
+	} else {
+		virt = (uint64_t)fep->bd_addr_v;
+		phy = fep->bd_addr_p;
+		bdsize = (fep->bd_size) / NUM_OF_BD_QUEUES;
+	}
 
+	ENETFEC_PMD_INFO("FEC Ring Base virtual = %" PRIx64", Physical = %x\n", virt, phy);
 	for (i = 0; i < fep->max_tx_queues; i++) {
-		fep->dma_baseaddr_t[i] = fep->bd_addr_v;
-		fep->bd_addr_p_t[i] = fep->bd_addr_p;
-		fep->bd_addr_v = (uint8_t *)fep->bd_addr_v + bdsize;
-		fep->bd_addr_p = fep->bd_addr_p + bdsize;
+		fep->dma_baseaddr_t[i] = (void *)(uintptr_t)virt;
+		fep->bd_addr_p_t[i] = phy;
+		virt = virt + bdsize;
+		phy = phy + bdsize;
 	}
 	for (i = 0; i < fep->max_rx_queues; i++) {
-		fep->dma_baseaddr_r[i] = fep->bd_addr_v;
-		fep->bd_addr_p_r[i] = fep->bd_addr_p;
-		fep->bd_addr_v = (uint8_t *)fep->bd_addr_v + bdsize;
-		fep->bd_addr_p = fep->bd_addr_p + bdsize;
+		fep->dma_baseaddr_r[i] = (void *)(uintptr_t)virt;
+		fep->bd_addr_p_r[i] = phy;
+		virt = virt + bdsize;
+		phy = phy + bdsize;
 	}
 
 	/* Allocate memory for storing MAC addresses */
@@ -667,6 +741,7 @@ pmd_enetfec_probe(struct rte_vdev_device *vdev)
 failed_init:
 	ENETFEC_PMD_ERR("Failed to init");
 err:
+	dpaax_release_reserve_memctx(&fep->ctx);
 	rte_eth_dev_release_port(dev);
 	return rc;
 }
@@ -688,6 +763,11 @@ pmd_enetfec_remove(struct rte_vdev_device *vdev)
 	/* Free descriptor base of first RX queue as it was configured
 	 * first in enetfec_eth_init().
 	 */
+	if (fep->reserve) {
+		dpaax_release_reserve_memory(&fep->ctx, &fep->alloc);
+		dpaax_release_reserve_memctx(&fep->ctx);
+		fep->reserve = 0;
+	}
 	rxq = fep->rx_queues[0];
 	rte_free(rxq->bd.base);
 	enet_free_queue(eth_dev);
@@ -709,4 +789,6 @@ static struct rte_vdev_driver pmd_enetfec_drv = {
 };
 
 RTE_PMD_REGISTER_VDEV(ENETFEC_NAME_PMD, pmd_enetfec_drv);
+RTE_PMD_REGISTER_PARAM_STRING(ENETFEC_NAME_PMD,
+                NXP_RESERVE_MEMORY "=<int>");
 RTE_LOG_REGISTER_DEFAULT(enetfec_logtype_pmd, NOTICE);

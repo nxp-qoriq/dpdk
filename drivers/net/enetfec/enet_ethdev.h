@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2020-2024 NXP
+ * Copyright 2020-2025 NXP
  */
 
 #ifndef __ENETFEC_ETHDEV_H__
 #define __ENETFEC_ETHDEV_H__
 
 #include <rte_ethdev.h>
+#include <dpaax_usermem.h>
 
 #define BD_LEN			49152
 #define ENETFEC_TX_FR_SIZE	2048
@@ -161,6 +162,9 @@ struct enetfec_private {
 	void			*dma_baseaddr_t[ENETFEC_MAX_Q];
 	struct enetfec_priv_rx_q *rx_queues[ENETFEC_MAX_Q];
 	struct enetfec_priv_tx_q *tx_queues[ENETFEC_MAX_Q];
+	uint8_t			reserve;
+	struct dpaax_usmem_alloc alloc;
+	struct dpaax_usmem_ctx ctx;
 };
 
 static inline struct
