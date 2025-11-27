@@ -5,6 +5,8 @@
 #define  __ENETQOS_ETHDEV_
 
 #include <rte_ethdev.h>
+#include <compat.h>
+#include <dpaax_usermem.h>
 
 #define ENETQOS_NAME_PMD	net_enetqos
 
@@ -56,11 +58,6 @@
 
 #define STMMAC_GET_ENTRY(x, size)	((x + 1) & (size - 1))
 #define MAP_PAGE_SIZE			4096
-
-#define lower_32_bits(x)	((uint32_t)((uint64_t)x))
-#define upper_32_bits(x)	((uint32_t)(((uint64_t)(x) >> 16) >> 16))
-
-typedef	unsigned long long	dma_addr_t;
 
 #if defined(RTE_ARCH_ARM) && defined(RTE_ARCH_64)
 #define dcbf(p) { asm volatile("dc cvac, %0" : : "r"(p) : "memory"); }
@@ -149,6 +146,9 @@ struct enetqos_priv {
 	uint32_t		rx_queues_to_use;
 	uint32_t		tx_queues_to_use;
 	void		*ioaddr;
+	uint8_t		reserve;
+	struct dpaax_usmem_alloc alloc;
+	struct dpaax_usmem_ctx ctx;
 };
 
 struct enetqos_dma_cfg {

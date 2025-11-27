@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2023-2024 NXP
+ * Copyright 2023-2025 NXP
  */
 
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include <rte_memzone.h>
 #include <rte_io.h>
+#include <rte_kvargs.h>
 
 #include "enetqos_hw.h"
 #include "enetqos_ethdev.h"
@@ -19,6 +21,58 @@
 
 /* Supported Rx offloads */
 static uint64_t dev_rx_offloads_sup = RTE_ETH_RX_OFFLOAD_CHECKSUM;
+
+static int
+check_devargs_handler(__rte_unused const char *key, const char *value,
+		      __rte_unused void *opaque)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev*)opaque;
+	struct enetqos_priv *hw = dev->data->dev_private;
+	long unsigned num;
+
+	num = strtoul(value, NULL, 10);
+
+	hw->reserve = 1;
+	if (num < DPAAX_SIZE_256KB) {
+		ENETQOS_PMD_WARN("Too less requested memory 0x%lx, changed to 2MB",
+				num);
+		num = DPAAX_SIZE_2MB;
+	}
+	hw->alloc.request_mem = num;
+	hw->alloc.res.mem_cp = NXP_CP_WC;
+	ENETQOS_PMD_DEBUG("Requested reserve memory = 0x%lx", hw->alloc.request_mem);
+
+	return 0;
+}
+
+static int
+enetqos_get_devargs(struct rte_eth_dev *dev, const char *key)
+{
+	struct rte_kvargs *kvlist;
+	struct rte_devargs *devargs;
+
+	devargs = dev->device->devargs;
+	if (!devargs)
+		return 0;
+
+	kvlist = rte_kvargs_parse(devargs->args, NULL);
+	if (!kvlist)
+		return 0;
+
+	if (!rte_kvargs_count(kvlist, key)) {
+		rte_kvargs_free(kvlist);
+		return 0;
+	}
+
+	if (rte_kvargs_process(kvlist, key,
+			       check_devargs_handler, (void *)dev) < 0) {
+		rte_kvargs_free(kvlist);
+		return 0;
+	}
+	rte_kvargs_free(kvlist);
+
+	return 1;
+}
 
 static void
 enetqos_free_buffers(struct rte_eth_dev *dev)
@@ -1106,31 +1160,50 @@ pmd_enetqos_probe(struct rte_vdev_device *vdev)
 	uint16_t *mac, high_mac = 0;
 	struct rte_ether_addr addr;
 	struct enetqos_priv *priv;
-	int bd_total = 0, fd = -1;
-	uint32_t low_mac = 0;
+	int fd = -1;
+	uint32_t low_mac = 0, bd_total = 0;
 	const char *name;
 	int ret, rt, cnt;
 	char *dtb_entry;
 	FILE *file;
+	uint32_t phy;
+	uint64_t virt;
 
 	PMD_INIT_FUNC_TRACE();
+
 	name = rte_vdev_device_name(vdev);
-	ENETQOS_PMD_LOG(INFO, "Initializing pmd_fec for %s", name);
+	ENETQOS_PMD_LOG(INFO, "Initializing pmd_qos for %s", name);
 
 	dev = rte_eth_vdev_allocate(vdev, sizeof(*priv));
 	if (dev == NULL)
 		return -ENOMEM;
 
+	enetqos_get_devargs(dev, NXP_RESERVE_MEMORY);
 	priv = dev->data->dev_private;
-
-	/* BD memory is 160kb so reserving a max of 2MB memory */
-	bd_total = SIZE_2MB;
-
-	if (mark_memory_ncache(priv, mz_name, bd_total)) {
-		ENETQOS_PMD_ERR("Failed to mark BD memory non-cacheable!");
-		rt = -1;
-		goto err;
+	if (priv->reserve) {
+		rt = dpaax_alloc_reserve_memctx(NXP_USMEM_DEVICE, &priv->ctx);
+		if (rt != 0) {
+			ENETQOS_PMD_ERR("Fails to get CTX for device =%s", NXP_USMEM_DEVICE);
+			goto err1;
+		}
+		rt = dpaax_alloc_reserve_memory(&priv->ctx, &priv->alloc);
+		if (rt != 0)
+			goto err;
+		virt = priv->alloc.virt_addr;
+		phy = priv->alloc.phy_addr;
+		bd_total = priv->alloc.size;
+		priv->bd_addr_v = (void *)virt;
+		priv->bd_addr_p = phy;
+	} else {
+		if (mark_memory_ncache(priv, mz_name, bd_total)) {
+			ENETQOS_PMD_ERR("Failed to mark BD memory non-cacheable!");
+			rt = -1;
+			goto err;
+		}
 	}
+
+	ENETQOS_PMD_LOG(INFO,"QOS Ring Base virtual = %p, Physical = %lx",
+			priv->bd_addr_v, priv->bd_addr_p);
 
 	file = fopen("/proc/device-tree/aliases/ethernet1", "r");
 	if (file) {
@@ -1230,6 +1303,8 @@ pmd_enetqos_probe(struct rte_vdev_device *vdev)
 
 	return 0;
 err:
+	dpaax_release_reserve_memctx(&priv->ctx);
+err1:
 	rte_eth_dev_release_port(dev);
 	return rt;
 }
@@ -1238,11 +1313,19 @@ static int
 pmd_enetqos_remove(struct rte_vdev_device *vdev)
 {
 	struct rte_eth_dev *eth_dev;
+	struct enetqos_priv *priv;
 
 	PMD_INIT_FUNC_TRACE();
         eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(vdev));
         if (eth_dev == NULL)
                 return 0;
+
+	priv = eth_dev->data->dev_private;
+	if (priv->reserve) {
+		dpaax_release_reserve_memory(&priv->ctx, &priv->alloc);
+		dpaax_release_reserve_memctx(&priv->ctx);
+		priv->reserve = 0;
+	}
 
 	return enetqos_eth_close(eth_dev);
 }
@@ -1253,4 +1336,6 @@ static struct rte_vdev_driver pmd_enetqos_drv = {
 };
 
 RTE_PMD_REGISTER_VDEV(ENETQOS_NAME_PMD, pmd_enetqos_drv);
+RTE_PMD_REGISTER_PARAM_STRING(ENETQOS_NAME_PMD,
+	NXP_RESERVE_MEMORY "=<int>");
 RTE_LOG_REGISTER_DEFAULT(enetqos_logtype_pmd, NOTICE);
