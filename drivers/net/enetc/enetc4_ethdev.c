@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2024 NXP
+ * Copyright 2024-2025 NXP
  */
 
 #include <stdbool.h>
+
 #include <ethdev_pci.h>
 #include <rte_random.h>
 #include <dpaax_iova_table.h>
@@ -24,6 +25,29 @@ static uint64_t dev_tx_offloads_sup =
 	RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
 
 #define ENETC4_TXQ_PRIORITIES "enetc4_txq_prior"
+
+static int parse_reserve(const char *key __rte_unused,
+			 const char *value __rte_unused,
+			 void *opaque)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev*)opaque;
+	struct enetc_eth_hw *hw =
+				ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	long unsigned num;
+
+	num = strtoul(value, NULL, 10);
+	hw->reserve = 1;
+	if (num < DPAAX_SIZE_256KB) {
+		ENETC_PMD_WARN("Too less requested memory 0x%lx, changed to 2MB",
+				num);
+		num = DPAAX_SIZE_2MB;
+	}
+	hw->alloc.request_mem = num;
+	hw->alloc.res.mem_cp = NXP_CP_WC;
+	ENETC_PMD_DEBUG("Requested reserve memory = 0x%" PRIx64, hw->alloc.request_mem);
+
+	return 0;
+}
 
 static int parse_txq_prior(const char *key __rte_unused, const char *value,
 				void *opaque)
@@ -70,10 +94,19 @@ enetc4_get_devargs(struct rte_eth_dev *dev, const char *key)
 		return 0;
 	}
 
-	if (rte_kvargs_process(kvlist, key,
+	if (!strcmp(key, ENETC4_TXQ_PRIORITIES)) {
+		if (rte_kvargs_process(kvlist, key,
 					parse_txq_prior, (void *)dev) < 0) {
-		rte_kvargs_free(kvlist);
-		return -1;
+			rte_kvargs_free(kvlist);
+			return 0;
+		}
+	}
+	if (!strcmp(key, NXP_RESERVE_MEMORY)) {
+		if (rte_kvargs_process(kvlist, key,
+					parse_reserve, (void *)dev) < 0) {
+			rte_kvargs_free(kvlist);
+			return 0;
+		}
 	}
 	rte_kvargs_free(kvlist);
 
@@ -313,18 +346,37 @@ enetc4_alloc_txbdr(uint16_t port_id, struct enetc_bdr *txr, uint16_t nb_desc)
 {
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	int size;
+	struct enetc_eth_hw *hw =
+		ENETC_DEV_PRIVATE_TO_HW(txr->ndev->data->dev_private);
+	uint32_t offset;
 
 	size = nb_desc * sizeof(struct enetc_swbd);
 	txr->q_swbd = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (txr->q_swbd == NULL)
 		return -ENOMEM;
 
-	snprintf(mz_name, sizeof(mz_name), "bdt_addr_%d_%d", port_id, txr->index);
-	if (mark_memory_ncache(txr, mz_name, SIZE_2MB)) {
-		ENETC_PMD_ERR("Failed to mark BD memory non-cacheable!");
-		rte_free(txr->q_swbd);
-		txr->q_swbd = NULL;
-		return -ENOMEM;
+	if (hw->reserve) {
+		if ((nb_desc * sizeof(struct enetc_tx_bd)) > hw->max_queue_size) {
+			ENETC_PMD_ERR("Not enough reserve memory!");
+			rte_free(txr->q_swbd);
+			txr->q_swbd = NULL;
+			return -ENOMEM;
+		}
+		offset = (txr->ndev->data->nb_rx_queues * hw->max_queue_size) +
+			(txr->index * hw->max_queue_size);
+		txr->bd_base = (void *)(uintptr_t)(hw->alloc.virt_addr + offset);
+		txr->bd_base_p = hw->alloc.phy_addr + offset;
+		ENETC_PMD_LOG(INFO,"ENETC TX Ring %d, Base virtual = %p, Physical = %" PRIx64,
+			txr->index, txr->bd_base, txr->bd_base_p);
+	} else {
+		snprintf(mz_name, sizeof(mz_name), "bdt_addr_%d_%d", port_id, txr->index);
+		if (mark_memory_ncache(txr, mz_name, SIZE_2MB)) {
+			ENETC_PMD_ERR("Failed to mark BD memory non-cacheable!");
+			rte_free(txr->q_swbd);
+			txr->q_swbd = NULL;
+			return -ENOMEM;
+		}
+		txr->bd_base_p = 0;
 	}
 	txr->bd_count = nb_desc;
 	txr->next_to_clean = 0;
@@ -336,13 +388,18 @@ enetc4_alloc_txbdr(uint16_t port_id, struct enetc_bdr *txr, uint16_t nb_desc)
 static void
 enetc4_free_bdr(struct enetc_bdr *rxr)
 {
+	struct enetc_eth_hw *hw =
+		ENETC_DEV_PRIVATE_TO_HW(rxr->ndev->data->dev_private);
+
+	if (!hw->reserve) {
 #ifdef RTE_IMX_MEMZONE_RING_MEMORY
-	rte_memzone_free(rxr->mz);
-	rxr->mz = NULL;
+		rte_memzone_free(rxr->mz);
+		rxr->mz = NULL;
 #else
-	rte_eal_memalloc_free_seg(rxr->memseg);
-	rxr->memseg = NULL;
+		rte_eal_memalloc_free_seg(rxr->memseg);
+		rxr->memseg = NULL;
 #endif
+	}
 	rte_free(rxr->q_swbd);
 	rxr->q_swbd = NULL;
 	rxr->bd_base = NULL;
@@ -353,9 +410,15 @@ enetc4_setup_txbdr(struct enetc_hw *hw, struct enetc_bdr *tx_ring)
 {
 	int idx = tx_ring->index;
 	phys_addr_t bd_address;
+	struct enetc_eth_hw *phw =
+		ENETC_DEV_PRIVATE_TO_HW(tx_ring->ndev->data->dev_private);
 
-	bd_address = (phys_addr_t)
-		     rte_mem_virt2iova((const void *)tx_ring->bd_base);
+	if (phw->reserve)
+		bd_address = (phys_addr_t)tx_ring->bd_base_p;
+	else
+		bd_address = (phys_addr_t)
+			     rte_mem_virt2iova((const void *)tx_ring->bd_base);
+
 	enetc4_txbdr_wr(hw, idx, ENETC_TBBAR0,
 		       lower_32_bits((uint64_t)bd_address));
 	enetc4_txbdr_wr(hw, idx, ENETC_TBBAR1,
@@ -397,11 +460,11 @@ enetc4_tx_queue_setup(struct rte_eth_dev *dev,
 	}
 
 	tx_ring->index = queue_idx;
+	tx_ring->ndev = dev;
 	err = enetc4_alloc_txbdr(data->port_id, tx_ring, nb_desc);
 	if (err)
 		goto fail;
 
-	tx_ring->ndev = dev;
 	enetc4_setup_txbdr(&priv->hw.hw, tx_ring);
 	data->tx_queues[queue_idx] = tx_ring;
 
@@ -475,19 +538,39 @@ enetc4_alloc_rxbdr(uint16_t port_id, struct enetc_bdr *rxr,
 {
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	int size;
+	struct enetc_eth_hw *hw =
+		ENETC_DEV_PRIVATE_TO_HW(rxr->ndev->data->dev_private);
+	uint32_t offset;
 
 	size = nb_desc * sizeof(struct enetc_swbd);
 	rxr->q_swbd = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (rxr->q_swbd == NULL)
 		return -ENOMEM;
 
-	snprintf(mz_name, sizeof(mz_name), "bdr_addr_%d_%d", port_id, rxr->index);
-	if (mark_memory_ncache(rxr, mz_name, SIZE_2MB)) {
-		ENETC_PMD_ERR("Failed to mark BD memory non-cacheable!");
-		rte_free(rxr->q_swbd);
-		rxr->q_swbd = NULL;
-		return -ENOMEM;
+	if (hw->reserve) {
+		if ((nb_desc * sizeof(union enetc_rx_bd)) > hw->max_queue_size) {
+			ENETC_PMD_ERR("Not enough reserve memory for RX!");
+			rte_free(rxr->q_swbd);
+			rxr->q_swbd = NULL;
+			return -ENOMEM;
+		}
+		offset = rxr->index * hw->max_queue_size;
+		rxr->bd_base = (void *)(uintptr_t)(hw->alloc.virt_addr + offset);
+		rxr->bd_base_p = hw->alloc.phy_addr + offset;
+
+		ENETC_PMD_LOG(INFO,"ENETC RX Ring %d Base virtual = %p, Physical = %" PRIx64,
+			rxr->index, rxr->bd_base, rxr->bd_base_p);
+	} else {
+		snprintf(mz_name, sizeof(mz_name), "bdr_addr_%d_%d", port_id, rxr->index);
+		if (mark_memory_ncache(rxr, mz_name, SIZE_2MB)) {
+			ENETC_PMD_ERR("Failed to mark BD memory non-cacheable!");
+			rte_free(rxr->q_swbd);
+			rxr->q_swbd = NULL;
+			return -ENOMEM;
+		}
+		rxr->bd_base_p = 0;
 	}
+
 	rxr->bd_count = nb_desc;
 	rxr->next_to_clean = 0;
 	rxr->next_to_use = 0;
@@ -503,9 +586,14 @@ enetc4_setup_rxbdr(struct enetc_hw *hw, struct enetc_bdr *rx_ring,
 	int idx = rx_ring->index;
 	uint16_t buf_size;
 	phys_addr_t bd_address;
+	struct enetc_eth_hw *phw =
+		ENETC_DEV_PRIVATE_TO_HW(rx_ring->ndev->data->dev_private);
 
-	bd_address = (phys_addr_t)
-		     rte_mem_virt2iova((const void *)rx_ring->bd_base);
+	if (phw->reserve)
+		bd_address = (phys_addr_t)rx_ring->bd_base_p;
+	else
+		bd_address = (phys_addr_t)
+			rte_mem_virt2iova((const void *)rx_ring->bd_base);
 
 	enetc4_rxbdr_wr(hw, idx, ENETC_RBBAR0,
 		       lower_32_bits((uint64_t)bd_address));
@@ -551,11 +639,11 @@ enetc4_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 
 	rx_ring->index = rx_queue_id;
+	rx_ring->ndev = dev;
 	err = enetc4_alloc_rxbdr(data->port_id, rx_ring, nb_rx_desc);
 	if (err)
 		goto fail;
 
-	rx_ring->ndev = dev;
 	enetc4_setup_rxbdr(&adapter->hw.hw, rx_ring, mb_pool);
 	data->rx_queues[rx_queue_id] = rx_ring;
 
@@ -710,7 +798,11 @@ enetc4_dev_close(struct rte_eth_dev *dev)
 		dev->data->tx_queues[i] = NULL;
 	}
 	dev->data->nb_tx_queues = 0;
-
+	if (hw->reserve) {
+		dpaax_release_reserve_memory(&hw->ctx, &hw->alloc);
+		dpaax_release_reserve_memctx(&hw->ctx);
+		hw->reserve = 0;
+	}
 	if (rte_eal_iova_mode() == RTE_IOVA_PA)
 		dpaax_iova_table_depopulate();
 
@@ -819,7 +911,40 @@ enetc4_dev_configure(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_tx_queues; i++)
 		enetc4_rxbdr_wr(enetc_hw, i, ENETC_TBMR, ENETC_BMR_RESET);
 
+	hw->reserve = 0;
 	enetc4_get_devargs(dev, ENETC4_TXQ_PRIORITIES);
+	enetc4_get_devargs(dev, NXP_RESERVE_MEMORY);
+
+	if (hw->reserve) {
+		struct nxp_usmem_info info;
+
+		ret = dpaax_alloc_reserve_memctx(NXP_USMEM_DEVICE, &hw->ctx);
+		if (ret != 0) {
+			ENETC_PMD_ERR("Not able to get usmem ctx for device = %s", NXP_USMEM_DEVICE);
+			return ret;
+		}
+		ret = dpaax_alloc_reserve_memory(&hw->ctx, &hw->alloc);
+		if (ret != 0) {
+			ENETC_PMD_ERR("No reserve memory");
+			dpaax_release_reserve_memctx(&hw->ctx);
+			return ret;
+		}
+		ret = dpaax_get_reserve_meminfo(&hw->ctx, &info);
+		if (ret != 0) {
+			ENETC_PMD_ERR("Fails to get reserve memory info");
+			dpaax_release_reserve_memctx(&hw->ctx);
+			return ret;
+		}
+		ENETC_PMD_DEBUG("allocated virtual = 0x%" PRIx64", physical = 0x%" PRIx64", "
+				"size = 0x%" PRIx64" chunk_size = 0x%lx, "
+				"free chunks = %lu\n",
+				hw->alloc.virt_addr,
+				hw->alloc.phy_addr, hw->alloc.size,
+				info.chunk_size, info.free_chunks);
+		/* set maximum available queue size */
+		hw->max_queue_size = hw->alloc.size /
+			(dev->data->nb_rx_queues + dev->data->nb_tx_queues);
+	}
 
 	if (dev->data->nb_rx_queues <= 1)
 		return 0;
@@ -856,6 +981,7 @@ enetc4_dev_configure(struct rte_eth_dev *dev)
 		if (!rss_table) {
 			enetc4_rss_configure(enetc_hw, false);
 			netc_free_cbdr(&hw->cbdr);
+			dpaax_release_reserve_memctx(&hw->ctx);
 			return -ENOMEM;
 		}
 
@@ -1132,6 +1258,7 @@ static struct rte_pci_driver rte_enetc4_pmd = {
 RTE_PMD_REGISTER_PCI(net_enetc4, rte_enetc4_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_enetc4, pci_id_enetc4_map);
 RTE_PMD_REGISTER_PARAM_STRING(net_enetc4,
-				ENETC4_TXQ_PRIORITIES "=<string>");
+				ENETC4_TXQ_PRIORITIES "=<string>"
+				NXP_RESERVE_MEMORY "=<int>");
 RTE_PMD_REGISTER_KMOD_DEP(net_enetc4, "* vfio-pci | enetc4_uio");
 RTE_LOG_REGISTER_DEFAULT(enetc4_logtype_pmd, NOTICE);

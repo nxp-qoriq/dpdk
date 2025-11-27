@@ -466,6 +466,11 @@ Below are the details of mmcargs/bootargs:
 	Note: i.MX8DXL and i.MX93 has only 2 cores, but to reserve the core 1 for dpdk we can provide core_list=1 for both platforms.
 	      i.MX91 has only core 0, so option 'isolcpus' should not be used.
 
+Reserved memory support:
+------------------------
+Reserve memory is supported for eQoS, FEC and ENETC4 drivers rings via devargs "resv_mem". The value of resv_mem is the size of memory in bytes.
+Default size is 2MB. Refer to nxp/README_usermem for more details.
+
 For optimized performance on i.MX platforms:
 --------------------------------------------
 1. Add the below params in mmcargs to set the CPU to not go into idle mode:
