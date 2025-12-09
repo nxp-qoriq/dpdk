@@ -461,6 +461,12 @@ enetc4_tx_queue_setup(struct rte_eth_dev *dev,
 
 	tx_ring->index = queue_idx;
 	tx_ring->ndev = dev;
+	/* reset queue */
+	tx_data = enetc4_txbdr_rd(&priv->hw.hw, tx_ring->index,
+			       ENETC_TBMR);
+	tx_data &= ~ENETC_TBMR_EN;
+	enetc4_txbdr_wr(&priv->hw.hw, tx_ring->index,
+			       ENETC_TBMR, tx_data);
 	err = enetc4_alloc_txbdr(data->port_id, tx_ring, nb_desc);
 	if (err)
 		goto fail;
@@ -626,6 +632,7 @@ enetc4_rx_queue_setup(struct rte_eth_dev *dev,
 	struct enetc_eth_adapter *adapter =
 			ENETC_DEV_PRIVATE(data->dev_private);
 	uint64_t rx_offloads = data->dev_conf.rxmode.offloads;
+	uint32_t rx_enable;
 
 	PMD_INIT_FUNC_TRACE();
 	if (nb_rx_desc > MAX_BD_COUNT)
@@ -640,6 +647,12 @@ enetc4_rx_queue_setup(struct rte_eth_dev *dev,
 
 	rx_ring->index = rx_queue_id;
 	rx_ring->ndev = dev;
+	/* reset queue */
+	rx_enable = enetc4_rxbdr_rd(&adapter->hw.hw, rx_ring->index,
+			       ENETC_RBMR);
+	rx_enable &= ~ENETC_RBMR_EN;
+	enetc4_rxbdr_wr(&adapter->hw.hw, rx_ring->index,
+			       ENETC_RBMR, rx_enable);
 	err = enetc4_alloc_rxbdr(data->port_id, rx_ring, nb_rx_desc);
 	if (err)
 		goto fail;
