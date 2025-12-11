@@ -759,9 +759,6 @@ Forwarding between both FEC and QOS:
 ENETC-4 with i.mx95
 ~~~~~~~~~~~~~~~~~~~~~
 
-Linux kernel on ARM core owned ENETC PF interface
-=================================================
-
 Note: Refer 'Cross compiled toolchain For ARM64' section in nxp/README
 	$ meson arm64-build --cross-file config/arm/arm64_imx_linux_gnu_gcc -Dexamples=all
 	$ ninja -C arm64-build
@@ -779,6 +776,22 @@ Generic steps on i.MX95 before running dpdk:
 	Note: Refer ENET-QOS section for detailed compilation info about this module.
 5. Manually allocate hugepages
 	echo 512 > /proc/sys/vm/nr_hugepages
+
+For running ENETC PF ports in DPDK:
+------------------------------------
+
+1. Load the enetc4_uio module to enable DPDK functionality for external PF interfaces.
+        $ modprobe enetc4_uio.ko
+
+2. Bind the PFs to the DPDK-compatible enetc4_uio driver
+        $ dpdk-devbind.py -b enetc4_uio 0002:00:10.0
+
+3. Run dpdk-application:
+        $ dpdk-l2fwd -c 0x3 -n 1 -- -p 0x1 -T 0
+        $ dpdk-l3fwd -c 0x2 -n 1 -- -p 0x1 --config="(0,0,1)"
+        $ dpdk-testpmd -c 0x3 -n 1 -- -i --portmask=0x1 --forward-mode=mac
+                testpmd> set promisc all off
+                testpmd> start
 
 Multi-queue:
 ============
@@ -815,7 +828,8 @@ pci/0002:00:10.0:
 
 
 Running VFs in DPDK:
-====================
+(Linux kernel on ARM core owned ENETC PF interface)
+===================================================
 
 Note:
 Max 2 VFs are supported per ENETC, follow the same steps as below to run DPDK on
@@ -1108,6 +1122,31 @@ Notes:
 ===============================================================================
 DPDK on i.mx943:
 ----------------
+
+For running external ENETC PF ports in DPDK:
+--------------------------------------------
+
+1. Set the below dtb file:
+	uboot> setenv fdtfile imx943-evk.dtb;
+
+2. Load the enetc4_uio module to enable DPDK functionality for external PF interfaces.
+	$ modprobe enetc4_uio.ko
+
+3. Bind the PFs to the DPDK-compatible enetc4_uio driver
+	$ dpdk-devbind.py -b enetc4_uio 0001:01:08.0
+
+4. Load the non-cacheable module:
+        $ modprobe kpage_ncache.ko
+
+5. Allocate hugepages for DPDK memory
+	$ echo 512 > /proc/sys/vm/nr_hugepages
+
+6. Run dpdk-application:
+	$ dpdk-l2fwd -c 0x3 -n 1 -- -p 0x1 -T 0
+	$ dpdk-l3fwd -c 0x2 -n 1 -- -p 0x1 --config="(0,0,1)"
+	$ dpdk-testpmd -c 0x3 -n 1 -- -i --portmask=0x1 --forward-mode=mac
+		testpmd> set promisc all off
+		testpmd> start
 
 Note:
 Only the internal ENETC port supports VF, which is connected to the switch
