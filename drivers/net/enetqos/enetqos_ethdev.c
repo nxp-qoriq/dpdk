@@ -1161,7 +1161,7 @@ pmd_enetqos_probe(struct rte_vdev_device *vdev)
 	struct rte_ether_addr addr;
 	struct enetqos_priv *priv;
 	int fd = -1;
-	uint32_t low_mac = 0, bd_total = 0;
+	uint32_t low_mac = 0, bd_total = SIZE_2MB;
 	const char *name;
 	int ret, rt, cnt;
 	char *dtb_entry;
