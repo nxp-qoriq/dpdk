@@ -2,16 +2,28 @@
   "SPDXID": "SPDXRef-DOCUMENT",
   "spdxVersion": "SPDX-2.3",
   "creationInfo": {
-    "created": "2025-11-12T06:49:17Z",
+    "created": "2026-01-30T02:31:56Z",
     "creators": [
       "Organization: NXP"
     ],
-    "licenseListVersion": "3.20"
+    "licenseListVersion": "3.26"
   },
-  "name": "dpdk-LF_6.12.49_2.2.0",
+  "name": "dpdk-LF_6.18.2_1.0.0",
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://nxp.com/spdx/c1a913c1-0465-4326-892b-371ce0467afd",
+  "documentNamespace": "https://nxp.com/spdx/8073b94b-aac5-4e2c-8f83-ac6768241b2d",
   "packages": [
+    {
+      "SPDXID": "SPDXRef-package-8073b94b-aac5-4e2c-8f83-ac6768241b2d",
+      "name": "dpdk",
+      "versionInfo": "LF_6.18.2_1.0.0",
+      "licenseConcluded": "(BSD-3-Clause)",
+      "licenseDeclared": "(BSD-3-Clause)",
+      "downloadLocation": "https://github.com/nxp-qoriq/dpdk -b lf-6.18.2-1.0.0",
+      "originator": "Organization: NXP",
+      "supplier": "NOASSERTION",
+      "externalRefs": [],
+      "filesAnalyzed": false
+    },
     {
       "SPDXID": "SPDXRef-package-224aea76-9662-4a07-bd96-361315743c4d",
       "name": "DPDK",
@@ -24,18 +36,13 @@
       "supplier": "NOASSERTION",
       "externalRefs": [
         {
-          "referenceCategory": "SECURITY",
-          "referenceLocator": "cpe:2.3:a:redhat_package:dpdk-doc:22.11:4.el9_2:*:*:*:*:*:*",
-          "referenceType": "cpe23Type"
+          "referenceCategory": "OTHER",
+          "referenceLocator": "820c5313-2491-4543-ab1b-6dceb6adaad4",
+          "referenceType": "BlackDuck-ComponentOrigin"
         },
         {
           "referenceCategory": "SECURITY",
           "referenceLocator": "cpe:2.3:a:dpdk:data_plane_development_kit:22.11:*:*:*:*:*:*:*",
-          "referenceType": "cpe23Type"
-        },
-        {
-          "referenceCategory": "SECURITY",
-          "referenceLocator": "cpe:2.3:a:redhat_package:dpdk-debuginfo:22.11:4.el9_2:*:*:*:*:*:*",
           "referenceType": "cpe23Type"
         },
         {
@@ -45,40 +52,33 @@
         },
         {
           "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:redhat_package:dpdk-debuginfo:22.11:4.el9_2:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
           "referenceLocator": "cpe:2.3:a:redhat_package:dpdk-devel:22.11:4.el9_2:*:*:*:*:*:*",
           "referenceType": "cpe23Type"
         },
         {
-          "referenceCategory": "OTHER",
-          "referenceLocator": "820c5313-2491-4543-ab1b-6dceb6adaad4",
-          "referenceType": "BlackDuck-ComponentOrigin"
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:redhat_package:dpdk-doc:22.11:4.el9_2:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
         }
       ],
-      "filesAnalyzed": false
-    },
-    {
-      "SPDXID": "SPDXRef-package-c1a913c1-0465-4326-892b-371ce0467afd",
-      "name": "dpdk",
-      "versionInfo": "LF_6.12.49_2.2.0",
-      "licenseConcluded": "(BSD-3-Clause)",
-      "licenseDeclared": "(BSD-3-Clause)",
-      "downloadLocation": "https://github.com/nxp-qoriq/dpdk -b lf-6.12.49-2.2.0",
-      "originator": "Organization: NXP",
-      "supplier": "NOASSERTION",
-      "externalRefs": [],
       "filesAnalyzed": false
     }
   ],
   "relationships": [
     {
-      "spdxElementId": "SPDXRef-package-c1a913c1-0465-4326-892b-371ce0467afd",
-      "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-package-224aea76-9662-4a07-bd96-361315743c4d"
-    },
-    {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-package-c1a913c1-0465-4326-892b-371ce0467afd"
+      "relatedSpdxElement": "SPDXRef-package-8073b94b-aac5-4e2c-8f83-ac6768241b2d"
+    },
+    {
+      "spdxElementId": "SPDXRef-package-8073b94b-aac5-4e2c-8f83-ac6768241b2d",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-package-224aea76-9662-4a07-bd96-361315743c4d"
     }
   ]
 }
