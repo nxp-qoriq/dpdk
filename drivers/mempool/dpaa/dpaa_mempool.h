@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2017,2019,2024 -2026 NXP
+ *   Copyright 2017,2019,2024-2026 NXP
  *
  */
 #ifndef __DPAA_MEMPOOL_H__
