@@ -1390,6 +1390,7 @@ dpaa_eth_queue_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 					goto send_pkts;
 				}
 				mbuf = temp_mbuf;
+				bp_info = DPAA_MEMPOOL_TO_POOL_INFO(mbuf->pool);
 				realloc_mbuf = 0;
 			}
 indirect_buf:
