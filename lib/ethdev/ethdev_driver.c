@@ -15,13 +15,6 @@
 #include "ethdev_private.h"
 #include "rte_flow_driver.h"
 
-int rte_eth_quit;
-
-RTE_EXPORT_INTERNAL_SYMBOL(rte_eth_get_quit)
-int rte_eth_get_quit(void)
-{
-	return rte_eth_quit;
-}
 /**
  * A set of values to describe the possible states of a switch domain.
  */

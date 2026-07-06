@@ -45,11 +45,6 @@ struct eth_queue_stats {
 	uint64_t q_errors[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
-extern int rte_eth_quit;
-
-__rte_internal
-int rte_eth_get_quit(void);
-
 /**
  * @internal
  * Structure used to hold information about the callbacks to be called for a
@@ -77,7 +72,6 @@ struct rte_eth_rxtx_callback {
 struct __rte_cache_aligned rte_eth_dev {
 	eth_rx_burst_t rx_pkt_burst; /**< Pointer to PMD receive function */
 	eth_tx_burst_t tx_pkt_burst; /**< Pointer to PMD transmit function */
-	eth_loopback_burst_t lb_pkt_burst; /**< Pointer to PMD loopback function */
 
 	/** Pointer to PMD transmit prepare function */
 	eth_tx_prep_t tx_pkt_prepare;

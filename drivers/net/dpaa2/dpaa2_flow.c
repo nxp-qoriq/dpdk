@@ -993,10 +993,7 @@ dpaa2_flow_faf_advance(struct dpaa2_dev_priv *priv,
 	prot.key_field = faf_byte;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		1, &offset, insert_offset, &prot);
-	if (offset != 0xff) {
-		dpaa2_flow_rule_insert_hole(priv, offset, 1, tc_id,
-			dist_type);
-	}
+	dpaa2_flow_rule_insert_hole(priv, offset, 1, tc_id, dist_type);
 
 	return idx;
 }
@@ -1025,10 +1022,7 @@ dpaa2_flow_pr_advance(struct dpaa2_dev_priv *priv,
 	prot.key_field = (pr_offset << 16) | pr_size;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		pr_size, &offset, insert_offset, &prot);
-	if (offset != 0xff) {
-		dpaa2_flow_rule_insert_hole(priv, offset, pr_size, tc_id,
-			dist_type);
-	}
+	dpaa2_flow_rule_insert_hole(priv, offset, pr_size, tc_id, dist_type);
 
 	return idx;
 }
@@ -1070,10 +1064,7 @@ dpaa2_flow_key_profile_advance(enum net_prot prot,
 	prot_field.key_field = field;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(key_profile,
 		field_size, &offset, insert_offset, &prot_field);
-	if (offset != 0xff) {
-		dpaa2_flow_rule_insert_hole(priv, offset,
-			field_size, tc_id, dist_type);
-	}
+	dpaa2_flow_rule_insert_hole(priv, offset, field_size, tc_id, dist_type);
 
 	if (dpaa2_flow_l4_src_port_extract(prot, field)) {
 		key_profile->l4_sp_present = 1;

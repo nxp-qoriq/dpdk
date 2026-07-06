@@ -25,10 +25,11 @@ Note: Please first read nxp/README.
       export MAX_QUEUES=8
       export FS_ENTRIES=8
       export MAX_TCS=8
+      export DPNI_OPTIONS="DPNI_OPT_CUSTOM_CG,DPNI_OPT_HAS_KEY_MASKING,DPNI_OPT_HAS_OPR,DPNI_OPT_OPR_PER_TC"
       source dynamic_dpl.sh dpmac.x
 
   #Start dpdk-testpmd with 16 RXQs and 2 TXQs, RXQ0~RXQ7 are in TC0 and reset RXQs are in TC1..
-      ./dpdk-testpmd  --lcores='0,1,2,3,4@0' --main-lcore 0 -n 1 -- -i --nb-cores=4 --portmask=0x1 --nb-ports=1 --forward-mode=io --rxq=16 --txq=2
+      ./dpdk-testpmd  --lcores='0,1,2,3,4@0' --main-lcore 0 -n 1 -- -i --nb-cores=4 --portmask=0x1 --nb-ports=1 --forward-mode=io --rxq=16 --txq=16
 
   2.1 Test same ingress traffic with multiple flows in TC0.
       #IPv4/UDP packets are redirected to ingress port by hardware, this flow is top priority.

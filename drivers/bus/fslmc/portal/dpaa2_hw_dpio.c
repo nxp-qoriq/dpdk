@@ -289,6 +289,8 @@ dpaa2_configure_stashing(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
 static void dpaa2_put_qbman_swp(struct dpaa2_dpio_dev *dpio_dev)
 {
 	if (dpio_dev) {
+		/** Flush portal DQRR.*/
+		qbman_swp_dqrr_consume(dpio_dev->sw_portal, NULL);
 #ifdef RTE_EVENT_DPAA2
 		dpaa2_dpio_intr_deinit(dpio_dev);
 #endif
@@ -428,6 +430,21 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_dpaa2_free_dpio_device)
 void rte_dpaa2_free_dpio_device(struct dpaa2_dpio_dev *dpio_dev)
 {
 	dpaa2_put_qbman_swp(dpio_dev);
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_dpaa2_available_dpio_device)
+uint16_t
+rte_dpaa2_available_dpio_device(void)
+{
+	struct dpaa2_dpio_dev *dpio_dev = NULL;
+	uint16_t available_num = 0;
+
+	TAILQ_FOREACH(dpio_dev, &dpio_dev_list, next) {
+		if (dpio_dev && !rte_atomic16_read(&dpio_dev->ref_count))
+			available_num++;
+	}
+
+	return available_num;
 }
 
 static void

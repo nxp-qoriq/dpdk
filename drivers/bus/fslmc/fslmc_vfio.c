@@ -1634,7 +1634,7 @@ fslmc_vfio_process_mcp(struct rte_dpaa2_device *dev)
 {
 	int ret;
 	void *v_addr;
-	struct rte_fslmc_bus_info *bus_info = rte_fslmc_bus.bus_info;
+	struct rte_fslmc_bus_info *bus_info = &rte_fslmc_bus.bus_info;
 
 	rte_mcp_ptr_list = malloc(sizeof(void *) * (MC_PORTAL_INDEX + 1));
 	if (!rte_mcp_ptr_list) {

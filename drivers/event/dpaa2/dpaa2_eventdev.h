@@ -15,15 +15,14 @@
 
 #define DPAA2_EVENT_DEFAULT_DPCI_PRIO 0
 
+#define DPAA2_EVENT_MAX_PORTS			16
 #define DPAA2_EVENT_MAX_QUEUES			16
 #define DPAA2_EVENT_MIN_DEQUEUE_TIMEOUT		1
 #define DPAA2_EVENT_MAX_DEQUEUE_TIMEOUT		(UINT32_MAX - 1)
 #define DPAA2_EVENT_PORT_DEQUEUE_TIMEOUT_NS	100UL
-#define DPAA2_EVENT_MAX_QUEUE_FLOWS		2048
+#define DPAA2_EVENT_MAX_QUEUE_FLOWS		1024
 #define DPAA2_EVENT_MAX_QUEUE_PRIORITY_LEVELS	8
 #define DPAA2_EVENT_MAX_EVENT_PRIORITY_LEVELS	0
-#define DPAA2_EVENT_MAX_PORT_DEQUEUE_DEPTH	8
-#define DPAA2_EVENT_MAX_PORT_ENQUEUE_DEPTH	8
 #define DPAA2_EVENT_MAX_NUM_EVENTS		(INT32_MAX - 1)
 
 #define DPAA2_EVENT_QUEUE_ATOMIC_FLOWS		2048
@@ -53,11 +52,10 @@ enum {
  * the ethdev to eventdev with DPAA2 devices.
  */
 
-#define DPAA2_EVENTQ_LINK_CONF_MAX 4 /** Max schedule type + 1.*/
-#define DPAA2_EVENTQ_DPNI_RXQ_ATTACH_MAX 128
+#define DPAA2_EVENTQ_LINK_CONF_MAX (RTE_SCHED_TYPE_PARALLEL + 1) /** Max schedule type + 1.*/
 struct dpaa2_eventq {
 	int valid;
-	void *event_port;
+	uint8_t link_num;
 	/* DPcon device */
 	struct dpaa2_dpcon_dev *dpcon;
 	/* Attached DPCI device */
@@ -66,8 +64,8 @@ struct dpaa2_eventq {
 	uint32_t event_queue_cfg;
 	uint32_t event_queue_id;
 	struct dpaa2_queue *dpci_txqs[DPAA2_EVENTQ_LINK_CONF_MAX];
-	uint8_t dpni_rxq_num;
-	struct dpaa2_queue *dpni_rxqs[DPAA2_EVENTQ_DPNI_RXQ_ATTACH_MAX];
+	uint16_t dpni_rxq_num;
+	struct dpaa2_queue *dpni_rxqs[DPAA2_EVENT_MAX_QUEUE_FLOWS];
 };
 
 struct dpaa2_port {
@@ -77,6 +75,7 @@ struct dpaa2_port {
 	rte_spinlock_t port_lock;
 	int cpu_affine;
 	struct dpaa2_eventq *evq_info[DPAA2_EVENT_MAX_QUEUES];
+	struct dpaa2_eventq *evq_map[DPAA2_EVENT_MAX_QUEUES];
 	uint8_t port_id;
 	uint8_t num_linked_evq;
 	uint64_t timeout_us;

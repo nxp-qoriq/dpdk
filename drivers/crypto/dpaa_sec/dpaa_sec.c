@@ -3360,12 +3360,106 @@ dpaa_sec_security_session_get_size(void *device __rte_unused)
 }
 
 static int
-dpaa_sec_dev_configure(struct rte_cryptodev *dev __rte_unused,
+dpaa_sec_dev_configure(struct rte_cryptodev *dev,
 		       struct rte_cryptodev_config *config __rte_unused)
 {
+	struct dpaa_sec_dev_private *internals;
+	struct dpaa_sec_qp *qp;
+	uint32_t i, j, flags, fqids[RTE_DPAA_MAX_RX_QUEUE];
+	int ret, num = 0;
+
 	PMD_INIT_FUNC_TRACE();
 
+	internals = dev->data->dev_private;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
+	if (internals->config_done == 1)
+		return 0;
+	/* Allocate TX queue FQIDs */
+	num = qman_alloc_fqid_range(fqids, internals->max_nb_queue_pairs, 0, 0);
+	if (num < (int)internals->max_nb_queue_pairs) {
+		if (num < 0) {
+			DPAA_SEC_ERR("%s: Failed(%d) to alloc %d TX fqids",
+				dev->data->name, num,
+				internals->max_nb_queue_pairs);
+		} else {
+			DPAA_SEC_ERR("%s: Alloc %d fqids < %d",
+				dev->data->name, num,
+				internals->max_nb_queue_pairs);
+			qman_release_fqid_range(fqids[0], num);
+		}
+		ret = -ENODEV;
+		goto init_error;
+	}
+
+	for (i = 0; i < internals->max_nb_queue_pairs; i++) {
+		qp = &internals->qps[i];
+		ret = dpaa_sec_init_tx(&qp->outq, fqids[i]);
+		if (ret) {
+			DPAA_SEC_ERR("%s: Failed(%d) to init TXQ[%d](0x%08x)",
+			dev->data->name, ret, i, fqids[i]);
+			goto init_error1;
+		}
+	}
+
+	/* Allocate RX queue FQIDs */
+	flags = QMAN_FQ_FLAG_LOCKED | QMAN_FQ_FLAG_TO_DCPORTAL;
+
+	num = qman_alloc_fqid_range(fqids, RTE_DPAA_MAX_RX_QUEUE, 0, 0);
+	if (num < RTE_DPAA_MAX_RX_QUEUE) {
+		if (num < 0) {
+			DPAA_SEC_ERR("%s: Failed(%d) to alloc %d fqids",
+				dev->data->name, num, RTE_DPAA_MAX_RX_QUEUE);
+		} else {
+			DPAA_SEC_ERR("%s: Alloc %d fqids < %d",
+				dev->data->name, num, RTE_DPAA_MAX_RX_QUEUE);
+			qman_release_fqid_range(fqids[0], num);
+		}
+		goto init_error2;
+	}
+
+	for (i = 0; i < RTE_DPAA_MAX_RX_QUEUE; i++) {
+		ret = qman_create_fq(fqids[i], flags, &internals->inq[i]);
+		if (ret) {
+			DPAA_SEC_ERR("%s: Failed(%d) to create RXQ[%d](0x%08x)",
+				dev->data->name, ret, i, fqids[i]);
+			goto init_error3;
+		}
+	}
+
+	internals->config_done = 1;
 	return 0;
+
+init_error3:
+	for (j = 0; j < i; j++) {
+		ret = qman_shutdown_fq(&internals->inq[j]);
+		if (ret) {
+			DPAA_SEC_ERR("%s: Failed(%d) to shutdown TXQ(0x%08x)",
+				dev->data->name, ret, internals->inq[j].fqid);
+		}
+	}
+	qman_release_fqid_range(fqids[0], RTE_DPAA_MAX_RX_QUEUE);
+
+init_error2:
+	i = internals->max_nb_queue_pairs;
+	fqids[0] = internals->qps[0].outq.fqid;
+
+init_error1:
+	for (j = 0; j < i; j++) {
+		qp = &internals->qps[j];
+		ret = qman_shutdown_fq(&qp->outq);
+		if (ret) {
+			DPAA_SEC_ERR("%s: Failed(%d) to shutdown RXQ(0x%08x)",
+				dev->data->name, ret, fqids[j]);
+		}
+	}
+	qman_release_fqid_range(fqids[0], internals->max_nb_queue_pairs);
+
+init_error:
+	DPAA_SEC_ERR("driver %s: configure failed", dev->data->name);
+	return -EFAULT;
 }
 
 static int
@@ -3634,6 +3728,10 @@ dpaa_sec_uninit(struct rte_cryptodev *dev)
 	if (!dev)
 		return -ENODEV;
 	internals = dev->data->dev_private;
+
+	if (internals->config_done != 1)
+		goto skip_fq;
+
 	fqid = internals->qps[0].outq.fqid;
 	for (i = 0; i < internals->max_nb_queue_pairs; i++) {
 		ret = qman_shutdown_fq(&internals->qps[i].outq);
@@ -3653,7 +3751,7 @@ dpaa_sec_uninit(struct rte_cryptodev *dev)
 		}
 	}
 	qman_release_fqid_range(fqid, RTE_DPAA_MAX_RX_QUEUE);
-
+skip_fq:
 	rte_free(dev->security_ctx);
 	DPAA_SEC_INFO("Closing DPAA_SEC device %s on numa socket %u",
 		dev->data->name, rte_socket_id());
@@ -3702,9 +3800,7 @@ dpaa_sec_dev_init(struct rte_cryptodev *cryptodev)
 {
 	struct dpaa_sec_dev_private *internals;
 	struct rte_security_ctx *security_instance;
-	struct dpaa_sec_qp *qp;
-	uint32_t i, j, flags, fqids[RTE_DPAA_MAX_RX_QUEUE];
-	int ret, num = 0, map_fd = -1;
+	int ret, map_fd = -1;
 	void *cmd_map;
 
 	PMD_INIT_FUNC_TRACE();
@@ -3771,84 +3867,10 @@ dpaa_sec_dev_init(struct rte_cryptodev *cryptodev)
 	security_instance->sess_cnt = 0;
 	cryptodev->security_ctx = security_instance;
 	rte_spinlock_init(&internals->lock);
-	num = qman_alloc_fqid_range(fqids, internals->max_nb_queue_pairs, 0, 0);
-	if (num < (int)internals->max_nb_queue_pairs) {
-		if (num < 0) {
-			DPAA_SEC_ERR("%s: Failed(%d) to alloc %d TX fqids",
-				cryptodev->data->name, num, internals->max_nb_queue_pairs);
-		} else {
-			DPAA_SEC_ERR("%s: Alloc %d fqids < %d",
-				cryptodev->data->name, num, internals->max_nb_queue_pairs);
-			qman_release_fqid_range(fqids[0], num);
-		}
-		ret = -ENODEV;
-		goto init_error;
-	}
-	for (i = 0; i < internals->max_nb_queue_pairs; i++) {
-		/* init qman fq for queue pair */
-		qp = &internals->qps[i];
-		ret = dpaa_sec_init_tx(&qp->outq, fqids[i]);
-		if (ret) {
-			DPAA_SEC_ERR("%s: Failed(%d) to init TXQ[%d](0x%08x)",
-				cryptodev->data->name, ret, i, fqids[i]);
-			goto init_error1;
-		}
-	}
-
-	flags = QMAN_FQ_FLAG_LOCKED | QMAN_FQ_FLAG_TO_DCPORTAL;
-	num = qman_alloc_fqid_range(fqids, RTE_DPAA_MAX_RX_QUEUE, 0, 0);
-	if (num < RTE_DPAA_MAX_RX_QUEUE) {
-		if (num < 0) {
-			DPAA_SEC_ERR("Failed(%d) to alloc %d fqids", ret, RTE_DPAA_MAX_RX_QUEUE);
-		} else {
-			DPAA_SEC_ERR("Alloc %d fqids < %d", ret, RTE_DPAA_MAX_RX_QUEUE);
-			qman_release_fqid_range(fqids[0], num);
-		}
-		goto init_error2;
-	}
-	for (i = 0; i < RTE_DPAA_MAX_RX_QUEUE; i++) {
-		/* create rx qman fq for sessions*/
-		ret = qman_create_fq(fqids[i], flags, &internals->inq[i]);
-		if (ret) {
-			DPAA_SEC_ERR("%s: Failed(%d) to create RXQ[%d](0x%08x)",
-				cryptodev->data->name, ret, i, fqids[i]);
-			goto init_error3;
-		}
-	}
-
 	dpaa_sec_get_devargs(cryptodev->device->devargs, DRIVER_DUMP_MODE);
 
 	DPAA_SEC_INFO("%s cryptodev init", cryptodev->data->name);
 	return 0;
-
-init_error3:
-	for (j = 0; j < i; j++) {
-		ret = qman_shutdown_fq(&internals->inq[j]);
-		if (ret) {
-			DPAA_SEC_ERR("%s: Failed(%d) to shutdown TXQ(0x%08x)",
-				cryptodev->data->name, ret, internals->inq[j].fqid);
-		}
-	}
-	qman_release_fqid_range(fqids[0], RTE_DPAA_MAX_RX_QUEUE);
-init_error2:
-	i = internals->max_nb_queue_pairs;
-	fqids[0] = internals->qps[0].outq.fqid;
-init_error1:
-	for (j = 0; j < i; j++) {
-		qp = &internals->qps[j];
-		ret = qman_shutdown_fq(&qp->outq);
-		if (ret) {
-			DPAA_SEC_ERR("%s: Failed(%d) to shutdown RXQ(0x%08x)",
-				cryptodev->data->name, ret, fqids[j]);
-		}
-	}
-	qman_release_fqid_range(fqids[0], internals->max_nb_queue_pairs);
-
-init_error:
-	DPAA_SEC_ERR("driver %s: create failed", cryptodev->data->name);
-
-	rte_free(cryptodev->security_ctx);
-	return -EFAULT;
 }
 
 static int
@@ -3865,6 +3887,9 @@ cryptodev_dpaa_sec_probe(struct rte_dpaa_driver *dpaa_drv __rte_unused,
 		.max_nb_queue_pairs =
 			RTE_DPAA_MAX_NB_SEC_QPS,
 	};
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	snprintf(cryptodev_name, sizeof(cryptodev_name), "%s", dpaa_dev->name);
 

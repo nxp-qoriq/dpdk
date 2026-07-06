@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (C) 2014-2016 Freescale Semiconductor, Inc.
- * Copyright 2018-2020 NXP
+ * Copyright 2018-2020, 2026 NXP
  *
  */
 
@@ -92,7 +92,11 @@ struct qbman_swp {
 		uint32_t next_idx;
 		uint32_t valid_bit;
 		uint8_t dqrr_size;
-		int reset_bug;
+		uint8_t reset_bug;
+		uint8_t ci_vec_en;
+		uint8_t ci_count;
+		uint32_t ci_vector;
+		uint32_t ci_flush_th;
 	} dqrr;
 	struct {
 		uint32_t pi;

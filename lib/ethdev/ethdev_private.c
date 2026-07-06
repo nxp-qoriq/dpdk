@@ -280,7 +280,6 @@ eth_dev_fp_ops_setup(struct rte_eth_fp_ops *fpo,
 {
 	fpo->rx_pkt_burst = dev->rx_pkt_burst;
 	fpo->tx_pkt_burst = dev->tx_pkt_burst;
-	fpo->lb_pkt_burst = dev->lb_pkt_burst;
 	fpo->tx_pkt_prepare = dev->tx_pkt_prepare;
 	fpo->rx_queue_count = dev->rx_queue_count;
 	fpo->rx_descriptor_status = dev->rx_descriptor_status;

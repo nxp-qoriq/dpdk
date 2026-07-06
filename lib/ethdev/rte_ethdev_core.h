@@ -28,9 +28,6 @@ struct rte_eth_dev;
 typedef uint16_t (*eth_rx_burst_t)(void *rxq,
 				   struct rte_mbuf **rx_pkts,
 				   uint16_t nb_pkts);
-typedef uint16_t (*eth_loopback_burst_t)(void *rxq,
-				   void *txq,
-				   uint16_t mode);
 
 /**
  * @internal Send output packets on a transmit queue of an Ethernet device.
@@ -98,7 +95,6 @@ struct __rte_cache_aligned rte_eth_fp_ops {
 	struct rte_ethdev_qdata rxq;
 	/** PMD receive function. */
 	eth_rx_burst_t rx_pkt_burst;
-	eth_loopback_burst_t lb_pkt_burst;
 	/** Get the number of used Rx descriptors. */
 	eth_rx_queue_count_t rx_queue_count;
 	/** Check the status of a Rx descriptor. */

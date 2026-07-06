@@ -1150,22 +1150,24 @@ next_dpdmux:
 		pattern[0].spec = &ip_item[0];
 		pattern[0].mask = &ip_mask[0];
 		pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
-		pattern[1].spec = NULL;
-		pattern[1].mask = NULL;
-		pattern[1].type = RTE_FLOW_ITEM_TYPE_UDP;
-		pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
+		pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
 		flow_nb++;
-		pattern[3].spec = NULL;
-		pattern[3].mask = NULL;
-		pattern[3].type = RTE_FLOW_ITEM_TYPE_GTP;
-		pattern[4].type = RTE_FLOW_ITEM_TYPE_END;
+		pattern[2].spec = NULL;
+		pattern[2].mask = NULL;
+		pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+		pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+		flow_nb++;
+		pattern[4].spec = NULL;
+		pattern[4].mask = NULL;
+		pattern[4].type = RTE_FLOW_ITEM_TYPE_GTP;
+		pattern[5].type = RTE_FLOW_ITEM_TYPE_END;
 		flow_nb++;
 		if (s_mux_type == TRAFFIC_SPLIT_IP_FRAG_UDP_AND_GTP)
 			break;
-		pattern[5].spec = NULL;
-		pattern[5].mask = NULL;
-		pattern[5].type = RTE_FLOW_ITEM_TYPE_ESP;
-		pattern[6].type = RTE_FLOW_ITEM_TYPE_END;
+		pattern[6].spec = NULL;
+		pattern[6].mask = NULL;
+		pattern[6].type = RTE_FLOW_ITEM_TYPE_ESP;
+		pattern[7].type = RTE_FLOW_ITEM_TYPE_END;
 		flow_nb++;
 		break;
 	case TRAFFIC_SPLIT_IP_FRAG_PROTO:

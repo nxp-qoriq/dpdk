@@ -7423,13 +7423,6 @@ int rte_eth_dev_count_aggr_ports(uint16_t port_id)
 	return ret;
 }
 
-
-RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_eth_quit_signal, 24.11)
-void rte_eth_quit_signal(bool val)
-{
-	rte_eth_quit = val;
-}
-
 RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_eth_dev_map_aggr_tx_affinity, 23.03)
 int rte_eth_dev_map_aggr_tx_affinity(uint16_t port_id, uint16_t tx_queue_id,
 				     uint8_t affinity)

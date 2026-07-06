@@ -676,7 +676,6 @@ signal_handler(int signum)
 		printf("\n\nSignal %d received, preparing to exit...\n",
 				signum);
 		force_quit = true;
-		rte_eth_quit_signal(true);
 	}
 }
 

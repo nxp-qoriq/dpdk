@@ -66,4 +66,8 @@ __rte_internal
 void
 rte_dpaa2_free_dpio_device(struct dpaa2_dpio_dev *dpio_dev);
 
+__rte_internal
+uint16_t
+rte_dpaa2_available_dpio_device(void);
+
 #endif /* _DPAA2_HW_DPIO_H_ */

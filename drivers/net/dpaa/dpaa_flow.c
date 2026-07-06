@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include <eal_export.h>
 #include <dpaa_ethdev.h>
 #include <dpaa_flow.h>
 #include <rte_dpaa_logs.h>
@@ -744,6 +745,9 @@ int dpaa_fm_deconfig(struct dpaa_if *dpaa_intf,
 
 	PMD_INIT_FUNC_TRACE();
 
+	if (!dpaa_intf->port_handle)
+		return 0;
+
 	/* FM PORT Disable */
 	ret = fm_port_disable(dpaa_intf->port_handle);
 	if (ret != E_OK) {
@@ -803,10 +807,8 @@ int dpaa_fm_config(struct rte_eth_dev *dev, uint64_t req_dist_set)
 	unsigned int i = 0;
 	PMD_INIT_FUNC_TRACE();
 
-	if (dpaa_intf->port_handle) {
-		if (dpaa_fm_deconfig(dpaa_intf, fif))
-			DPAA_PMD_ERR("DPAA FM deconfig failed");
-	}
+	if (dpaa_fm_deconfig(dpaa_intf, fif))
+		DPAA_PMD_ERR("DPAA FM deconfig failed");
 
 	if (!dev->data->nb_rx_queues)
 		return 0;
@@ -1099,6 +1101,7 @@ int dpaa_port_vsp_cleanup(struct dpaa_if *dpaa_intf)
 	return E_OK;
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa_port_set_rate_limit)
 int rte_pmd_dpaa_port_set_rate_limit(uint16_t port_id, uint16_t burst,
 				     uint32_t rate)
 {

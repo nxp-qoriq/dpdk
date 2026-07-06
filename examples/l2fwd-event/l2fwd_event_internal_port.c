@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(C) 2019 Marvell International Ltd.
+ * Copyright 2026 NXP
  */
 
 #include <stdbool.h>
@@ -154,6 +155,7 @@ l2fwd_event_port_setup_internal_port(struct l2fwd_resources *rsrc)
 	}
 
 	evt_rsrc->def_p_conf = event_p_conf;
+	evt_rsrc->deq_depth = event_p_conf.dequeue_depth;
 }
 
 static void

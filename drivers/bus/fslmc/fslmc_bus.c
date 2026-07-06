@@ -79,7 +79,7 @@ fslmc_soft_parser_protocol_supported(void)
 	void *map_addr = NULL;
 	const struct dpaa2_parser_ccsr *parser_ccsr = NULL;
 	const uint16_t *magic_num;
-	struct rte_fslmc_bus_info *bus_info = rte_fslmc_bus.bus_info;
+	struct rte_fslmc_bus_info *bus_info = &rte_fslmc_bus.bus_info;
 
 	fd = open("/dev/mem", O_RDWR | O_SYNC);
 	if (fd < 0) {
@@ -309,6 +309,7 @@ scan_one_fslmc_device(char *dev_name)
 		goto cleanup;
 	}
 	dev->device.devargs = fslmc_devargs_lookup(dev);
+	dev->bus_info = &rte_fslmc_bus.bus_info;
 
 	/* Update the device found into the device_count table */
 	rte_fslmc_bus.device_count[dev->dev_type]++;
@@ -438,12 +439,6 @@ rte_fslmc_scan(void)
 	ret = fslmc_get_container_group(group_name, &groupid);
 	if (ret != 0)
 		goto scan_fail;
-	rte_fslmc_bus.bus_info = malloc(sizeof(struct rte_fslmc_bus_info));
-	if (!rte_fslmc_bus.bus_info) {
-		DPAA2_BUS_ERR("Failed to alloc mc bus info");
-		goto scan_fail;
-	}
-	memset(rte_fslmc_bus.bus_info, 0, sizeof(struct rte_fslmc_bus_info));
 
 	/* Scan devices on the group */
 	sprintf(fslmc_dirpath, "%s/%s", SYSFS_FSL_MC_DEVICES, group_name);
@@ -505,7 +500,7 @@ static int
 rte_fslmc_close(void)
 {
 	int ret = 0;
-	struct rte_fslmc_bus_info *bus_info = rte_fslmc_bus.bus_info;
+	struct rte_fslmc_bus_info *bus_info = &rte_fslmc_bus.bus_info;
 
 	if (TAILQ_EMPTY(&rte_fslmc_bus.device_list))
 		return 0;
@@ -517,8 +512,7 @@ rte_fslmc_close(void)
 	ret = fslmc_vfio_close_group();
 	if (ret)
 		DPAA2_BUS_ERR("Unable to close devices %d", ret);
-	free(bus_info);
-	rte_fslmc_bus.bus_info = NULL;
+	memset(bus_info, 0, sizeof(struct rte_fslmc_bus_info));
 
 	return 0;
 }
@@ -531,7 +525,7 @@ rte_fslmc_probe(void)
 
 	struct rte_dpaa2_device *dev;
 	struct rte_dpaa2_driver *drv;
-	struct rte_fslmc_bus_info *bus_info = rte_fslmc_bus.bus_info;
+	struct rte_fslmc_bus_info *bus_info = &rte_fslmc_bus.bus_info;
 
 	static const struct rte_mbuf_dynfield dpaa2_seqn_dynfield_desc = {
 		.name = DPAA2_SEQN_DYNFIELD_NAME,
@@ -605,7 +599,6 @@ rte_fslmc_probe(void)
 			if (probe_all || !dev->device.devargs ||
 				(dev->device.devargs &&
 				dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
-				dev->bus_info = rte_fslmc_bus.bus_info;
 				ret = drv->probe(drv, dev);
 				if (ret) {
 					DPAA2_BUS_ERR("Failed(%d) to probe %s",

@@ -1,0 +1,38 @@
+# Ignore following Paths
+build/
+*/build/
+doc/
+license/
+
+##### Followings are to make cody processing light weight
+# Ignore build artifacts to prevent license contamination from compiled outputs
+*.o
+*.so
+*.a
+*.mod.c
+*.ko
+*.d
+
+# Ignore temporary and swap files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+
+# Ignore IDE and CI metadata
+.vscode/
+.git/
+.github/
+.ci/
+.editorconfig
+.gitattributes
+.gitignore
+.mailmap
+.travis.yml
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

@@ -226,13 +226,9 @@ dpaa2_mux_add_parser_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 		extract.extract.from_parse.size;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
 		sizeof(uint8_t), &offset, &pos, &prot);
-	if (offset != 0xff) {
-		dpaa2_mux_rule_insert_hole(key_va, offset,
-			sizeof(uint8_t), profile->key_max_size);
-		dpaa2_mux_rule_insert_hole(mask_va, offset,
-			sizeof(uint8_t), profile->key_max_size);
-		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, sizeof(uint8_t));
-	}
+	dpaa2_mux_rule_insert_hole(key_va, offset, sizeof(uint8_t), profile->key_max_size);
+	dpaa2_mux_rule_insert_hole(mask_va, offset, sizeof(uint8_t), profile->key_max_size);
+	dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, sizeof(uint8_t));
 
 	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
@@ -283,13 +279,9 @@ dpaa2_mux_add_hdr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 	prot_field.key_field = field;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
 		field_size, &offset, &pos, &prot_field);
-	if (offset != 0xff) {
-		dpaa2_mux_rule_insert_hole(key_va, offset,
-			field_size, profile->key_max_size);
-		dpaa2_mux_rule_insert_hole(mask_va, offset,
-			field_size, profile->key_max_size);
-		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, field_size);
-	}
+	dpaa2_mux_rule_insert_hole(key_va, offset, field_size, profile->key_max_size);
+	dpaa2_mux_rule_insert_hole(mask_va, offset, field_size, profile->key_max_size);
+	dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, field_size);
 
 	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
@@ -343,13 +335,9 @@ dpaa2_mux_add_spr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 	prot_field.key_field = (spr_offset << 16) | spr_size;
 	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
 		spr_size, &offset, &pos, &prot_field);
-	if (offset != 0xff) {
-		dpaa2_mux_rule_insert_hole(key_va, offset,
-			spr_size, profile->key_max_size);
-		dpaa2_mux_rule_insert_hole(mask_va, offset,
-			spr_size, profile->key_max_size);
-		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, spr_size);
-	}
+	dpaa2_mux_rule_insert_hole(key_va, offset, spr_size, profile->key_max_size);
+	dpaa2_mux_rule_insert_hole(mask_va, offset, spr_size, profile->key_max_size);
+	dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, spr_size);
 
 	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
@@ -534,15 +522,10 @@ dpaa2_mux_add_non_hdr_extract(struct dpaa2_dpdmux_dev *dpdmux_dev,
 		prot.prot = NET_PROT_NONE;
 		prot.key_field = hdr_offset;
 	}
-	idx = dpaa2_profile_insert_no_ipaddr_extract(profile,
-		size, &offset, &pos, &prot);
-	if (offset != 0xff) {
-		dpaa2_mux_rule_insert_hole(key_va, offset,
-			size, profile->key_max_size);
-		dpaa2_mux_rule_insert_hole(mask_va, offset,
-			size, profile->key_max_size);
-		dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, size);
-	}
+	idx = dpaa2_profile_insert_no_ipaddr_extract(profile, size, &offset, &pos, &prot);
+	dpaa2_mux_rule_insert_hole(key_va, offset, size, profile->key_max_size);
+	dpaa2_mux_rule_insert_hole(mask_va, offset, size, profile->key_max_size);
+	dpaa2_mux_flows_insert_hole(dpdmux_dev, offset, size);
 
 	dpaa2_dpkg_insert_extract(kg_cfg, idx, &extract);
 	*extract_update = 1;
@@ -561,6 +544,7 @@ set_rule:
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa2_mux_multi_enum)
 uint8_t
 rte_pmd_dpaa2_mux_multi_enum(uint8_t num, uint32_t ids[])
 {
@@ -631,6 +615,7 @@ dpaa2_mux_ecpri_flow_create(struct dpaa2_dpdmux_dev *dpdmux_dev,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa2_mux_flow_create)
 int
 rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	struct rte_flow_item pattern[],
@@ -1208,6 +1193,7 @@ creation_error:
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa2_mux_flow_destroy)
 int
 rte_pmd_dpaa2_mux_flow_destroy(uint32_t dpdmux_id,
 	uint16_t entry_index)
@@ -1259,6 +1245,7 @@ rte_pmd_dpaa2_mux_flow_destroy(uint32_t dpdmux_id,
 	return -EINVAL;
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa2_mux_flow_l2)
 int
 rte_pmd_dpaa2_mux_flow_l2(uint32_t dpdmux_id,
 	uint8_t mac_addr[6], uint16_t vlan_id, int dest_if)
@@ -1622,8 +1609,12 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 		goto init_err;
 	}
 	rte_spinlock_init(&dpdmux_dev->lock);
-	if (obj->bus_info)
-		dpdmux_dev->sp_protocol = obj->bus_info->sp_protocol;
+	if (!obj->bus_info) {
+		DPAA2_PMD_ERR("No bus info attached to dpdmux%d", dpdmux_id);
+		ret = -EIO;
+		goto init_err;
+	}
+	dpdmux_dev->sp_protocol = obj->bus_info->sp_protocol;
 	dpdmux_dev->max_flow_num = attr.max_dmat_entries;
 
 	TAILQ_INSERT_TAIL(&dpdmux_dev_list, dpdmux_dev, next);

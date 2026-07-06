@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2024 NXP
+ * Copyright 2024-2026 NXP
  *
  * This header file defines the register offsets and bit fields
  * of ENETC4 PF and VFs.
@@ -24,8 +24,14 @@ struct enetc_msg_swbd {
 
 /* enetc4 txbd flags */
 #define ENETC4_TXBD_FLAGS_L4CS		BIT(0)
+/* Request LSO (Large Send Offload) segmentation for this frame */
+#define ENETC4_TXBD_FLAGS_LSO		BIT(1)
+/* L4 checksum insertion (also used for checksum update on LSO) */
 #define ENETC4_TXBD_FLAGS_L_TX_CKSUM	BIT(3)
+/* Extended descriptor: the next 16B ring entry is an extension BD */
+#define ENETC4_TXBD_FLAGS_EXT		BIT(6)
 #define ENETC4_TXBD_FLAGS_F		BIT(7)
+
 /* L4 type */
 #define ENETC4_TXBD_L4T_UDP		BIT(0)
 #define ENETC4_TXBD_L4T_TCP		BIT(1)
@@ -33,6 +39,33 @@ struct enetc_msg_swbd {
 #define ENETC4_TXBD_L3T			0
 /* IPv4 checksum */
 #define ENETC4_TXBD_IPCS		1
+
+/*
+ * Extension Transmit Buffer Descriptor (16B). When the standard BD has the
+ * extended flag set, this occupies the next ring entry and carries the extra
+ * fields required by LSO.
+ */
+struct enetc_tx_bd_ext {
+	uint32_t timestamp;	/* PTP timestamp, unused for LSO */
+	uint32_t vlan;		/* VLAN insert, unused for LSO */
+	uint32_t lso;		/* LSO_MAX_SEG_SIZE and FRM_LEN_EXT */
+	uint32_t flags;		/* extension flags */
+};
+
+/* LSO_MAX_SEG_SIZE occupies bits 13-0 of the LSO word */
+#define ENETC4_TXBD_EXT_LSO_SEG_MASK	0x3fff
+#define ENETC4_TXBD_EXT_LSO_SEG(mss) \
+		((uint32_t)((mss) & ENETC4_TXBD_EXT_LSO_SEG_MASK))
+/* FRM_LEN_EXT occupies bits 19-16 of the LSO word (top 4 bits of data len) */
+#define ENETC4_TXBD_EXT_FRM_LEN_EXT(x) \
+		(((uint32_t)((x) & 0xf)) << 16)
+/* Final flag in the extension flags word (bit 127 -> local bit 31) */
+#define ENETC4_TXBD_EXT_FLAGS_F		BIT(31)
+
+/* NETC does not create LSO frames larger than this many bytes */
+#define ENETC4_LSO_MAX_FRAME		9600
+/* Maximum LSO data unit (payload to be segmented) supported by HW: 256KB */
+#define ENETC4_LSO_MAX_DATA_UNIT	(256 * 1024)
 
 /***************************ENETC port registers**************************/
 #define ENETC4_PMR		0x10
@@ -67,6 +100,84 @@ struct enetc_msg_swbd {
 #define ENETC4_PM_CMD_CFG(mac)		(0x5008 + (mac) * 0x400)
 #define PM_CMD_CFG_TX_EN		BIT(0)
 #define PM_CMD_CFG_RX_EN		BIT(1)
+
+/* RBaMR[CRC]: 0 = FCS removed, 1 = FCS preserved (KEEP_CRC) */
+#define ENETC4_RBMR_CRC			BIT(8)
+/*
+ * RBaMR[BDS]: buffer descriptor size select for a receive ring.
+ * 0 = standard 16B descriptors, 1 = extended 32B descriptors.
+ * RSC requires 32B descriptors (BDS = 1). Matches the Linux enetc
+ * driver definition (ENETC_RBMR_BDS = BIT(2)).
+ */
+#define ENETC4_RBMR_BDS			BIT(2)
+
+/*
+ * Rx BDR a RSC register (RBaRSCR), offset 0x30 from the ring base.
+ * Controls Receive Segment Coalesce (RSC / LRO) for the ring.
+ */
+#define ENETC4_RBRSCR			0x30
+/* Enable RSC on this ring */
+#define ENETC4_RBRSCR_EN		BIT(31)
+/* Permit coalescing of TCP segments that carry the timestamp option */
+#define ENETC4_RBRSCR_CT		BIT(29)
+/* SIZE field (bits 15-0): maximum coalesced frame size produced by RSC */
+#define ENETC4_RBRSCR_SIZE(x)		((uint32_t)((x) & 0xffff))
+
+/*
+ * RBaICR0[ICEN]: interrupt coalescing enable. RSC requires interrupt
+ * coalescing to be enabled; the coalescing timer doubles as the RSC flush
+ * timer. ICPT (bits 8-0) is the packet-count threshold.
+ */
+#define ENETC4_RBICR0			0xa8
+#define ENETC4_RBICR0_ICEN		BIT(31)
+#define ENETC4_RBICR0_ICPT(x)		((uint32_t)((x) & 0x1ff))
+/* Rx BDR a interrupt coalescing register 1 (threshold timer) */
+#define ENETC4_RBICR1			0xac
+
+/*
+ * SI-level Rx interrupt detect register 0 (SIRXIDR0). W1C, one bit per Rx
+ * ring (RX0..RX23). The interrupt-coalescing timer (which also gates RSC
+ * coalescing) does not re-arm while a ring's detect bit stays set, so the
+ * poll-mode driver writes BIT(ring index) here every poll to keep RSC
+ * coalescing. The per-ring RBaIDR (0xa4) is read-only and cannot be used.
+ */
+#define ENETC_SIRXIDR			0xa28
+
+/*
+ * RSC (Receive Segment Coalesce) limits and defaults.
+ * Maximum coalesced frame size the HW will build (programmed in RBaRSCR[SIZE]).
+ * Bounded to 16 bits by the SIZE field width.
+ */
+#define ENETC4_RSC_MAX_FRAME		0xffff
+/* Default interrupt coalescing packet threshold used to satisfy RSC's ICEN
+ * precondition. The PMD is poll-mode, so this only gates the RSC flush timer.
+ */
+#define ENETC4_RSC_DEF_ICPT		1
+/*
+ * Default interrupt coalescing timer threshold (RBaICR1[ICTT]), in NETC
+ * platform clock cycles. This timer is the RSC coalesce-hold window: HW keeps
+ * a coalesced frame open while it runs and appends in-order segments. A value
+ * of 0 disables the timer and flushes every segment separately (no
+ * coalescing), so it must be non-zero for RSC to merge anything.
+ */
+#define ENETC4_RSC_DEF_ICTT		0x10000
+
+/*
+ * Extended 32B receive writeback buffer descriptor. Used only on RSC-enabled
+ * rings (RBaMR[BDS] = 1). The first 16 bytes match the standard descriptor
+ * writeback layout; the second 16 bytes carry the RSC and timestamp fields.
+ * RSC_FRAMES reports how many frames were coalesced (1 to 255; 1 means the
+ * frame was not coalesced).
+ */
+struct enetc_rx_bd_ext {
+	uint32_t timestamp;	/* offset 0x10: PTP timestamp */
+	uint32_t rsc_frames;	/* offset 0x14: RSC_FRAMES in bits 7-0 */
+	uint32_t rsc_abs_ts_delta; /* offset 0x18 */
+	uint32_t reserved;	/* offset 0x1c */
+};
+
+/* RSC_FRAMES occupies bits 7-0 of the rsc_frames word */
+#define ENETC4_RXBD_EXT_RSC_FRAMES(x)	((x) & 0xff)
 
 /* i.MX95 supports jumbo frame, but it is recommended to set the max frame
  * size to 2000 bytes.

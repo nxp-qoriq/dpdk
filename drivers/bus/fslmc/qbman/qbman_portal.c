@@ -15,7 +15,9 @@
 #define QBMAN_WQCHAN_CONFIGURE 0x46
 
 /* Reverse mapping of QBMAN_CENA_SWP_DQRR() */
-#define QBMAN_IDX_FROM_DQRR(p) (((unsigned long)p & 0x1ff) >> 6)
+#define QBMAN_IDX_FROM_DQRR(p) (((unsigned long)(p) & 0x1ff) >> 6)
+#define DQRR_DCAP_CI_VEC_OFFSET 16
+#define DQRR_DCAP_CI_VEC_SELECT 0x100
 
 /* QBMan FQ management command codes */
 #define QBMAN_FQ_SCHEDULE	0x48
@@ -66,6 +68,7 @@ enum qbman_sdqcr_fc {
 static struct qbman_swp *portal_idx_map[MAX_QBMAN_PORTALS];
 
 uint32_t qman_version;
+static uint32_t dpaa2_portal_dqrr_size = 8;
 
 /* Internal Function declaration */
 static int
@@ -232,6 +235,14 @@ static int (*qbman_swp_release_ptr)(struct qbman_swp *s,
 			const uint64_t *buffers, unsigned int num_buffers)
 			= qbman_swp_release_direct;
 
+RTE_EXPORT_INTERNAL_SYMBOL(qbman_swp_portal_dqrr_size)
+uint32_t qbman_swp_portal_dqrr_size(struct qbman_swp *p)
+{
+	if (p)
+		return p->dqrr.dqrr_size;
+	return dpaa2_portal_dqrr_size;
+}
+
 /*********************************/
 /* Portal constructor/destructor */
 /*********************************/
@@ -270,13 +281,16 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 	p->sdq |= qbman_sdqcr_fc_up_to_3 << QB_SDQCR_FC_SHIFT;
 	p->sdq |= QMAN_SDQCR_TOKEN << QB_SDQCR_TOK_SHIFT;
 	if ((d->qman_version & QMAN_REV_MASK) >= QMAN_REV_5000
-			&& (d->cena_access_mode == qman_cena_fastest_access))
+		&& (d->cena_access_mode == qman_cena_fastest_access))
 		p->mr.valid_bit = QB_VALID_BIT;
 
 	atomic_set(&p->vdq.busy, 1);
 	p->vdq.valid_bit = QB_VALID_BIT;
 	p->dqrr.valid_bit = QB_VALID_BIT;
 	qman_version = p->desc.qman_version;
+	/** Portal vector dqrr is enabled as default.
+	 */
+	p->dqrr.ci_vec_en = true;
 	if ((qman_version & QMAN_REV_MASK) < QMAN_REV_4100) {
 		p->dqrr.dqrr_size = 4;
 		p->dqrr.reset_bug = 1;
@@ -284,6 +298,14 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 		p->dqrr.dqrr_size = 8;
 		p->dqrr.reset_bug = 0;
 	}
+	/** Set default flush threshold as half of DQRR size.
+	 * Threshold should be in range of 1~DQRR size, if it's
+	 * too small, there is little improvment. if it's too close to
+	 * DQRR size, it impacts WRIOP's EQ operation.
+	 * According to test, half of DQRR size shows best performance.
+	 */
+	p->dqrr.ci_flush_th = p->dqrr.dqrr_size / 2;
+	dpaa2_portal_dqrr_size = p->dqrr.dqrr_size;
 
 	ret = qbman_swp_sys_init(&p->sys, d, p->dqrr.dqrr_size);
 	if (ret) {
@@ -2224,21 +2246,50 @@ const struct qbman_result *qbman_swp_dqrr_next_mem_back(struct qbman_swp *s)
 	return p;
 }
 
+/* Consume multiple DQRRs when dqrr number reaches threshold with single
+ * writing to cache invalid register.
+ */
+static inline void
+qbman_swp_dqrr_vect_flush(struct qbman_swp *s, uint8_t threshold)
+{
+	if (s->dqrr.ci_count >= threshold) {
+		qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP,
+			s->dqrr.ci_vector | DQRR_DCAP_CI_VEC_SELECT);
+		s->dqrr.ci_vector = 0;
+		s->dqrr.ci_count = 0;
+	}
+}
+
+/* Update DQRR vector and flush vector if vector number reaches threshold.
+ */
+static inline void
+qbman_swp_dqrr_vect_consume(struct qbman_swp *s, uint8_t idx)
+{
+	s->dqrr.ci_vector |= (1 << (idx + DQRR_DCAP_CI_VEC_OFFSET));
+	s->dqrr.ci_count++;
+	qbman_swp_dqrr_vect_flush(s, s->dqrr.ci_flush_th);
+}
+
 /* Consume DQRR entries previously returned from qbman_swp_dqrr_next(). */
 RTE_EXPORT_INTERNAL_SYMBOL(qbman_swp_dqrr_consume)
-void qbman_swp_dqrr_consume(struct qbman_swp *s,
-			    const struct qbman_result *dq)
+void qbman_swp_dqrr_consume(struct qbman_swp *s, const struct qbman_result *dq)
 {
-	qbman_cinh_write(&s->sys,
-			QBMAN_CINH_SWP_DCAP, QBMAN_IDX_FROM_DQRR(dq));
+	if (unlikely(!dq))
+		qbman_swp_dqrr_vect_flush(s, 1);
+	else if (s->dqrr.ci_vec_en)
+		qbman_swp_dqrr_vect_consume(s, QBMAN_IDX_FROM_DQRR(dq));
+	else
+		qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP, QBMAN_IDX_FROM_DQRR(dq));
 }
 
 /* Consume DQRR entries previously returned from qbman_swp_dqrr_next(). */
 RTE_EXPORT_INTERNAL_SYMBOL(qbman_swp_dqrr_idx_consume)
-void qbman_swp_dqrr_idx_consume(struct qbman_swp *s,
-			    uint8_t dqrr_index)
+void qbman_swp_dqrr_idx_consume(struct qbman_swp *s, uint8_t dqrr_index)
 {
-	qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP, dqrr_index);
+	if (s->dqrr.ci_vec_en)
+		qbman_swp_dqrr_vect_consume(s, dqrr_index);
+	else
+		qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP, dqrr_index);
 }
 
 /*********************************/

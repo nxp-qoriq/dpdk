@@ -15,3 +15,5 @@ endian = 'little'
 
 [properties]
 platform = 'imx'
+#ipsec_mb_libdir = '/opt/ipsec-mb/install/lib'
+#ipsec_mb_incdir = '/opt/ipsec-mb/install/include'

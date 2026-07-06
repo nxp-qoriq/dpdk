@@ -298,9 +298,6 @@ EXPERIMENTAL {
 	rte_flow_get_q_aged_flows;
 	rte_mtr_meter_policy_get;
 	rte_mtr_meter_profile_get;
-
-	rte_eth_lb_burst;
-	rte_eth_quit_signal;
 };
 
 INTERNAL {
@@ -330,5 +327,4 @@ INTERNAL {
 	rte_eth_representor_id_get;
 	rte_eth_switch_domain_alloc;
 	rte_eth_switch_domain_free;
-	rte_eth_get_quit;
 };

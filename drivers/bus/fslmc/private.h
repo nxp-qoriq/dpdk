@@ -20,7 +20,7 @@ struct rte_fslmc_bus {
 				/**< FSLMC DPAA2 Driver list */
 	int device_count[DPAA2_DEVTYPE_MAX];
 				/**< Count of all devices scanned */
-	void *bus_info;
+	struct rte_fslmc_bus_info bus_info;
 };
 
 extern struct rte_fslmc_bus rte_fslmc_bus;

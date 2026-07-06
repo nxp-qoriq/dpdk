@@ -1579,6 +1579,9 @@ int qman_create_fq(u32 fqid, u32 flags, struct qman_fq *fq)
 err:
 	if (flags & QMAN_FQ_FLAG_DYNAMIC_FQID)
 		qman_release_fqid(fqid);
+#ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
+	clear_fq_table_entry(fq->key);
+#endif
 	return -EIO;
 }
 
@@ -1918,7 +1921,7 @@ int qman_fq_flow_control(struct qman_fq *fq, int xon)
 		goto out;
 	}
 	mcc = qm_mc_start(&p->p);
-	mcc->alterfq.fqid = fq->fqid;
+	mcc->alterfq.fqid = fq->fqid_be;
 	mcc->alterfq.count = 0;
 	myverb = xon ? QM_MCC_VERB_ALTER_FQXON : QM_MCC_VERB_ALTER_FQXOFF;
 
@@ -1952,11 +1955,11 @@ int qman_query_fq(struct qman_fq *fq, struct qm_fqd *fqd)
 		cpu_relax();
 	DPAA_ASSERT((mcr->verb & QM_MCR_VERB_MASK) == QM_MCR_VERB_QUERYFQ);
 	res = mcr->result;
-	if (res == QM_MCR_RESULT_OK)
-		*fqd = mcr->queryfq.fqd;
-	hw_fqd_to_cpu(fqd);
 	if (res != QM_MCR_RESULT_OK)
 		return -EIO;
+
+	*fqd = mcr->queryfq.fqd;
+	hw_fqd_to_cpu(fqd);
 	return 0;
 }
 
@@ -2428,7 +2431,7 @@ qman_enqueue_multi_orp(struct qman_fq *fq,
 
 	/* try to send as many frames as possible */
 	while (eqcr->available && frames_to_send--) {
-		eq->fqid = fq->fqid;
+		eq->fqid = fq->fqid_be;
 		eq->fd.opaque_addr = fd->opaque_addr;
 		eq->fd.addr = cpu_to_be40(fd->addr);
 		eq->fd.status = cpu_to_be32(fd->status);
@@ -3036,4 +3039,39 @@ qman_shutdown_fq(struct qman_fq *fq)
 
 out:
 	return ret;
+}
+
+int qman_find_fq_by_cgrid(u32 cgrid, u32 *fqid)
+{
+	struct qman_fq fq = {
+		.fqid = 1
+	};
+	struct qm_mcr_queryfq_np np;
+	struct qm_fqd fqd;
+	int err;
+
+	do {
+		err = qman_query_fq_np(&fq, &np);
+		if (err == -ERANGE) {
+			DPAA_BUS_INFO("No FQ found with cgrid(0x%x)", cgrid);
+			return err;
+		} else if (err) {
+			DPAA_BUS_WARN("Failed(%d) to Query np FQ(fqid=0x%x)", err, fq.fqid);
+			return err;
+		}
+		if ((np.state & QM_MCR_NP_STATE_MASK) != QM_MCR_NP_STATE_OOS) {
+			err = qman_query_fq(&fq, &fqd);
+			if (err) {
+				DPAA_BUS_WARN("Failed(%d) to Query FQ(fqid=0x%x)", err, fq.fqid);
+			} else if ((fqd.fq_ctrl & QM_FQCTRL_CGE) && fqd.cgid == cgrid) {
+				if (fqid)
+					*fqid = fq.fqid;
+				return 0;
+			}
+		}
+		/* Move to the next FQID */
+		fq.fqid++;
+	} while (1);
+
+	return -ENODEV;
 }

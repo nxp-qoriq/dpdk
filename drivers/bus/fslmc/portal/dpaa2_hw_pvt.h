@@ -82,7 +82,7 @@
 #define DPAA2_PACKET_LAYOUT_ALIGN	64 /*changing from 256 */
 
 #define DPAA2_DPCI_MAX_QUEUES 2
-#define DPAA2_INVALID_FLOW_ID 0xffff
+#define DPAA2_INVALID_FQ_ID ((uint32_t)(-1))
 #define DPAA2_INVALID_CGID 0xff
 
 #define SEC_FLC_DHR_OUTBOUND	(-114)
@@ -273,6 +273,8 @@ struct dpaa2_dpci_dev {
 	struct dpaa2_queue *tx_queue;
 };
 
+#define DPAA2_DPCON_MAX_CH_IDX_NUM 16
+
 struct dpaa2_dpcon_dev {
 	TAILQ_ENTRY(dpaa2_dpcon_dev) next;
 	struct fsl_mc_io dpcon;
@@ -281,7 +283,9 @@ struct dpaa2_dpcon_dev {
 	uint32_t dpcon_id;
 	uint16_t qbman_ch_id;
 	uint8_t num_priorities;
-	uint8_t channel_index;
+	uint8_t ch_idx[DPAA2_DPCON_MAX_CH_IDX_NUM];
+	uint8_t dpio_idx[DPAA2_DPCON_MAX_CH_IDX_NUM];
+	uint8_t ch_idx_num;
 };
 
 /* Refer to Table 7-3 in SEC BG */

@@ -38,7 +38,7 @@
 
 #define MAX_TCS			DPNI_MAX_TC
 #define MAX_RX_QUEUES		128
-#define MAX_TX_QUEUES		16
+#define MAX_TX_QUEUES		128
 #define MAX_DPNI		8
 #define DPAA2_MAX_CHANNELS	16
 
@@ -354,13 +354,14 @@ struct dpaa2_dev_priv {
 	int32_t hw_id;
 	int32_t qdid;
 	uint16_t token;
+	uint16_t tx_channels[DPAA2_MAX_CHANNELS];
 	uint8_t nb_tx_queues;
 	uint8_t nb_rx_queues;
 	uint32_t options;
 	void *rx_vq[MAX_RX_QUEUES];
 	void *tx_vq[MAX_TX_QUEUES];
 	struct dpaa2_bp_list *bp_list; /**<Attached buffer pool list */
-	void *tx_conf_vq[MAX_TX_QUEUES * DPAA2_MAX_CHANNELS];
+	void *tx_conf_vq[MAX_TX_QUEUES];
 	void *rx_err_vq;
 	uint32_t flags; /*dpaa2 config flags */
 	enum dpaa2_tx_conf_type tx_conf_type;
@@ -426,6 +427,7 @@ struct dpaa2_dev_priv {
 	uint32_t *cnt_idx_dma_mem;
 	uint64_t *cnt_values_dma_mem;
 	uint64_t cnt_idx_iova, cnt_values_iova;
+	uint64_t mc_rev;
 
 	struct rte_mempool *tx_sg_pool;
 
@@ -702,7 +704,7 @@ dpaa2_profile_insert_no_ipaddr_extract(struct dpaa2_key_profile *profile,
 	uint8_t size, uint8_t *poffset, int *ppos,
 	const struct key_prot_field *prot)
 {
-	uint8_t idx, ip_addr_num = 0, offset = 0xff;
+	uint8_t idx, ip_addr_num = 0, offset;
 
 	if (profile->ip_addr_extracts[0].field &&
 		profile->ip_addr_extracts[1].field) {
@@ -715,14 +717,10 @@ dpaa2_profile_insert_no_ipaddr_extract(struct dpaa2_key_profile *profile,
 		idx = profile->num;
 	}
 
-	if (profile->ip_addr_extracts[0].field) {
-		if (idx > 0) {
-			offset = profile->key_offset[idx - 1] +
-				profile->key_size[idx - 1];
-		} else {
-			offset = 0;
-		}
-	}
+	if (idx > 0)
+		offset = profile->key_offset[idx - 1] + profile->key_size[idx - 1];
+	else
+		offset = 0;
 
 	if (idx > 0) {
 		profile->key_offset[idx] =

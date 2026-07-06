@@ -548,7 +548,7 @@ soc_dpaa = {
         # add disabled drivers
         # valid values are dir/subdirs in the drivers directory
         # wildcards are allowed
-     'disable_drivers':'crypto/bcmfs,crypto/ipsec*,crypto/m*,crypto/n*,crypto/octeontx,baseband/fpga*,baseband/acc,baseband/turbo_sw,bus/auxiliary,bus/ifpga,compress/*,event/opdl,event/dsw,net/ark,net/avp,net/bnxt,net/axgbe,net/cxgbe,net/ena,net/gve,net/hinic,net/hns3,/net/iavf,net/igc,net/ice,net/ionic,net/liquidio,net/nfp,net/ngbe,net/netvsc,net/oct*,net/s*,net/thunderx,net/qede,net/vmxnet3,common/c*,common/i*,common/oct*,common/qat,common/sfc*,dma/hi*,raw/ntb*,vdpa/*,gpu/*'
+     'disable_drivers':'crypto/bcmfs,crypto/m*,crypto/n*,crypto/octeontx,baseband/fpga*,baseband/acc,baseband/turbo_sw,bus/auxiliary,bus/ifpga,compress/*,event/opdl,event/dsw,net/ark,net/avp,net/bnxt,net/axgbe,net/cxgbe,net/ena,net/gve,net/hinic,net/hns3,/net/iavf,net/igc,net/ice,net/ionic,net/liquidio,net/nfp,net/ngbe,net/netvsc,net/oct*,net/s*,net/thunderx,net/qede,net/vmxnet3,common/c*,common/i*,common/oct*,common/qat,common/sfc*,dma/hi*,raw/ntb*,vdpa/*,gpu/*'
 }
 
 soc_elba = {
@@ -638,7 +638,7 @@ soc_imx = {
         # add disabled drivers
         # valid values are dir/subdirs in the drivers directory
         # wildcards are allowed
-     'disable_drivers':'crypto/bcmfs,crypto/ipsec*,crypto/m*,crypto/n*,crypto/octeontx,baseband/fpga*,baseband/acc,baseband/turbo_sw,bus/auxiliary,bus/ifpga,compress/*,event/opdl,event/dsw,net/ark,net/avp,net/bnxt,net/axgbe,net/cxgbe,net/ena,net/gve,net/hinic,net/hns3,/net/iavf,net/igc,net/ice,net/ionic,net/liquidio,net/nfp,net/ngbe,net/netvsc,net/oct*,net/s*,net/thunderx,net/qede,net/vmxnet3,common/c*,common/i*,common/oct*,common/qat,common/sfc*,dma/hi*,raw/ntb*,vdpa/*,gpu/*'
+     'disable_drivers':'crypto/bcmfs,crypto/m*,crypto/n*,crypto/octeontx,baseband/fpga*,baseband/acc,baseband/turbo_sw,bus/auxiliary,bus/ifpga,compress/*,event/opdl,event/dsw,net/ark,net/avp,net/bnxt,net/axgbe,net/cxgbe,net/ena,net/gve,net/hinic,net/hns3,/net/iavf,net/igc,net/ice,net/ionic,net/liquidio,net/nfp,net/ngbe,net/netvsc,net/oct*,net/s*,net/thunderx,net/qede,net/vmxnet3,common/c*,common/i*,common/oct*,common/qat,common/sfc*,dma/hi*,raw/ntb*,vdpa/*,gpu/*'
 }
 
 soc_kunpeng920 = {

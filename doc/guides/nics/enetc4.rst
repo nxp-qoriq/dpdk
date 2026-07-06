@@ -53,6 +53,12 @@ Key functionality includes:
 - Receive processing: Upon packet reception, the BD Ring status bit is set,
   facilitating packet processing.
 - Transmission: Packet transmission precedes reception, ensuring efficient data transfer.
+- TCP and UDP segmentation offload (TSO) on VFs, enabled per Tx queue
+  when the TSO offload flag is requested.
+- Large receive offload (LRO) on the receive path via hardware Receive
+  Segment Coalesce (RSC), enabled when the TCP LRO Rx offload flag is
+  requested. RSC requires the FCS to be stripped, so it cannot be combined
+  with the KEEP_CRC Rx offload.
 
 
 Prerequisites

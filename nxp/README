@@ -144,7 +144,36 @@ Following information can be used to obtain these components:
 	$ make CC=${CROSS}gcc
 	$ export PKG_CONFIG_PATH=<AArch64cryptolib>/pkgconfig:$PKG_CONFIG_PATH
 
-   NOTE:--reconfigure in meson may not work. Better you delete the meson build
+
+   Getting IPsec MB ARM library: (Cross Compilation)
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   DPDK IPsec_MB is a cryptodev driver that provides high-performance software cryptographic
+   processing using the ARM-based IPsec Multi-Buffer library.
+
+   Clone Repository and Build for aarch64:
+
+	$ cd /opt
+	$ git clone https://gitlab.arm.com/arm-reference-solutions/ipsec-mb/
+	$ cd ipsec-mb/
+	$ git checkout SECLIB-IPSEC-2026.05.30
+	$ cmake -S . -B build-aarch64   -DCMAKE_TOOLCHAIN_FILE=$PWD/ipsec-mb-toolchain-aarch64.cmake   -DCMAKE_BUILD_TYPE=Release   -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=$PWD/install -DTOOLCHAIN_PATH=<toolchain path>
+		NOTE: please copy the "ipsec-mb-toolchain-aarch64.cmake" from dpdk/nxp/ipsec-mb-toolchain-aarch64.cmake to IPsec_MB.
+			Set TOOLCHAIN_PATH without adding tool names. CMake will automatically append the required tool names such as gcc and ar.
+			e.g. if GCC path is /opt/toolchain/bin/aarch64-none-linux-gnu-gcc then set path as /opt/toolchain/bin/aarch64-none-linux-gnu
+	$ cmake --build build-aarch64 --parallel
+	$ cmake --install build-aarch64
+		NOTE: Confirm installed headers and library in $PWD/install.
+
+	Now link the library and give headers path to DPDK by adding following lines in the cross config file:
+
+	[properties]
+	ipsec_mb_libdir = '/opt/ipsec-mb/install/lib'
+	ipsec_mb_incdir = '/opt/ipsec-mb/install/include'
+
+	$ Use meson and build command with the updated config file to compile dpdk.
+
+   NOTE: --reconfigure in meson may not work. Better you delete the meson build
    folder and recreate it to use the updated PKG_CONFIG_PATH
 ===============================================================================
 
@@ -194,7 +223,7 @@ application:
 
   5. ninja -C arm64-build install
 
-All binaries will be there in arm64-build folder and a “dpdk-“ prefix will be
+All binaries will be there in arm64-build folder and a â€œdpdk-â€œ prefix will be
 added in the name of app binary. Example applications can be found in
 arm64-build/examples directory.
 
@@ -774,9 +803,11 @@ Generic steps on i.MX95 before running dpdk:
 	setenv fdtfile imx95-19x19-evk.dtb
 3. Boot the board
 	boot
-4. Load the non-cacheable module.
+4. Load the non-cacheable module. (optional on i.MX95 and i.MX943)
 	insmod kpage_ncache.ko
-	Note: Refer ENET-QOS section for detailed compilation info about this module.
+	Note: On i.MX95 and i.MX943, the enetc4 driver uses cacheable BD memory by
+	      default (no kpage_ncache.ko required). Load kpage_ncache.ko only if you
+	      intend to use non-cacheable BD memory via the "nc=1" devarg (see below).
 5. Manually allocate hugepages
 	echo 512 > /proc/sys/vm/nr_hugepages
 
@@ -795,6 +826,9 @@ For running ENETC PF ports in DPDK:
         $ dpdk-testpmd -l 0,1 -n 1 -- -i --portmask=0x1 --forward-mode=mac
                 testpmd> set promisc all off
                 testpmd> start
+
+   Optional: Test with non-cacheable BD memory (requires kpage_ncache.ko loaded):
+        $ dpdk-l2fwd -l 2,3 -a 0002:00:02.0,nc=1 -- -p 0x1 -T 0
 
 Multi-queue:
 ============
@@ -881,6 +915,35 @@ them.
 
 	Note: Use option "--no-lsc-interrupt" in dpdk-testpmd when using uio_pci_generic framework to avoid
 	      link interrupts registration related errors.
+
+	TSO (TCP/UDP segmentation offload) on VF:
+	TSO is offloaded per Tx queue. Use the testpmd csum engine to drive it:
+	$ ./dpdk-testpmd -l 0,1 -n 1 -- -i --portmask=0x1 --tx-offloads=0x00008000
+		testpmd> port stop 0
+		testpmd> port config 0 tx_offload tcp_tso on
+		testpmd> csum set ip hw 0
+		testpmd> csum set tcp hw 0
+		testpmd> csum set udp hw 0
+		testpmd> tso set 256 0
+		testpmd> port start 0
+		testpmd> set fwd csum
+		testpmd> start
+	Note: For UDP segmentation, also enable the udp_tso offload:
+	      testpmd> port config 0 tx_offload udp_tso on
+
+	LRO (Large Receive Offload) via hardware RSC:
+	LRO is offloaded through the ENETC Receive Segment Coalesce (RSC) engine
+	and is enabled per port when the TCP LRO Rx offload is requested. RSC
+	requires the FCS to be stripped, so it cannot be combined with KEEP_CRC.
+	$ ./dpdk-testpmd -l 0,1 -n 1 -- -i --portmask=0x1 --rx-offloads=0x00004000
+		testpmd> port stop 0
+		testpmd> port config 0 rx_offload tcp_lro on
+		testpmd> port config all max-lro-pkt-size 1200
+		testpmd> port start 0
+		testpmd> set fwd rxonly
+		testpmd> start
+	Note: Coalesced frames are delivered with the RTE_MBUF_F_RX_LRO flag set;
+	      use "show port stats 0" to observe reduced packet counts.
 
 PSI-VSI messaging:
 ------------------
@@ -1138,8 +1201,11 @@ For running external ENETC PF ports in DPDK:
 3. Bind the PFs to the DPDK-compatible enetc4_uio driver
 	$ dpdk-devbind.py -b enetc4_uio 0001:01:08.0
 
-4. Load the non-cacheable module:
-        $ modprobe kpage_ncache.ko
+4. Load the non-cacheable module: (optional on i.MX943 and i.MX95)
+	$ modprobe kpage_ncache.ko
+	Note: kpage_ncache.ko is not required by default. The enetc4 driver uses
+	      cacheable BD memory. Load it only if testing with nc=1 devarg:
+	      $ dpdk-l2fwd -l 2,3 -a 0001:01:08.0,nc=1 -- -p 0x1 -T 0
 
 5. Allocate hugepages for DPDK memory
 	$ echo 512 > /proc/sys/vm/nr_hugepages
@@ -1340,6 +1406,10 @@ Currently, The below test cases are not supported on I.MX943:
 	use  --vdev 'crypto_caam_jr1'
   For openssl mode:
 	use --vdev 'crypto_openssl'
+  For ipsec_mb mode:
+	use --vdev 'crypto_aesni_mb0' # To run various algos combinations e.g SNOW-ZUC, ZUC-SNOW
+	use --vdev 'crypto_snow3g'  # To run only SNOW3G cases.
+	use --vdev 'crypto_zuc' # To run only ZUC cases.
   For armv8_crypto mode:
 	use --vdev 'crypto_armv8'
   For v2x_fce mode (valid for iMX943 only):
@@ -1481,8 +1551,8 @@ Currently, The below test cases are not supported on I.MX943:
 
   For IPsec application, two DUTs need to be configured as endpoint 0 (ep0) and endpoint 1 (ep1). Assuming that endpoint
   have 4 ports each:
-  ¿ Connect Port 1 and Port 1 of the ep0 and ep1 to each other (back-to-back).
-  ¿ Connect Port 0 and Port 0 of the ep0 and ep1 to packet generator (for example, Spirent).
+   - Connect Port 1 and Port 1 of the ep0 and ep1 to each other (back-to-back).
+   - Connect Port 0 and Port 0 of the ep0 and ep1 to packet generator (for example, Spirent).
 
   The sample configurations for both ep0 and ep1 are available at "nxp/ipsec".
   Custom port mappings, SA/SP and the routes can be configured in the corresponding

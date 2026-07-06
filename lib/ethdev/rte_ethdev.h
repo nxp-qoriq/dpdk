@@ -413,14 +413,6 @@ struct rte_eth_thresh {
 /**@}*/
 
 /**
- *  A set of values to identify the modes for loopback in ethernet device.
- */
-enum rte_lb_mode {
-	RTE_LB_MODE0,	/** SW reflector mode using default RX TX functions */
-	RTE_LB_MODE1,	/** SW reflector optimized mode */
-	RTE_LB_MODE2,	/** HW reflector mode */
-};
-/**
  *  A set of values to identify what method is to be used to route
  *  packets to multiple queues.
  */
@@ -6504,69 +6496,6 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 		rte_ethdev_trace_rx_burst_empty(port_id, queue_id, (void **)rx_pkts);
 	return nb_rx;
 }
-
-__rte_experimental
-void rte_eth_quit_signal(bool val);
-
-__rte_experimental
-static inline uint16_t
-rte_eth_lb_burst(uint16_t port_id, uint16_t rx_qid, uint16_t tx_qid,
-		 const uint16_t mode)
-{
-	int ret;
-	struct rte_eth_fp_ops *p;
-	void *rqd, *tqd;
-
-#ifdef RTE_ETHDEV_DEBUG_RX
-	if (port_id >= RTE_MAX_ETHPORTS ||
-			rx_qid >= RTE_MAX_QUEUES_PER_PORT) {
-		RTE_ETHDEV_LOG(ERR,
-			"Invalid port_id=%u or RX queue_id=%u\n",
-			port_id, rx_qid);
-		return 0;
-	}
-#endif
-#ifdef RTE_ETHDEV_DEBUG_TX
-	if (port_id >= RTE_MAX_ETHPORTS ||
-			tx_qid >= RTE_MAX_QUEUES_PER_PORT) {
-		RTE_ETHDEV_LOG(ERR,
-			"Invalid port_id=%u or TX queue_id=%u\n",
-			port_id, tx_qid);
-		return 0;
-	}
-#endif
-
-	/* fetch pointer to queue data */
-	p = &rte_eth_fp_ops[port_id];
-	rqd = p->rxq.data[rx_qid];
-	tqd = p->txq.data[tx_qid];
-
-#ifdef RTE_ETHDEV_DEBUG_RX
-	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, 0);
-
-	if (rqd == NULL) {
-		RTE_ETHDEV_LOG(ERR, "Invalid Rx queue_id=%u for port_id=%u\n",
-			rx_qid, port_id);
-		return 0;
-	}
-#endif
-#ifdef RTE_ETHDEV_DEBUG_TX
-	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, 0);
-
-	if (tqd == NULL) {
-		RTE_ETHDEV_LOG(ERR, "Invalid Tx queue_id=%u for port_id=%u\n",
-			tx_qid, port_id);
-		return 0;
-	}
-#endif
-	if (p->lb_pkt_burst == NULL)
-		return -ENOTSUP;
-
-	ret = p->lb_pkt_burst(rqd, tqd, mode);
-
-	return ret;
-}
-
 
 /**
  * Get the number of used descriptors of a Rx queue

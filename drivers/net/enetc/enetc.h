@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2019,2024-2025 NXP
+ * Copyright 2018-2019,2024-2026 NXP
  */
 
 #ifndef _ENETC_H_
@@ -93,6 +93,7 @@ struct enetc_bdr {
 		void *tcisr; /* Tx */
 		int next_to_alloc; /* Rx */
 	};
+
 	struct rte_mempool *mb_pool;   /* mbuf pool to populate RX ring. */
 	struct rte_eth_dev *ndev;
 	union {
@@ -102,6 +103,9 @@ struct enetc_bdr {
 	uint64_t ierrors;
 	uint8_t rx_deferred_start;
 	uint8_t tx_deferred_start;
+	uint8_t lso_enable;
+	void *rbidr;
+	uint8_t rsc_enable;
 };
 
 struct enetc_eth_hw {
@@ -118,6 +122,7 @@ struct enetc_eth_hw {
 	uint32_t *txq_prior;
 	uint32_t max_queue_size;
 	uint8_t reserve;
+	uint8_t nc_mode; /* 1 = non-cacheable BD memory (mark_ncache path) */
 	struct dpaax_usmem_alloc alloc;
 	struct dpaax_usmem_ctx ctx;
 };
@@ -314,15 +319,24 @@ int enetc4_vf_dev_intr(struct rte_eth_dev *eth_dev, bool enable);
  */
 uint16_t enetc_xmit_pkts(void *txq, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
-uint16_t enetc_xmit_pkts_nc(void *txq, struct rte_mbuf **tx_pkts,
+uint16_t enetc_xmit_pkts_cacheable(void *txq, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
+uint16_t enetc_xmit_pkts_lso(void *txq, struct rte_mbuf **tx_pkts,
+		uint16_t nb_pkts);
+
 uint16_t enetc_recv_pkts(void *rxq, struct rte_mbuf **rx_pkts,
+		uint16_t nb_pkts);
+uint16_t enetc_recv_pkts_cacheable(void *rxq, struct rte_mbuf **rx_pkts,
+		uint16_t nb_pkts);
+uint16_t enetc_recv_pkts_rsc(void *rxq, struct rte_mbuf **rx_pkts,
+		uint16_t nb_pkts);
+uint16_t enetc_xmit_pkts_nc(void *txq, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
 uint16_t enetc_recv_pkts_nc(void *rxq, struct rte_mbuf **rx_pkts,
 		uint16_t nb_pkts);
-uint16_t enetc_loopback_pkts_nc(void *rxq, void *txq, const uint16_t mode);
 
 int enetc_refill_rx_ring(struct enetc_bdr *rx_ring, const int buff_cnt);
+int enetc_refill_rx_ring_rsc(struct enetc_bdr *rx_ring, const int buff_cnt);
 void enetc4_dev_hw_init(struct rte_eth_dev *eth_dev);
 void enetc_print_ethaddr(const char *name, const struct rte_ether_addr *eth_addr);
 
@@ -334,6 +348,24 @@ enetc_bd_unused(struct enetc_bdr *bdr)
 
 	return bdr->bd_count + bdr->next_to_clean - bdr->next_to_use - 1;
 }
+
+/*
+ * Number of 16-byte BDs that fit in one 64-byte cache line.
+ * Must be a power of 2 so the alignment mask check works.
+ *
+ * CACHE COHERENCY RULE (non-coherent i.MX95):
+ * Every dcbf in enetc_refill_rx_ring() flushes a full 64-byte cache line.
+ * If next_to_use is not cache-line aligned that flush also covers adjacent
+ * HW-owned BDs in the same line, writing stale lstatus=0 over HW-written
+ * lstatus=R and stalling the ring.  All callers that advance next_to_use
+ * must pass a count rounded DOWN to a multiple of ENETC_BD_PER_CL so that
+ * next_to_use always stays cache-line (4-BD) aligned.  The 1-3 leftover
+ * slots are folded into the next refill batch.
+ */
+#define ENETC_BD_PER_CL		(RTE_CACHE_LINE_SIZE / sizeof(union enetc_rx_bd))
+#define ENETC_BD_PER_CL_MASK	(ENETC_BD_PER_CL - 1)
+/* Round n DOWN to the nearest multiple of ENETC_BD_PER_CL. */
+#define ENETC_BD_ALIGN_DOWN(n)	((n) & ~(unsigned int)ENETC_BD_PER_CL_MASK)
 
 /* CBDR prototypes */
 int enetc4_setup_cbdr(struct rte_eth_dev *dev, struct enetc_hw *hw,

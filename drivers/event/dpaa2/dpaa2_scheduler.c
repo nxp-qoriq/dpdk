@@ -99,8 +99,11 @@ dpaa2_scheduler_swp_mbuf_dq(struct dpaa2_sch_dev *sch_dev,
 	struct rte_mbuf *mbuf;
 
 	dq = qbman_swp_dqrr_next(swp);
-	if (!dq)
+	if (!dq) {
+		/** Flush*/
+		qbman_swp_dqrr_consume(swp, NULL);
 		return NULL;
+	}
 
 	qbman_swp_prefetch_dqrr_next(swp);
 	fd = qbman_result_DQ_fd(dq);
@@ -206,16 +209,18 @@ dpaa2_scheduler_dpci_recv(struct dpaa2_sch_dev *sch_dev,
 	ret = dpio_add_static_dequeue_channel(dpio_dev->dpio,
 			CMD_PRI_LOW, dpio_dev->token,
 			dpcon_dev->dpcon_id,
-			&dpcon_dev->channel_index);
+			&dpcon_dev->ch_idx[dpcon_dev->ch_idx_num]);
 	if (ret) {
 		DPAA2_EVENTDEV_ERR("Failure(%d) adding dpcon%d to static dq channel",
 			ret, dpcon_dev->dpcon_id);
 		return 0;
 	}
+	dpcon_dev->dpio_idx[dpcon_dev->ch_idx_num] = dpio_dev->index;
 
-	qbman_swp_push_set(swp, dpcon_dev->channel_index, 1);
+	qbman_swp_push_set(swp, dpcon_dev->ch_idx[dpcon_dev->ch_idx_num], 1);
 	sch_dev->linked[cpu] = sch_dev->port_queue_num;
 	sch_dev->dpio_dev[cpu] = dpio_dev;
+	dpcon_dev->ch_idx_num++;
 
 start_dq:
 	while (num_pkts < nb_pkts) {
@@ -575,7 +580,8 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 				DPAA2_EVENTDEV_WARN("%s: Drain %d buffer(s) from core%d",
 					__func__, drain_num, i);
 			}
-			qbman_swp_push_set(dpio_dev->sw_portal, dpcon_dev->channel_index, 0);
+			qbman_swp_push_set(dpio_dev->sw_portal,
+				dpcon_dev->ch_idx[dpcon_dev->ch_idx_num - 1], 0);
 			ret = dpio_remove_static_dequeue_channel(dpio_dev->dpio,
 				0, dpio_dev->token, dpcon_dev->dpcon_id);
 			if (ret) {
@@ -583,6 +589,7 @@ rte_dpaa2_scheduler_destroy(void *scheduler_handle)
 					__func__, i, ret);
 			}
 			un_attach_num += sch_dev->linked[i];
+			dpcon_dev->ch_idx_num--;
 		}
 	} else {
 		drain_num = 0;
