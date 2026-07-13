@@ -1,0 +1,276 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright 2026 NXP
+
+===============================================================================
+Testing ENETC4 VF with DPDK using vfio-pci (No-IOMMU mode) on i.MX95 EVK
+===============================================================================
+
+**************************************************************************
+WARNING: this procedure DISABLES the ARM SMMU-v3 for the ENTIRE SoC.
+         Every DMA-capable device then runs WITHOUT IOMMU isolation or
+         protection (no DMA containment). This is acceptable for DPDK
+         bring-up and evaluation only. Do NOT use this configuration on
+         a production or security-sensitive image without fully
+         understanding the SoC-wide loss of DMA isolation.
+**************************************************************************
+
+Overview
+========
+This guide describes how to run an ENETC4 Virtual Function (VF) with DPDK on
+the i.MX95 EVK using the vfio-pci kernel driver in VFIO No-IOMMU mode
+(IOVA = physical address).
+
+By default the ENETC4 VF is used with uio_pci_generic or igb_uio. This guide
+covers the additional setup that is required to use vfio-pci instead.
+
+
+Background: why a special setup is needed
+=========================================
+Two independent hardware/software constraints on i.MX95 must be satisfied at
+the same time:
+
+1. The i.MX95 ARM SMMU-v3 is NON-coherent (IDR0.COHACC = 0). When a device is
+   behind the SMMU it gets an IOMMU group, and the VFIO core rejects binding it
+   with an IOMMU because the device does not advertise
+   IOMMU_CAP_CACHE_COHERENCY. The vfio-pci bind then fails with -EINVAL (-22).
+
+2. The ENETC VSI-to-PSI mailbox (used by the VF to talk to the PF for MAC
+   programming, link status, promiscuous mode, etc.) is an internal ENETC
+   station-interface DMA copy. That DMA copies the VF send buffer
+   (VSIMSGSNDAR) into the PF receive buffer (PSIVMSGRCVAR). If the SMMU is
+   active but the ENETC SI has no valid stream-ID mapping, this internal copy
+   is blocked and every message times out ("VSI to PSI message timeout" in the
+   kernel, "Message not processed by PSI" in the DPDK PMD).
+
+The only configuration that satisfies BOTH at once is to disable the SMMU
+completely, so the whole SoC runs with direct (untranslated, physical) DMA.
+This is the "No-IOMMU everywhere" model, and it matches the VFIO No-IOMMU
+bootargs used below.
+
+
+Prerequisites
+=============
+1. Kernel must be built with VFIO and VFIO No-IOMMU support:
+        CONFIG_VFIO=y
+        CONFIG_VFIO_PCI=y
+        CONFIG_VFIO_NOIOMMU=y
+   Verify on the running target:
+        zcat /proc/config.gz | grep -i -e VFIO -e NOIOMMU
+   (or check the kernel .config used to build the image).
+
+2. DPDK built for arm64. Refer to the 'Cross compiled toolchain For ARM64'
+   section in nxp/README:
+        $ meson arm64-build --cross-file config/arm/arm64_imx_linux_gnu_gcc -Dexamples=all
+        $ ninja -C arm64-build
+
+3. Hugepages available on the target (configured via bootargs below or at
+   runtime with: echo 1024 > /proc/sys/vm/nr_hugepages).
+
+
+Required Device Tree change
+===========================
+File: arch/arm64/boot/dts/freescale/imx95.dtsi
+
+Two edits are needed in this file. The exact line numbers vary between kernel
+releases / BSP tags, so locate the nodes by name rather than by line number.
+
+Change 1 - disable the SMMU node
+--------------------------------
+Find the "smmu: iommu@490d0000" node and add a disabled status to it:
+
+        smmu: iommu@490d0000 {
+                ...
+                interrupt-names = "eventq", "gerror", "priq", "cmdq-sync";
+                #iommu-cells = <1>;
+                status = "disabled";          /* <-- add this line */
+        };
+
+Change 2 - remove the ENETC iommu-map
+-------------------------------------
+Find the "netc_bus0: pcie@4ca00000" node and delete the entire "iommu-map"
+property (the block that maps the ENETC functions to the SMMU). Replacing it
+with an explanatory comment is recommended:
+
+        netc_bus0: pcie@4ca00000 {
+                ...
+                <0x90 &its 0x65 0x1>, //ENETC2 VF0
+                <0xa0 &its 0x66 0x1>, //ENETC2 VF1
+                <0xc0 &its 0x67 0x1>; //NETC Timer
+
+                /* Delete the whole iommu-map property, i.e. these lines:
+                 *      iommu-map = <0x0  &smmu 0x20 0x1>,
+                 *                  <0x10 &smmu 0x21 0x1>,
+                 *                  <0x20 &smmu 0x22 0x1>,
+                 *                  <0x40 &smmu 0x23 0x1>,
+                 *                  <0x80 &smmu 0x24 0x1>,
+                 *                  <0x90 &smmu 0x25 0x1>,
+                 *                  <0xa0 &smmu 0x26 0x1>,
+                 *                  <0xc0 &smmu 0x27 0x1>;
+                 *
+                 * iommu-map intentionally omitted. The i.MX95 SMMU-v3 is
+                 * non-coherent (IDR0.COHACC=0), so VFIO with an IOMMU rejects
+                 * these ENETC functions (vfio needs IOMMU_CAP_CACHE_COHERENCY).
+                 * Leaving the ENETC endpoints out of the SMMU lets DPDK bind
+                 * them via vfio-pci no-iommu mode (enable_unsafe_noiommu_mode=1).
+                 * The kernel fsl_enetc/fsl_enetc_vf drivers still work because
+                 * they use the streaming DMA API.
+                 */
+        };
+
+Rebuild the DTB and deploy it, then reboot the board with the new DTB.
+
+--------------------------------------------------------------------------
+NOTE: why these DTS changes are required
+--------------------------------------------------------------------------
+- Disabling the SMMU node stops the ARM SMMU-v3 driver from probing, so NO
+  device on the SoC gets an IOMMU group. This is what allows vfio-pci to bind
+  the ENETC VF in No-IOMMU mode (without an IOMMU group the VFIO core does not
+  apply the cache-coherency check that otherwise fails on i.MX95 and returns
+  -EINVAL).
+- With the SMMU disabled, all DMA is untranslated (direct physical). The ENETC
+  SI VSI-to-PSI mailbox DMA can therefore reach the PF receive buffer, so the
+  VF-to-PF messaging works (no more "VSI to PSI message timeout"). Both the
+  kernel fsl_enetc_vf driver and the DPDK VF PMD rely on this mailbox.
+- IMPORTANT: this disables the SMMU for the ENTIRE SoC, not just ENETC. Every
+  DMA-capable device now runs without IOMMU isolation/protection. This is
+  acceptable for DPDK bring-up/evaluation but should not be shipped on a
+  production/secure image without understanding the loss of DMA isolation.
+- Consequence of the above: 'iommu.passthrough=1' becomes redundant (there is
+  no active IOMMU to pass through), and the removed 'iommu-map' entries on the
+  ENETC PCIe host bridge are moot while the SMMU is disabled.
+--------------------------------------------------------------------------
+
+
+Required bootargs (mmcargs)
+===========================
+Add the following to the kernel command line:
+
+        vfio.enable_unsafe_noiommu_mode=1 vfio_platform.reset_required=0 iommu.passthrough=1 default_hugepagesz=2m hugepagesz=2m hugepages=1024
+
+Note on the individual parameters:
+- vfio.enable_unsafe_noiommu_mode=1 : enable VFIO No-IOMMU mode (required).
+- vfio_platform.reset_required=0    : do not require a platform reset handler.
+- iommu.passthrough=1               : redundant when the SMMU is disabled (see
+                                      the NOTE above); kept only for clarity and
+                                      harmless to leave in.
+- default_hugepagesz / hugepagesz / hugepages : reserve 2MB hugepages for DPDK.
+
+Example (u-boot):
+
+        setenv mmcargs <user-specific-params> isolcpus=1 vfio.enable_unsafe_noiommu_mode=1 vfio_platform.reset_required=0 iommu.passthrough=1 default_hugepagesz=2m hugepagesz=2m hugepages=1024
+
+After boot, verify:
+
+        cat /proc/cmdline
+
+
+Runtime steps before running dpdk-l2fwd
+=======================================
+Run all steps below on the A-core Linux console.
+
+In the steps below <pf-pci-addr> is the PF PCI address and <vf-pci-addr> is
+the VF PCI address. These are board/slot specific and differ between i.MX95 EVK
+configurations, so always read the actual values from dpdk-devbind.py -s and
+dmesg (illustrative values 0002:00:10.0 for the PF and 0002:00:12.0 for the VF
+are shown only as examples).
+
+1. (Optional) Enable VFIO No-IOMMU mode at runtime if it was not set via
+   bootargs:
+        echo 1 > /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
+
+2. Make sure the PF is bound to the kernel driver (nxp_enetc4 / fsl_enetc4) and
+   its link is up. Use dpdk-devbind.py -s to identify the PF PCI address
+   <pf-pci-addr> (for example 0002:00:10.0 for the 10G port) and its eth
+   interface:
+        dpdk-devbind.py -s
+
+3. Create one VF from the PF:
+        echo 1 > /sys/bus/pci/devices/<pf-pci-addr>/sriov_numvfs
+
+   Check dmesg to identify the VF PCI address <vf-pci-addr>, for example:
+        fsl_enetc_vf 0002:00:12.0: enabling device (0000 -> 0002)
+   As per the above log, 0002:00:12.0 is the <vf-pci-addr>.
+
+4. (Optional) Enable trusted mode for the VF from the PF (required for some
+   features such as setting the primary MAC and promiscuous mode). eth1 here is
+   the PF eth interface for the 10G port:
+        ip link set eth1 vf 0 trust on
+
+5. Bind the VF to vfio-pci:
+        echo vfio-pci > /sys/bus/pci/devices/<vf-pci-addr>/driver_override
+        echo <vf-pci-addr> > /sys/bus/pci/drivers/fsl_enetc_vf/unbind
+        echo <vf-pci-addr> > /sys/bus/pci/drivers/vfio-pci/bind
+
+6. Verify the bind and No-IOMMU group:
+        dpdk-devbind.py -s
+   Expect the VF to show: drv=vfio-pci
+   dmesg should show:
+        vfio-pci 0002:00:12.0: Adding kernel taint for vfio-noiommu group on device
+        vfio-pci 0002:00:12.0: vfio-noiommu device opened by user (...)
+
+
+Run the application
+===================
+        $ ./dpdk-l2fwd -c 0x3 -a <vf-pci-addr> -- -p 0x1 -T 0
+
+Note on the -c 0x3 core mask: it selects cores 0 and 1. Core 0 is used as the
+EAL main lcore and core 1 (isolated via isolcpus=1 in the bootargs above) runs
+the packet forwarding thread. Isolating the forwarding core keeps the kernel
+scheduler off it for stable poll-mode performance while the main lcore still
+runs on the non-isolated core 0.
+
+Other examples:
+        $ ./dpdk-testpmd -c 0x3 -a <vf-pci-addr> -- -i --portmask=0x1
+        $ ./dpdk-l3fwd -c 0x2 -a <vf-pci-addr> -- -p 0x1 -P --config="(0,0,1)"
+
+
+Expected good output
+====================
+        EAL: Selected IOVA mode 'PA'
+        EAL: VFIO support initialized
+        EAL: Using IOMMU type 8 (No-IOMMU)
+   - No "Message not processed by PSI" / "VSI message send error" messages.
+   - Port link comes up and traffic flows.
+
+
+Troubleshooting
+===============
+- "VSI to PSI message timeout" (kernel) or "Message not processed by PSI"
+  (DPDK):
+    * The SMMU is still active. Confirm the DTS change was applied AND the
+      updated DTB was actually deployed/booted (cat /proc/cmdline shows the
+      right image; check that the SMMU driver did not probe).
+    * The PF is not bound to nxp_enetc4/fsl_enetc4 or its link is down. The PF
+      services the mailbox, so it must remain in the kernel and be link-up.
+
+- vfio-pci bind fails with "write error: Invalid argument" / dmesg
+  "probe with driver vfio-pci failed with error -22":
+    * VFIO No-IOMMU mode is not enabled (check
+      /sys/module/vfio/parameters/enable_unsafe_noiommu_mode and the bootarg).
+    * The SMMU is still enabled, so the VF still has an IOMMU group and the
+      cache-coherency check fails. Disable the SMMU as described above.
+
+- Tunable mailbox timeout/delay (optional), useful when debugging:
+        export ENETC4_VSI_WAIT_DELAY_UPDATE=<val>
+        export ENETC4_VSI_WAIT_TIMEOUT_UPDATE=<val>
+
+  These override the built-in defaults used while the VF polls the PSI for a
+  mailbox response:
+    * ENETC4_VSI_WAIT_DELAY_UPDATE   : per-iteration delay in MICROSECONDS
+      (passed to rte_delay_us). Default 2000 (i.e. 2 ms). Practical range is
+      a few hundred us to a few ms; too small busy-polls harder, too large
+      slows down message completion.
+    * ENETC4_VSI_WAIT_TIMEOUT_UPDATE : number of poll ITERATIONS (a plain
+      count, not a time unit) before the VF gives up. Default 100. The total
+      wait is roughly DELAY x TIMEOUT (default 2000 us x 100 = ~200 ms).
+      Increase this if a slow/loaded PF needs longer to service the mailbox.
+
+
+Notes
+=====
+- The PF must remain bound to the kernel driver (nxp_enetc4 / fsl_enetc4) and
+  be link-up; it is the PSI side that services the VF (VSI) mailbox messages.
+- Link-status-change (LSC) interrupts on the VF are supported with the igb_uio
+  framework. With vfio-pci No-IOMMU the l2fwd example above uses -T 0 (polling).
+- Disabling the SMMU removes DMA isolation SoC-wide. Use this configuration for
+  DPDK bring-up/evaluation only.

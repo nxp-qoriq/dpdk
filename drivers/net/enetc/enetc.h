@@ -123,6 +123,10 @@ struct enetc_eth_hw {
 	uint32_t max_queue_size;
 	uint8_t reserve;
 	uint8_t nc_mode; /* 1 = non-cacheable BD memory (mark_ncache path) */
+	/* 1 = legacy PF-to-VF link message layout (4-bit speed / 4-bit cookie),
+	 * for PF kernel versions before 6.18.37. Set via vf_link_legacy devarg.
+	 */
+	uint8_t vf_link_legacy;
 	struct dpaax_usmem_alloc alloc;
 	struct dpaax_usmem_ctx ctx;
 };
@@ -216,11 +220,29 @@ enum speed {
 	ENETC_SPEED_1000 = 0x5,
 	ENETC_SPEED_2500 = 0x6,
 	ENETC_SPEED_5000 = 0x7,
-	ENETC_SPEED_10G = 0x8,
-	ENETC_SPEED_25G = 0x9,
-	ENETC_SPEED_50G = 0xA,
-	ENETC_SPEED_100G = 0xB,
-	ENETC_SPEED_NOT_SUPPORTED = 0xF
+	/* Base speed class code used by the >5Gbps formula below */
+	/* Do not add enumeration values for any speed greater than
+	 * 5Gbps. For any speed greater than 5Gbps, its speed class
+	 * code should follow the formula below.
+	 *
+	 * SPEED = (link_speed - 5000) / 1000 + ENETC_SPEED_5000
+	 *
+	 * The unit of link_speed should be Mbps, the max SPEED
+	 * should <= ENETC_SPEED_MAX.
+	 */
+	ENETC_SPEED_MAX = 0xff,
+};
+
+/* Legacy speed class codes for backward compatibility with an older kernel PF
+ * (before 6.18.37) that encoded a 4-bit speed code and 4-bit cookie in the
+ * message's lower byte. Used only when the vf_link_legacy devarg is set.
+ */
+enum speed_legacy {
+	ENETC_SPEED_LEGACY_10G = 0x8,
+	ENETC_SPEED_LEGACY_25G = 0x9,
+	ENETC_SPEED_LEGACY_50G = 0xA,
+	ENETC_SPEED_LEGACY_100G = 0xB,
+	ENETC_SPEED_LEGACY_NOT_SUPPORTED = 0xF
 };
 
 /* PSI-VSI command header format */

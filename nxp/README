@@ -896,6 +896,10 @@ them.
 		      Use "igb_uio" to bind VF to DPDK to get link status change notifications. igb_uio is a separate
 		      kernel module, so make sure to load it first using modprobe or insmod command
 		      before device binding.
+		Note: To test the ENETC4 VF with the vfio-pci framework in VFIO No-IOMMU mode on
+		      i.MX95, follow the dedicated guide nxp/README_imx95_enetc_vf_vfio. It documents
+		      the required kernel config, bootargs, and the imx95.dtsi SMMU change needed for
+		      vfio-pci and VSI-PSI messaging to work.
 
 2. Enable trust for the specified VF user by specifying the PF eth interface.
 	ip link set <eth-interface> vf 0 trust on
@@ -1166,6 +1170,11 @@ As per the above tc command, the packets should be such that:
 VLAN priority 0 is seen for 100 microsec, then a break of 50 microsec should be observed
 then again for 100 microsec VLAN priority 1 is seen, then a break of 50 microsec
 and so on..
+
+CBS shaper (IEEE 802.1Qav) with a DPDK VF
+
+- The ENETC Tx Credit-Based Shaper (CBS) can rate-limit traffic from a DPDK VF
+  driven by the enetc4_vf PMD. See nxp/README_enetc4_vf_cbs for the full guide.
 
 Notes:
 ======
