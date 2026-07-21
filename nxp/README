@@ -1019,6 +1019,10 @@ Run below commands to bind the device to igb_uio:
 Run dpdk-testpmd for checking status interrupts:
 	$ ./dpdk-testpmd -l 2,3 --log-level=*:debug -n 1 -- -i --portmask 0x1
 
+or
+Run the dpdk-link_status_interrupt application:
+	$ ./dpdk-link_status_interrupt -l 0-3 -n 1 -a <vf1-pci-addr> -a <vf2-pci-addr> -- -p 0x3
+
 Open a new terminal and try to change the link status using either below commands
 or attach and de-attach cable:
 

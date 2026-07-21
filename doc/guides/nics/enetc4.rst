@@ -59,6 +59,8 @@ Key functionality includes:
   Segment Coalesce (RSC), enabled when the TCP LRO Rx offload flag is
   requested. RSC requires the FCS to be stripped, so it cannot be combined
   with the KEEP_CRC Rx offload.
+- Firmware version: The NETC IP version is reported via ``rte_eth_dev_fw_version_get``.
+- Registers dump: The station interface, port (PF only) and BD ring registers are dumped via ``rte_eth_dev_get_reg_info``.
 
 
 Prerequisites

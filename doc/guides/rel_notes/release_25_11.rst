@@ -152,6 +152,12 @@ New Features
   and the zip also supports data copy and fill.
   This driver exposes this capability to DPDK applications.
 
+* **Added NXP i.MX95 eDMA5 DMA driver.**
+
+  Added the ``imx_edma5`` DMA driver for the NXP i.MX95 eDMA5 controller.
+  The driver exposes each eDMA5 instance as a DPDK dmadev device and
+  supports memory-to-memory copy and scatter-gather copy operations.
+
 * **Added RCU support in the FIB6 library.**
 
   It is now possible to register an RCU QSBR object

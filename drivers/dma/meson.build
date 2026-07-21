@@ -8,6 +8,7 @@ drivers = [
         'hisi_acc',
         'hisi_pciep',
         'idxd',
+        'imx_edma5',
         'ioat',
         'odm',
         'skeleton',
