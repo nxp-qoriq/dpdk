@@ -2,30 +2,30 @@
   "SPDXID": "SPDXRef-DOCUMENT",
   "spdxVersion": "SPDX-2.3",
   "creationInfo": {
-    "created": "2026-06-02T03:47:34Z",
+    "created": "2026-08-26T03:37:38Z",
     "creators": [
       "Organization: NXP"
     ],
-    "licenseListVersion": "3.26"
+    "licenseListVersion": "3.28"
   },
-  "name": "dpdk-lf-6.18.20-2.0.0",
+  "name": "dpdk-lf-6.18.37-2.1.0",
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://nxp.com/spdx/b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4",
+  "documentNamespace": "https://nxp.com/spdx/9d2214e2-521a-4da5-bcfc-d7f071fbf30b",
   "packages": [
     {
-      "SPDXID": "SPDXRef-package-b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4",
+      "SPDXID": "SPDXRef-package-9d2214e2-521a-4da5-bcfc-d7f071fbf30b",
       "name": "dpdk",
-      "versionInfo": "lf-6.18.20-2.0.0",
-      "licenseConcluded": "(BSD-3-Clause)",
-      "licenseDeclared": "(BSD-3-Clause)",
-      "downloadLocation": "https://github.com/nxp-qoriq/dpdk -b lf-6.18.20-2.0.0",
+      "versionInfo": "lf-6.18.37-2.1.0",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "downloadLocation": "https://github.com/nxp-qoriq/dpdk -b lf-6.18.37-2.1.0",
       "originator": "Organization: NXP",
       "supplier": "NOASSERTION",
       "externalRefs": [],
       "filesAnalyzed": false
     },
     {
-      "SPDXID": "SPDXRef-package-b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4---52537263-6d8f-430b-9d3b-e6fbcbb5583e",
+      "SPDXID": "SPDXRef-package-9d2214e2-521a-4da5-bcfc-d7f071fbf30b---52537263-6d8f-430b-9d3b-e6fbcbb5583e",
       "name": "DPDK",
       "versionInfo": "v25.11",
       "licenseConcluded": "BSD-3-Clause",
@@ -58,12 +58,12 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-package-b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4"
+      "relatedSpdxElement": "SPDXRef-package-9d2214e2-521a-4da5-bcfc-d7f071fbf30b"
     },
     {
-      "spdxElementId": "SPDXRef-package-b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4",
+      "spdxElementId": "SPDXRef-package-9d2214e2-521a-4da5-bcfc-d7f071fbf30b",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-package-b8e32945-8e5e-4b6e-ab9d-d0642ef4cee4---52537263-6d8f-430b-9d3b-e6fbcbb5583e"
+      "relatedSpdxElement": "SPDXRef-package-9d2214e2-521a-4da5-bcfc-d7f071fbf30b---52537263-6d8f-430b-9d3b-e6fbcbb5583e"
     }
   ]
 }
